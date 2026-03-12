@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
 <title>Local Stream</title>
+<script src="/hls.min.js"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
@@ -268,6 +269,20 @@ select,input{font-family:inherit}
 .volume-wrapper{display:flex;align-items:center;gap:4px}
 .volume-slider{width:70px;height:4px;-webkit-appearance:none;appearance:none;background:rgba(255,255,255,.2);border-radius:2px;outline:none}
 .volume-slider::-webkit-slider-thumb{-webkit-appearance:none;width:12px;height:12px;border-radius:50%;background:#fff;cursor:pointer}
+/* Up Next overlay */
+.up-next-overlay{position:absolute;bottom:100px;right:24px;z-index:15;background:rgba(0,0,0,.88);border:1px solid rgba(255,255,255,.15);border-radius:12px;padding:16px 20px;max-width:360px;display:none;backdrop-filter:blur(12px);animation:upNextSlide .4s ease}
+.up-next-overlay.visible{display:block}
+@keyframes upNextSlide{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+.up-next-label{font-size:.7rem;text-transform:uppercase;letter-spacing:1px;color:var(--text-muted);margin-bottom:6px}
+.up-next-title{font-size:.95rem;font-weight:600;margin-bottom:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.up-next-ep{font-size:.78rem;color:var(--text-secondary);margin-bottom:10px}
+.up-next-actions{display:flex;gap:8px}
+.up-next-play{padding:6px 18px;border-radius:6px;background:var(--accent);color:#fff;font-size:.82rem;font-weight:600;cursor:pointer;transition:background .2s}
+.up-next-play:hover{background:#0090c0}
+.up-next-cancel{padding:6px 14px;border-radius:6px;background:rgba(255,255,255,.1);color:var(--text-secondary);font-size:.82rem;cursor:pointer;transition:background .2s}
+.up-next-cancel:hover{background:rgba(255,255,255,.18)}
+.up-next-countdown{font-size:.72rem;color:var(--text-muted);margin-top:6px}
+
 .loading{display:flex;align-items:center;justify-content:center;padding:80px 20px;gap:12px}
 .spinner{width:28px;height:28px;border:3px solid var(--bg-hover);border-top-color:var(--accent);border-radius:50%;animation:spin 1s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
@@ -311,6 +326,8 @@ select,input{font-family:inherit}
       <button class="nav-item" data-view="history" onclick="nav('history',this)"><span class="nav-icon">&#128337;</span> History</button>
       <div class="nav-label">System</div>
       <button class="nav-item" data-view="settings" onclick="nav('settings',this)"><span class="nav-icon">&#9881;&#65039;</span> Media Folders</button>
+      <button class="nav-item" onclick="scanLibrary()"><span class="nav-icon">&#128269;</span> Scan Library</button>
+      <button class="nav-item" onclick="restartServer()"><span class="nav-icon">&#128260;</span> Restart Server</button>
     </nav>
     <div class="sidebar-profile" onclick="switchProfile()">
       <div class="sidebar-profile-avatar" id="sidebarAvatar"></div>
@@ -346,8 +363,18 @@ select,input{font-family:inherit}
     <button class="player-close" onclick="closePlayer()">&#10005;</button>
     <span class="player-now-playing" id="playerTitle"></span>
   </div>
-  <div class="player-video-wrapper" onclick="togglePlay(event)">
+  <div class="player-video-wrapper" id="videoWrapper">
     <video id="videoElement" preload="metadata"></video>
+    <div class="up-next-overlay" id="upNextOverlay">
+      <div class="up-next-label">Up Next</div>
+      <div class="up-next-title" id="upNextTitle"></div>
+      <div class="up-next-ep" id="upNextEp"></div>
+      <div class="up-next-actions">
+        <button class="up-next-play" id="upNextPlayBtn" onclick="playNextEp()">Play Now</button>
+        <button class="up-next-cancel" onclick="cancelUpNext()">Cancel</button>
+      </div>
+      <div class="up-next-countdown" id="upNextCountdown"></div>
+    </div>
   </div>
   <div class="player-controls">
     <div class="progress-container" id="progressContainer">
@@ -388,6 +415,8 @@ let skipInterval=10,playbackSpeed=1,watchFilter='all';
 
 const V=document.getElementById('videoElement'),modal=document.getElementById('playerModal');
 const progContainer=document.getElementById('progressContainer');
+let hlsInstance=null;
+window._hlsSeekOffset=0;
 
 // ══════════════════════════════════════════════════════════════════════
 // Profiles
@@ -570,18 +599,22 @@ function renderHome(){
 }
 
 function renderHero(item){
-  const bg=item.posterUrl?`background-image:url('${item.posterUrl}')`:'';
+  const bg=(item.omdbPosterUrl||item.posterUrl)?`background-image:url('${item.omdbPosterUrl||item.posterUrl}')`:'';
   const rt=item.progress.percent>0?'Resume':'Play';
-  return `<div class="hero"><div class="hero-bg" style="${bg}"></div><div class="hero-content"><span class="hero-tag">${item.type==='movie'?'Movie':'TV Show'}</span><h1 class="hero-title">${esc(item.title)}</h1><p class="hero-meta">${item.year?item.year+' · ':''}${item.type==='movie'?'Movie':'TV Show'}${item.progress.percent>0?' · '+item.progress.percent+'% watched':''}</p><div class="hero-actions"><button class="btn btn-primary" onclick='playMedia("${item.id}")'>&#9654; ${rt}</button><button class="btn btn-secondary" onclick='addToQueue("${item.id}")'>&#128203; Queue</button></div></div></div>`;
+  const plot=item.plot?`<p class="hero-meta" style="max-width:600px;opacity:.85;margin-top:4px">${esc(item.plot)}</p>`:'';
+  const rating=item.imdbRating?` · ★ ${item.imdbRating}`:'';
+  return `<div class="hero"><div class="hero-bg" style="${bg}"></div><div class="hero-content"><span class="hero-tag">${item.type==='movie'?'Movie':'TV Show'}</span><h1 class="hero-title">${esc(item.title)}</h1><p class="hero-meta">${item.year?item.year+' · ':''}${item.type==='movie'?'Movie':'TV Show'}${rating}${item.progress.percent>0?' · '+item.progress.percent+'% watched':''}</p>${plot}<div class="hero-actions"><button class="btn btn-primary" onclick='playMedia("${item.id}")'>&#9654; ${rt}</button><button class="btn btn-secondary" onclick='addToQueue("${item.id}")'>&#128203; Queue</button></div></div></div>`;
 }
 
 // ── Cards ──────────────────────────────────────────────────────────────
 function card(item){
-  const poster=item.posterUrl?`<img src="${item.posterUrl}" alt="${esc(item.title)}" loading="lazy">`:`<div class="card-placeholder">&#127916;</div>`;
+  const posterSrc=item.omdbPosterUrl||item.posterUrl;
+  const poster=posterSrc?`<img src="${posterSrc}" alt="${esc(item.title)}" loading="lazy">`:`<div class="card-placeholder">&#127916;</div>`;
   const prog=item.progress.percent>0?`<div class="card-progress"><div class="card-progress-fill" style="width:${item.progress.percent}%"></div></div>`:'';
   const watched=item.watched?`<div class="card-watched-badge">✓</div>`:'';
-  const genres=item.genres&&item.genres.length?`<div class="genre-tags">${item.genres.map(g=>`<span class="genre-tag">${esc(g)}</span>`).join('')}</div>`:'';
-  return `<div class="card" onclick='playMedia("${item.id}")'><div class="card-poster">${poster}${prog}${watched}<div class="card-actions"><button class="card-action-btn" onclick="event.stopPropagation();toggleWatched('${item.id}',${!item.watched})" title="${item.watched?'Mark unwatched':'Mark watched'}">&#128065;</button><button class="card-action-btn" onclick="event.stopPropagation();addToQueue('${item.id}')" title="Add to queue">+Q</button></div><div class="card-overlay"><div class="play-icon">&#9654;</div></div></div><div class="card-info"><div class="card-title">${esc(item.title)}</div>${item.year?`<div class="card-year">${item.year}</div>`:''}<span class="card-type ${item.type}">${item.type==='movie'?'Movie':'TV Show'}</span>${genres}</div></div>`;
+  const ratingBadge=item.imdbRating?`<div style="position:absolute;top:6px;right:6px;background:rgba(0,0,0,.75);color:#f5c518;padding:2px 6px;border-radius:4px;font-size:.7rem;font-weight:700">★ ${item.imdbRating}</div>`:'';
+  const genres=item.genre?`<div class="card-year" style="color:var(--text-muted);font-size:.7rem">${item.genre}</div>`:item.genres&&item.genres.length?`<div class="genre-tags">${item.genres.map(g=>`<span class="genre-tag">${esc(g)}</span>`).join('')}</div>`:'';
+  return `<div class="card" onclick='playMedia("${item.id}")'><div class="card-poster">${poster}${prog}${watched}${ratingBadge}<div class="card-actions"><button class="card-action-btn" onclick="event.stopPropagation();toggleWatched('${item.id}',${!item.watched})" title="${item.watched?'Mark unwatched':'Mark watched'}">&#128065;</button><button class="card-action-btn" onclick="event.stopPropagation();addToQueue('${item.id}')" title="Add to queue">+Q</button></div><div class="card-overlay"><div class="play-icon">&#9654;</div></div></div><div class="card-info"><div class="card-title">${esc(item.title)}</div>${item.year?`<div class="card-year">${item.year}</div>`:''}<span class="card-type ${item.type}">${item.type==='movie'?'Movie':'TV Show'}</span>${genres}</div></div>`;
 }
 
 function carousel(title,items){
@@ -612,7 +645,7 @@ function renderShowsView(){
     const name=item.showName||item.title;
     if(!shows[name])shows[name]={name,items:[],poster:null};
     shows[name].items.push(item);
-    if(item.posterUrl&&!shows[name].poster)shows[name].poster=item.posterUrl;
+    if(!shows[name].poster)shows[name].poster=item.omdbPosterUrl||item.posterUrl||null;
   }
   const showList=Object.values(shows).sort((a,b)=>a.name.localeCompare(b.name));
 
@@ -741,8 +774,31 @@ function handleSearch(){
   if(!q){renderView();return;}
   const r=library.filter(m=>m.title.toLowerCase().includes(q)||(m.year&&m.year.includes(q))||(m.showName&&m.showName.toLowerCase().includes(q)));
   const a=document.getElementById('contentArea');
-  if(!r.length)a.innerHTML='<div class="empty-state"><div class="empty-icon">&#128269;</div><div class="empty-title">No Results</div></div>';
-  else a.innerHTML=`<div class="section"><div class="section-header"><h2 class="section-title">${r.length} result${r.length>1?'s':''}</h2></div><div class="grid">${r.map(card).join('')}</div></div>`;
+  if(!r.length){a.innerHTML='<div class="empty-state"><div class="empty-icon">&#128269;</div><div class="empty-title">No Results</div></div>';return;}
+  // Group TV show episodes into single cards
+  const movies=r.filter(m=>m.type!=='show');
+  const showMap={};
+  for(const item of r.filter(m=>m.type==='show')){
+    const name=item.showName||item.title;
+    if(!showMap[name])showMap[name]={name,items:[],poster:null,imdbRating:null,genre:null,year:null};
+    showMap[name].items.push(item);
+    if(!showMap[name].poster)showMap[name].poster=item.omdbPosterUrl||item.posterUrl||null;
+    if(!showMap[name].imdbRating&&item.imdbRating)showMap[name].imdbRating=item.imdbRating;
+    if(!showMap[name].genre&&item.genre)showMap[name].genre=item.genre;
+    if(!showMap[name].year&&item.year)showMap[name].year=item.year;
+  }
+  const showCards=Object.values(showMap).map(s=>{
+    const ep=s.items.length;
+    const seasons=new Set(s.items.map(i=>i.epInfo?i.epInfo.season:0).filter(n=>n>0));
+    const meta=seasons.size?`${seasons.size} season${seasons.size>1?'s':''}, ${ep} ep${ep>1?'s':''}`:`${ep} episode${ep>1?'s':''}`;
+    const poster=s.poster?`<img src="${s.poster}" loading="lazy">`:`<div class="card-placeholder">&#128250;</div>`;
+    const ratingBadge=s.imdbRating?`<div style="position:absolute;top:6px;right:6px;background:rgba(0,0,0,.75);color:#f5c518;padding:2px 6px;border-radius:4px;font-size:.7rem;font-weight:700">★ ${s.imdbRating}</div>`:'';
+    const genres=s.genre?`<div class="card-year" style="color:var(--text-muted);font-size:.7rem">${s.genre}</div>`:'';
+    return `<div class="card" onclick="openShow('${escAttr(s.name)}')"><div class="card-poster">${poster}${ratingBadge}<div class="card-overlay"><div class="play-icon">&#9654;</div></div></div><div class="card-info"><div class="card-title">${esc(s.name)}</div><div class="card-year">${meta}</div>${s.year?`<div class="card-year">${s.year}</div>`:''}<span class="card-type show">TV Show</span>${genres}</div></div>`;
+  });
+  const allCards=movies.map(card).concat(showCards);
+  const total=movies.length+Object.keys(showMap).length;
+  a.innerHTML=`<div class="section"><div class="section-header"><h2 class="section-title">${total} result${total>1?'s':''}</h2></div><div class="grid">${allCards.join('')}</div></div>`;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -811,10 +867,54 @@ async function addFolder(){
 async function removeFolder(fp){try{await fetch('/api/config/remove',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:fp})});await renderSettings();fetchLib();}catch{}}
 function showSettingsAlert(m,t){const e=document.getElementById('settingsAlert');if(!e)return;e.className=`alert ${t}`;e.textContent=m;setTimeout(()=>{e.className='alert';},3500);}
 
+function scanLibrary(){
+  const btn=event.target.closest('.nav-item');
+  const orig=btn.innerHTML;
+  btn.innerHTML='<span class="nav-icon">&#8987;</span> Scanning...';
+  btn.disabled=true;
+  fetch('/api/scan',{method:'POST'}).then(r=>r.json()).then(d=>{
+    if(d.ok){
+      // Poll until scan completes by waiting for library-updated SSE event
+      // Meanwhile just show scanning state, the SSE handler will refresh
+      setTimeout(()=>{btn.innerHTML=orig;btn.disabled=false;fetchLib();},2000);
+    } else {
+      btn.innerHTML=orig;btn.disabled=false;alert(d.message||'Scan failed');
+    }
+  }).catch(()=>{btn.innerHTML=orig;btn.disabled=false;alert('Failed to reach server.');});
+}
+
+function restartServer(){
+  if(!confirm('Restart the server? Playback will be interrupted.'))return;
+  fetch('/api/restart',{method:'POST'}).then(()=>{
+    document.getElementById('contentArea').innerHTML='<div class="empty-state"><div class="empty-icon">&#128260;</div><div class="empty-title">Restarting Server...</div><div class="empty-text">Reconnecting automatically...</div></div>';
+    const poll=setInterval(()=>{
+      fetch('/api/stats').then(r=>{if(r.ok){clearInterval(poll);location.reload();}}).catch(()=>{});
+    },1000);
+  }).catch(()=>{alert('Failed to reach server.');});
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // Video Player
 // ══════════════════════════════════════════════════════════════════════
-function getPlaylist(){if(!currentMedia)return[];return library.filter(m=>m.folder===currentMedia.folder&&m.type===currentMedia.type).sort((a,b)=>a.filename.localeCompare(b.filename,undefined,{numeric:true}));}
+function getPlaylist(){
+  if(!currentMedia)return[];
+  let list;
+  if(currentMedia.type==='show'&&currentMedia.showName){
+    // TV show: group by showName, sort by season then episode
+    list=library.filter(m=>m.type==='show'&&m.showName===currentMedia.showName);
+    list.sort((a,b)=>{
+      const sa=a.epInfo?a.epInfo.season:0, sb=b.epInfo?b.epInfo.season:0;
+      if(sa!==sb)return sa-sb;
+      const ea=a.epInfo?a.epInfo.episode:0, eb=b.epInfo?b.epInfo.episode:0;
+      if(ea!==eb)return ea-eb;
+      return a.filename.localeCompare(b.filename,undefined,{numeric:true});
+    });
+  } else {
+    list=library.filter(m=>m.folder===currentMedia.folder&&m.type===currentMedia.type);
+    list.sort((a,b)=>a.filename.localeCompare(b.filename,undefined,{numeric:true}));
+  }
+  return list;
+}
 function getCurIdx(){return getPlaylist().findIndex(m=>m.id===currentMedia.id);}
 
 function updateEpBtns(){
@@ -878,18 +978,68 @@ function playMedia(id){
   const item=library.find(m=>m.id===id);if(!item)return;
   currentMedia=item;
   document.getElementById('playerTitle').textContent=item.title;
-  V.src=item.videoUrl;V.playbackRate=playbackSpeed;
-  if(item.progress.currentTime>5)V.currentTime=item.progress.currentTime;
-  modal.classList.add('active');V.play().catch(()=>{});
-  startProgressSync();showControls();
+
+  // Destroy previous HLS instance
+  if(hlsInstance){hlsInstance.destroy();hlsInstance=null;}
+
+  const ext=(item.filename||'').split('.').pop().toLowerCase();
+  let mode=item.streamMode||'unknown';
+  if(mode==='unknown') mode=(ext==='mp4'?'direct':'hls');
+
+  if(mode==='direct'){
+    // Direct play — native browser playback
+    window._hlsSeekOffset=0;window._hlsLoad=null;
+    V.src=item.videoUrl;
+    V.playbackRate=playbackSpeed;
+    if(item.progress.currentTime>5)V.currentTime=item.progress.currentTime;
+    modal.classList.add('active');V.play().catch(()=>{});
+  } else {
+    // Remux or transcode via HLS
+    const startTime=item.progress.currentTime>5?item.progress.currentTime:0;
+    const hlsUrl='/hls/'+item.id+'/master.m3u8'+(startTime?'?start='+startTime:'');
+    modal.classList.add('active');
+
+    if(typeof Hls!=='undefined'&&Hls.isSupported()){
+      window._hlsSeekOffset=startTime; // track real movie position
+      window._hlsLoad=function(url){
+        if(hlsInstance){hlsInstance.destroy();hlsInstance=null;}
+        hlsInstance=new Hls({maxBufferLength:30,maxMaxBufferLength:60});
+        hlsInstance.loadSource(url);
+        hlsInstance.attachMedia(V);
+        hlsInstance.on(Hls.Events.MANIFEST_PARSED,()=>{
+          V.playbackRate=playbackSpeed;
+          V.play().catch(()=>{});
+        });
+        hlsInstance.on(Hls.Events.ERROR,(_e,data)=>{
+          if(data.fatal){
+            console.error('HLS error',data);
+            if(data.type===Hls.ErrorTypes.NETWORK_ERROR)hlsInstance.startLoad();
+            else if(data.type===Hls.ErrorTypes.MEDIA_ERROR)hlsInstance.recoverMediaError();
+          }
+        });
+      };
+      window._hlsLoad(hlsUrl);
+    } else if(V.canPlayType('application/vnd.apple.mpegurl')){
+      // Safari native HLS
+      V.src=hlsUrl;V.playbackRate=playbackSpeed;V.play().catch(()=>{});
+    } else {
+      // Last resort: try direct stream
+      V.src=item.videoUrl;V.playbackRate=playbackSpeed;
+      if(item.progress.currentTime>5)V.currentTime=item.progress.currentTime;
+      V.play().catch(()=>{});
+    }
+  }
+
+  startProgressSync();showControls();resetUpNext();
   modal.addEventListener('mousemove',showControls);
   updateEpBtns();buildSubMenu();
-  // Remove from queue if present
   if(profileQueue.includes(id))removeFromQueue(id);
 }
 
 function closePlayer(){
-  saveProg();V.pause();V.removeAttribute('src');V.load();
+  saveProg();V.pause();resetUpNext();
+  if(hlsInstance){hlsInstance.destroy();hlsInstance=null;}
+  V.removeAttribute('src');V.load();
   V.querySelectorAll('track').forEach(t=>t.remove());
   modal.classList.remove('active');currentMedia=null;
   clearInterval(progressSaveInterval);modal.removeEventListener('mousemove',showControls);
@@ -901,20 +1051,106 @@ function toggleMute(){V.muted=!V.muted;document.getElementById('volumeBtn').inne
 function setVol(v){V.volume=v;V.muted=v==0;document.getElementById('volumeBtn').innerHTML=v==0?'&#128263;':v<.5?'&#128265;':'&#128266;';}
 function toggleFS(){document.fullscreenElement?document.exitFullscreen():modal.requestFullscreen().catch(()=>{});}
 
+// Click vs double-click on video wrapper
+let _clickTimer=null;
+document.getElementById('videoWrapper').addEventListener('click',function(e){
+  if(e.target.closest('.player-controls,.player-top-bar,.up-next-overlay'))return;
+  if(_clickTimer){clearTimeout(_clickTimer);_clickTimer=null;return;}
+  _clickTimer=setTimeout(()=>{_clickTimer=null;V.paused?V.play():V.pause();},250);
+});
+document.getElementById('videoWrapper').addEventListener('dblclick',function(e){
+  if(e.target.closest('.player-controls,.player-top-bar,.up-next-overlay'))return;
+  if(_clickTimer){clearTimeout(_clickTimer);_clickTimer=null;}
+  toggleFS();
+});
+
 // Progress bar
 let isSeeking=false;
-progContainer.addEventListener('mousedown',e=>{isSeeking=true;seek(e);});
-document.addEventListener('mousemove',e=>{if(isSeeking)seek(e);});
-document.addEventListener('mouseup',()=>{isSeeking=false;});
-progContainer.addEventListener('touchstart',e=>{isSeeking=true;seek(e.touches[0]);},{passive:true});
-document.addEventListener('touchmove',e=>{if(isSeeking)seek(e.touches[0]);},{passive:true});
-document.addEventListener('touchend',()=>{isSeeking=false;});
-function seek(e){const r=progContainer.getBoundingClientRect();const p=Math.max(0,Math.min(1,(e.clientX-r.left)/r.width));if(V.duration)V.currentTime=p*V.duration;}
+let _hlsSeekPending=false;
+progContainer.addEventListener('mousedown',e=>{isSeeking=true;seekVisual(e);});
+document.addEventListener('mousemove',e=>{if(isSeeking)seekVisual(e);});
+document.addEventListener('mouseup',()=>{if(isSeeking){isSeeking=false;seekCommit();}});
+progContainer.addEventListener('touchstart',e=>{isSeeking=true;seekVisual(e.touches[0]);},{passive:true});
+document.addEventListener('touchmove',e=>{if(isSeeking)seekVisual(e.touches[0]);},{passive:true});
+document.addEventListener('touchend',()=>{if(isSeeking){isSeeking=false;seekCommit();}});
 
-V.addEventListener('timeupdate',()=>{if(!V.duration||isSeeking)return;const p=(V.currentTime/V.duration)*100;document.getElementById('progressFilled').style.width=p+'%';document.getElementById('timeDisplay').textContent=fmt(V.currentTime)+' / '+fmt(V.duration);});
+let _seekTarget=0;
+function _hlsTotalDuration(){return (window._hlsSeekOffset||0)+(V.duration||0);}
+function seekVisual(e){
+  const r=progContainer.getBoundingClientRect();
+  const p=Math.max(0,Math.min(1,(e.clientX-r.left)/r.width));
+  _seekTarget=p*_hlsTotalDuration();
+  document.getElementById('progressFilled').style.width=(p*100)+'%';
+  document.getElementById('timeDisplay').textContent=fmt(_seekTarget)+' / '+fmt(_hlsTotalDuration());
+}
+function seekCommit(){
+  if(!currentMedia)return;
+  const isHls=currentMedia.streamMode&&currentMedia.streamMode!=='direct';
+  if(isHls&&typeof window._hlsLoad==='function'){
+    // For HLS: restart ffmpeg from seek position and reload stream
+    if(_hlsSeekPending)return;
+    _hlsSeekPending=true;
+    window._hlsSeekOffset=_seekTarget;
+    fetch('/hls/'+currentMedia.id+'/master.m3u8?start='+_seekTarget).then(()=>{
+      window._hlsLoad('/hls/'+currentMedia.id+'/master.m3u8');
+      _hlsSeekPending=false;
+    }).catch(()=>{_hlsSeekPending=false;});
+  } else {
+    // Direct play: just set currentTime
+    if(V.duration)V.currentTime=_seekTarget;
+  }
+}
+
+// Up Next state
+let _upNextShown=false, _upNextCancelled=false, _upNextCountdown=null;
+const UP_NEXT_SHOW_AT=30; // show overlay 30s before end
+const UP_NEXT_AUTO_AT=10; // start countdown 10s before end
+
+function getNextEp(){
+  const pl=getPlaylist(),i=getCurIdx();
+  if(pl.length>1&&i>=0&&i<pl.length-1) return pl[i+1];
+  return null;
+}
+function showUpNext(){
+  const next=getNextEp();
+  if(!next||_upNextShown||_upNextCancelled)return;
+  _upNextShown=true;
+  const epLabel=next.epInfo?`S${String(next.epInfo.season).padStart(2,'0')}E${String(next.epInfo.episode).padStart(2,'0')}`:'';
+  document.getElementById('upNextTitle').textContent=next.showName||next.title;
+  document.getElementById('upNextEp').textContent=epLabel?(epLabel+' — '+next.title):next.title;
+  document.getElementById('upNextCountdown').textContent='';
+  document.getElementById('upNextOverlay').classList.add('visible');
+}
+function hideUpNext(){
+  document.getElementById('upNextOverlay').classList.remove('visible');
+  _upNextShown=false;
+  clearInterval(_upNextCountdown);_upNextCountdown=null;
+}
+function cancelUpNext(){_upNextCancelled=true;hideUpNext();}
+function resetUpNext(){_upNextShown=false;_upNextCancelled=false;hideUpNext();}
+
+V.addEventListener('timeupdate',()=>{
+  if(!V.duration||isSeeking)return;
+  const offset=window._hlsSeekOffset||0;
+  const total=offset+V.duration;const cur=offset+V.currentTime;
+  const p=(cur/total)*100;
+  document.getElementById('progressFilled').style.width=p+'%';
+  document.getElementById('timeDisplay').textContent=fmt(cur)+' / '+fmt(total);
+  // Up Next: show overlay near end of episode
+  const remaining=total-cur;
+  if(remaining<=UP_NEXT_SHOW_AT&&remaining>0&&getNextEp()&&!_upNextCancelled){
+    showUpNext();
+    if(remaining<=UP_NEXT_AUTO_AT&&!_upNextCancelled){
+      document.getElementById('upNextCountdown').textContent='Playing in '+Math.ceil(remaining)+'s...';
+    }
+  }
+});
 V.addEventListener('play',()=>{document.getElementById('playPauseBtn').innerHTML='&#10074;&#10074;';});
 V.addEventListener('pause',()=>{document.getElementById('playPauseBtn').innerHTML='&#9654;&#65039;';});
-V.addEventListener('ended',()=>{const pl=getPlaylist(),i=getCurIdx();if(pl.length>1&&i<pl.length-1){saveProg();playMedia(pl[i+1].id);}});
+V.addEventListener('ended',()=>{
+  const next=getNextEp();
+  if(next&&!_upNextCancelled){saveProg();playMedia(next.id);}
+});
 
 document.addEventListener('keydown',e=>{
   if(!modal.classList.contains('active'))return;
@@ -936,8 +1172,11 @@ function showControls(){modal.classList.add('controls-visible');clearTimeout(con
 function startProgressSync(){clearInterval(progressSaveInterval);progressSaveInterval=setInterval(saveProg,5000);}
 async function saveProg(){
   if(!currentMedia||!V.duration)return;
-  try{await fetch('/api/progress',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:currentMedia.id,currentTime:V.currentTime,duration:V.duration,profile:activeProfile})});
-  currentMedia.progress={currentTime:V.currentTime,duration:V.duration,percent:Math.round((V.currentTime/V.duration)*100)};}catch{}
+  const offset=window._hlsSeekOffset||0;
+  const cur=offset+V.currentTime;
+  const total=offset+V.duration;
+  try{await fetch('/api/progress',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:currentMedia.id,currentTime:cur,duration:total,profile:activeProfile})});
+  currentMedia.progress={currentTime:cur,duration:total,percent:Math.round((cur/total)*100)};}catch{}
 }
 
 // ══════════════════════════════════════════════════════════════════════
