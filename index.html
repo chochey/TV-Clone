@@ -1,0 +1,959 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Local Stream</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg-primary:#101014;--bg-secondary:#18181c;--bg-card:#1e1e24;--bg-hover:#2a2a32;
+  --accent:#00a4dc;--accent-glow:rgba(0,164,220,.25);
+  --text-primary:#e8e8ec;--text-secondary:#9898a0;--text-muted:#606068;
+  --sidebar-width:240px;--radius:8px;--transition:.2s ease;
+  --danger:#e5484d;--success:#30a46c;--purple:#aa64ff;
+}
+html{font-size:15px}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:var(--bg-primary);color:var(--text-primary);overflow-x:hidden;min-height:100vh}
+a{color:inherit;text-decoration:none}
+button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit}
+select,input{font-family:inherit}
+::-webkit-scrollbar{width:8px;height:8px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:#333;border-radius:4px}
+
+/* Layout */
+.app{display:flex;min-height:100vh}
+
+/* Profile selector */
+.profile-screen{position:fixed;inset:0;z-index:2000;background:var(--bg-primary);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px}
+.profile-screen h1{font-size:1.8rem;font-weight:800;margin-bottom:8px}
+.profile-screen p{color:var(--text-secondary);font-size:.9rem;margin-bottom:20px}
+.profiles-grid{display:flex;gap:20px;flex-wrap:wrap;justify-content:center}
+.profile-avatar{width:100px;height:100px;border-radius:20px;display:flex;align-items:center;justify-content:center;font-size:2.2rem;font-weight:800;color:#fff;cursor:pointer;transition:transform .2s,box-shadow .2s;border:3px solid transparent}
+.profile-avatar:hover{transform:scale(1.08);box-shadow:0 8px 30px rgba(0,0,0,.4)}
+.profile-avatar.selected{border-color:#fff}
+.profile-name{font-size:.85rem;font-weight:600;margin-top:8px;text-align:center}
+.profile-item{display:flex;flex-direction:column;align-items:center;gap:0;cursor:pointer}
+.profile-add{background:rgba(255,255,255,.06);border:2px dashed rgba(255,255,255,.15);font-size:2rem;color:var(--text-muted)}
+.pin-input{padding:10px 16px;border-radius:8px;background:var(--bg-card);border:1px solid rgba(255,255,255,.12);color:var(--text-primary);font-size:1.2rem;text-align:center;letter-spacing:.3em;width:160px;outline:none}
+.pin-input:focus{border-color:var(--accent)}
+.pin-error{color:var(--danger);font-size:.8rem;margin-top:4px}
+
+/* Sidebar */
+.sidebar{position:fixed;left:0;top:0;bottom:0;width:var(--sidebar-width);background:var(--bg-secondary);border-right:1px solid rgba(255,255,255,.06);display:flex;flex-direction:column;z-index:100;transition:transform .3s ease}
+.sidebar-header{padding:24px 20px 20px;display:flex;align-items:center;gap:12px;border-bottom:1px solid rgba(255,255,255,.06)}
+.sidebar-logo{width:36px;height:36px;background:var(--accent);border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:18px}
+.sidebar-brand{font-size:1.15rem;font-weight:700;letter-spacing:-.02em}
+.sidebar-nav{padding:16px 12px;flex:1;overflow-y:auto}
+.nav-label{font-size:.7rem;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--text-muted);padding:12px 12px 6px}
+.nav-item{display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:8px;font-size:.9rem;color:var(--text-secondary);transition:all var(--transition);width:100%}
+.nav-item:hover{background:var(--bg-hover);color:var(--text-primary)}
+.nav-item.active{background:var(--accent-glow);color:var(--accent);font-weight:600}
+.nav-icon{width:20px;text-align:center;font-size:1rem;flex-shrink:0}
+.nav-badge{margin-left:auto;background:var(--accent);color:#fff;font-size:.65rem;font-weight:700;padding:2px 6px;border-radius:10px}
+.sidebar-profile{padding:12px 20px;border-top:1px solid rgba(255,255,255,.06);display:flex;align-items:center;gap:10px;cursor:pointer}
+.sidebar-profile:hover{background:var(--bg-hover)}
+.sidebar-profile-avatar{width:28px;height:28px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:.8rem;font-weight:700;color:#fff}
+.sidebar-profile-name{font-size:.8rem;font-weight:600;flex:1}
+.sidebar-profile-switch{font-size:.7rem;color:var(--text-muted)}
+.sidebar-footer{padding:10px 20px;border-top:1px solid rgba(255,255,255,.06);font-size:.72rem;color:var(--text-muted)}
+
+/* Mobile */
+.hamburger{display:none;position:fixed;top:14px;left:14px;z-index:200;width:40px;height:40px;border-radius:10px;background:var(--bg-secondary);border:1px solid rgba(255,255,255,.1);align-items:center;justify-content:center;font-size:1.2rem}
+.sidebar-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:99}
+
+/* Main */
+.main{margin-left:var(--sidebar-width);flex:1;min-width:0}
+
+/* Top bar with search + filter/sort */
+.top-bar{position:sticky;top:0;z-index:50;padding:12px 40px;background:rgba(16,16,20,.88);backdrop-filter:blur(12px);border-bottom:1px solid rgba(255,255,255,.06);display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.search-input{flex:1;min-width:180px;padding:9px 14px;border-radius:8px;background:var(--bg-card);border:1px solid rgba(255,255,255,.1);color:var(--text-primary);font-size:.88rem;outline:none;transition:border-color var(--transition)}
+.search-input:focus{border-color:var(--accent)}
+.search-input::placeholder{color:var(--text-muted)}
+.filter-btn{padding:7px 12px;border-radius:8px;font-size:.78rem;font-weight:600;background:var(--bg-card);border:1px solid rgba(255,255,255,.08);color:var(--text-secondary);transition:all var(--transition);white-space:nowrap}
+.filter-btn:hover,.filter-btn.active{background:var(--accent-glow);color:var(--accent);border-color:rgba(0,164,220,.3)}
+.sort-select{padding:7px 10px;border-radius:8px;background:var(--bg-card);border:1px solid rgba(255,255,255,.08);color:var(--text-secondary);font-size:.78rem;outline:none;cursor:pointer}
+.sort-select option{background:var(--bg-primary)}
+.lib-count{font-size:.78rem;color:var(--text-muted);white-space:nowrap}
+
+/* Hero */
+.hero{position:relative;width:100%;min-height:400px;background:linear-gradient(135deg,#1a1a2e 0%,#16213e 50%,#0f3460 100%);display:flex;align-items:flex-end;padding:48px 40px 36px;overflow:hidden}
+.hero-bg{position:absolute;inset:0;background-size:cover;background-position:center;opacity:.35}
+.hero::after{content:'';position:absolute;inset:0;background:linear-gradient(transparent 30%,var(--bg-primary) 100%)}
+.hero-content{position:relative;z-index:2;max-width:600px}
+.hero-tag{display:inline-block;padding:4px 10px;border-radius:4px;background:var(--accent);color:#fff;font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px}
+.hero-title{font-size:2.2rem;font-weight:800;line-height:1.15;margin-bottom:8px}
+.hero-meta{font-size:.85rem;color:var(--text-secondary);margin-bottom:14px}
+.hero-actions{display:flex;gap:10px;flex-wrap:wrap}
+
+/* Buttons */
+.btn{display:inline-flex;align-items:center;gap:8px;padding:10px 22px;border-radius:8px;font-size:.88rem;font-weight:600;transition:all var(--transition)}
+.btn-primary{background:var(--accent);color:#fff}.btn-primary:hover{background:#008bbe;transform:translateY(-1px)}
+.btn-secondary{background:rgba(255,255,255,.1);color:var(--text-primary)}.btn-secondary:hover{background:rgba(255,255,255,.18)}
+.btn-danger{background:var(--danger);color:#fff}.btn-danger:hover{background:#c93c40}
+.btn-sm{padding:6px 14px;font-size:.78rem}
+.btn-ghost{padding:6px 10px;font-size:.78rem;color:var(--text-secondary)}.btn-ghost:hover{color:var(--text-primary);background:rgba(255,255,255,.08)}
+
+/* Section */
+.section{padding:24px 40px 8px}
+.section-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;gap:12px}
+.section-title{font-size:1.2rem;font-weight:700}
+
+/* Carousel */
+.carousel-wrapper{position:relative}
+.carousel{display:flex;gap:14px;overflow-x:auto;scroll-behavior:smooth;padding-bottom:8px;-ms-overflow-style:none;scrollbar-width:none}
+.carousel::-webkit-scrollbar{display:none}
+.carousel-btn{position:absolute;top:50%;transform:translateY(-60%);width:36px;height:36px;border-radius:50%;background:var(--bg-secondary);border:1px solid rgba(255,255,255,.12);color:var(--text-primary);font-size:1rem;z-index:5;display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity var(--transition)}
+.carousel-wrapper:hover .carousel-btn{opacity:1}
+.carousel-btn:hover{background:var(--bg-hover)}
+.carousel-btn.left{left:-12px}.carousel-btn.right{right:-12px}
+
+/* Card */
+.card{flex-shrink:0;width:164px;cursor:pointer;transition:transform var(--transition);position:relative}
+.card:hover{transform:translateY(-4px)}
+.card-poster{position:relative;width:100%;aspect-ratio:2/3;border-radius:var(--radius);overflow:hidden;background:var(--bg-card)}
+.card-poster img{width:100%;height:100%;object-fit:cover;transition:transform .3s}
+.card:hover .card-poster img{transform:scale(1.05)}
+.card-placeholder{width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:2.5rem;color:var(--text-muted);background:linear-gradient(145deg,#1c1c24,#252530)}
+.card-progress{position:absolute;bottom:0;left:0;right:0;height:3px;background:rgba(255,255,255,.15)}
+.card-progress-fill{height:100%;background:var(--accent);transition:width .3s}
+.card-overlay{position:absolute;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity var(--transition)}
+.card:hover .card-overlay{opacity:1}
+.play-icon{width:44px;height:44px;border-radius:50%;background:var(--accent);display:flex;align-items:center;justify-content:center;font-size:1.1rem;color:#fff;box-shadow:0 4px 16px rgba(0,164,220,.4)}
+.card-watched-badge{position:absolute;top:6px;right:6px;width:22px;height:22px;border-radius:50%;background:var(--success);display:flex;align-items:center;justify-content:center;font-size:.7rem;color:#fff;z-index:3}
+.card-actions{position:absolute;top:6px;left:6px;display:flex;gap:4px;z-index:3;opacity:0;transition:opacity var(--transition)}
+.card:hover .card-actions{opacity:1}
+.card-action-btn{width:26px;height:26px;border-radius:6px;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center;font-size:.7rem;transition:background var(--transition)}
+.card-action-btn:hover{background:rgba(0,0,0,.9)}
+.card-info{padding:8px 2px 0}
+.card-title{font-size:.8rem;font-weight:600;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.card-year{font-size:.7rem;color:var(--text-secondary);margin-top:2px}
+.card-type{display:inline-block;font-size:.58rem;font-weight:600;text-transform:uppercase;padding:2px 6px;border-radius:3px;margin-top:3px;letter-spacing:.04em}
+.card-type.movie{background:rgba(0,164,220,.15);color:var(--accent)}
+.card-type.show{background:rgba(170,100,255,.15);color:var(--purple)}
+
+/* Grid */
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:18px 12px}
+.grid .card{width:100%}
+
+/* Show detail page */
+.show-detail{padding:32px 40px}
+.show-detail-header{display:flex;gap:24px;margin-bottom:28px;flex-wrap:wrap}
+.show-detail-poster{width:180px;aspect-ratio:2/3;border-radius:var(--radius);overflow:hidden;background:var(--bg-card);flex-shrink:0}
+.show-detail-poster img{width:100%;height:100%;object-fit:cover}
+.show-detail-info{flex:1;min-width:200px}
+.show-detail-info h1{font-size:1.8rem;font-weight:800;margin-bottom:6px}
+.show-detail-meta{font-size:.85rem;color:var(--text-secondary);margin-bottom:12px}
+.show-detail-actions{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px}
+.season-section{margin-bottom:24px}
+.season-title{font-size:1rem;font-weight:700;margin-bottom:12px;padding-bottom:6px;border-bottom:1px solid rgba(255,255,255,.08)}
+.episode-list{display:flex;flex-direction:column;gap:6px}
+.episode-row{display:flex;align-items:center;gap:14px;padding:10px 14px;border-radius:8px;background:var(--bg-card);cursor:pointer;transition:background var(--transition)}
+.episode-row:hover{background:var(--bg-hover)}
+.episode-num{font-size:.8rem;font-weight:700;color:var(--text-muted);width:30px;text-align:center;flex-shrink:0}
+.episode-info{flex:1;min-width:0}
+.episode-title{font-size:.88rem;font-weight:600}
+.episode-file{font-size:.72rem;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.episode-progress{width:80px;height:4px;border-radius:2px;background:rgba(255,255,255,.1);flex-shrink:0}
+.episode-progress-fill{height:100%;border-radius:2px;background:var(--accent)}
+.episode-watched{color:var(--success);font-size:.75rem;font-weight:600;flex-shrink:0}
+
+/* Empty */
+.empty-state{text-align:center;padding:80px 20px}
+.empty-icon{font-size:4rem;margin-bottom:16px;opacity:.4}
+.empty-title{font-size:1.3rem;font-weight:700;margin-bottom:8px}
+.empty-text{color:var(--text-secondary);max-width:400px;margin:0 auto;font-size:.9rem;line-height:1.6}
+
+/* Settings */
+.settings{padding:32px 40px;max-width:800px}
+.settings-title{font-size:1.5rem;font-weight:800;margin-bottom:6px}
+.settings-subtitle{color:var(--text-secondary);font-size:.88rem;margin-bottom:24px;line-height:1.5}
+.folder-list{display:flex;flex-direction:column;gap:10px;margin-bottom:24px}
+.folder-card{background:var(--bg-card);border:1px solid rgba(255,255,255,.08);border-radius:10px;padding:14px 16px;display:flex;align-items:center;gap:12px}
+.folder-card-icon{width:38px;height:38px;border-radius:8px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:1.2rem}
+.folder-card-icon.movie{background:rgba(0,164,220,.15)}.folder-card-icon.show{background:rgba(170,100,255,.15)}.folder-card-icon.auto{background:rgba(255,255,255,.08)}
+.folder-card-body{flex:1;min-width:0}
+.folder-card-label{font-weight:600;font-size:.92rem}
+.folder-card-path{font-size:.75rem;color:var(--text-secondary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}
+.folder-card-meta{display:flex;gap:10px;margin-top:3px;font-size:.7rem;align-items:center}
+.folder-meta-tag{padding:2px 6px;border-radius:4px;font-weight:600;text-transform:uppercase;letter-spacing:.03em}
+.folder-meta-tag.movie{background:rgba(0,164,220,.12);color:var(--accent)}
+.folder-meta-tag.show{background:rgba(170,100,255,.12);color:var(--purple)}
+.folder-meta-tag.auto{background:rgba(255,255,255,.06);color:var(--text-secondary)}
+.folder-meta-count{color:var(--text-muted)}
+.folder-card-status{font-size:.7rem;font-weight:600}
+.folder-card-status.ok{color:var(--success)}.folder-card-status.err{color:var(--danger)}
+.add-folder-section{background:var(--bg-secondary);border:1px dashed rgba(255,255,255,.12);border-radius:12px;padding:20px;margin-bottom:20px}
+.add-folder-section h3{font-size:.95rem;font-weight:700;margin-bottom:14px}
+.form-row{display:flex;gap:10px;margin-bottom:10px;align-items:flex-end;flex-wrap:wrap}
+.form-group{display:flex;flex-direction:column;gap:4px}.form-group.grow{flex:1;min-width:180px}
+.form-label{font-size:.72rem;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.04em}
+.form-input{padding:8px 12px;border-radius:8px;background:var(--bg-primary);border:1px solid rgba(255,255,255,.1);color:var(--text-primary);font-size:.85rem;outline:none}
+.form-input:focus{border-color:var(--accent)}
+.form-input::placeholder{color:var(--text-muted)}
+.form-select{padding:8px 12px;border-radius:8px;background:var(--bg-primary);border:1px solid rgba(255,255,255,.1);color:var(--text-primary);font-size:.85rem;outline:none;cursor:pointer}
+.form-select option{background:var(--bg-primary)}
+.browser-panel{background:var(--bg-primary);border:1px solid rgba(255,255,255,.1);border-radius:10px;max-height:280px;overflow:hidden;display:flex;flex-direction:column;margin-bottom:10px}
+.browser-path-bar{padding:8px 12px;font-size:.78rem;color:var(--text-secondary);background:var(--bg-card);border-bottom:1px solid rgba(255,255,255,.06);display:flex;align-items:center;gap:8px}
+.browser-path-bar span{font-weight:600;color:var(--text-primary)}
+.browser-list{flex:1;overflow-y:auto;padding:4px 0}
+.browser-item{display:flex;align-items:center;gap:10px;padding:7px 12px;cursor:pointer;font-size:.83rem;transition:background var(--transition)}
+.browser-item:hover{background:var(--bg-hover)}
+.browser-item-icon{font-size:1rem;flex-shrink:0;width:22px;text-align:center}
+.browser-item-name{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.browser-item.parent{color:var(--accent);font-weight:600}
+.browser-video-count{padding:2px 8px;border-radius:4px;font-size:.68rem;background:rgba(0,164,220,.12);color:var(--accent);font-weight:600}
+.browser-actions{padding:8px 12px;border-top:1px solid rgba(255,255,255,.06);display:flex;align-items:center;justify-content:space-between;background:var(--bg-card)}
+.browser-selected{font-size:.78rem;color:var(--text-secondary);flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.alert{padding:10px 14px;border-radius:8px;font-size:.83rem;margin-bottom:14px;display:none}
+.alert.success{display:block;background:rgba(48,164,108,.12);color:var(--success);border:1px solid rgba(48,164,108,.2)}
+.alert.error{display:block;background:rgba(229,72,77,.12);color:var(--danger);border:1px solid rgba(229,72,77,.2)}
+
+/* Stats panel */
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:20px}
+.stat-card{background:var(--bg-card);border-radius:10px;padding:16px;text-align:center}
+.stat-value{font-size:1.5rem;font-weight:800;color:var(--accent)}
+.stat-label{font-size:.72rem;color:var(--text-secondary);margin-top:4px;text-transform:uppercase;letter-spacing:.04em}
+.folder-stat{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.06);font-size:.85rem}
+.folder-stat:last-child{border-bottom:none}
+.folder-stat-name{font-weight:600}
+.folder-stat-info{color:var(--text-secondary)}
+
+/* Queue list */
+.queue-item{display:flex;align-items:center;gap:12px;padding:10px 14px;background:var(--bg-card);border-radius:8px;margin-bottom:6px;cursor:pointer;transition:background var(--transition)}
+.queue-item:hover{background:var(--bg-hover)}
+.queue-num{font-size:.8rem;font-weight:700;color:var(--text-muted);width:24px;text-align:center}
+.queue-title{flex:1;font-size:.88rem;font-weight:600}
+.queue-type{font-size:.7rem;color:var(--text-muted)}
+
+/* History */
+.history-item{display:flex;align-items:center;gap:12px;padding:10px 14px;background:var(--bg-card);border-radius:8px;margin-bottom:6px;cursor:pointer;transition:background var(--transition)}
+.history-item:hover{background:var(--bg-hover)}
+.history-time{font-size:.72rem;color:var(--text-muted);width:90px;flex-shrink:0}
+.history-title{flex:1;font-size:.88rem;font-weight:600}
+
+/* Player */
+.player-modal{display:none;position:fixed;inset:0;z-index:1000;background:#000;flex-direction:column}
+.player-modal.active{display:flex}
+.player-top-bar{position:absolute;top:0;left:0;right:0;z-index:10;padding:14px 18px;background:linear-gradient(rgba(0,0,0,.8),transparent);display:flex;align-items:center;gap:12px;opacity:0;transition:opacity .3s}
+.player-modal:hover .player-top-bar,.player-modal.controls-visible .player-top-bar{opacity:1}
+.player-close{width:34px;height:34px;border-radius:50%;background:rgba(255,255,255,.12);display:flex;align-items:center;justify-content:center;font-size:1rem;transition:background var(--transition)}
+.player-close:hover{background:rgba(255,255,255,.25)}
+.player-now-playing{font-size:.92rem;font-weight:600;text-shadow:0 1px 4px rgba(0,0,0,.6)}
+.player-video-wrapper{flex:1;display:flex;align-items:center;justify-content:center;position:relative}
+.player-video-wrapper video{width:100%;height:100%;object-fit:contain;background:#000}
+.player-controls{position:absolute;bottom:0;left:0;right:0;z-index:10;padding:0 18px 14px;background:linear-gradient(transparent,rgba(0,0,0,.85));opacity:0;transition:opacity .3s}
+.player-modal:hover .player-controls,.player-modal.controls-visible .player-controls{opacity:1}
+.progress-container{width:100%;height:20px;display:flex;align-items:center;cursor:pointer;margin-bottom:6px}
+.progress-track{width:100%;height:4px;background:rgba(255,255,255,.2);border-radius:2px;position:relative;transition:height .15s}
+.progress-container:hover .progress-track{height:6px}
+.progress-filled{height:100%;background:var(--accent);border-radius:2px;position:relative}
+.progress-thumb{position:absolute;right:-6px;top:50%;transform:translateY(-50%);width:12px;height:12px;border-radius:50%;background:var(--accent);opacity:0;transition:opacity .15s;box-shadow:0 0 6px rgba(0,164,220,.5)}
+.progress-container:hover .progress-thumb{opacity:1}
+.controls-row{display:flex;align-items:center;justify-content:space-between}
+.controls-left,.controls-right{display:flex;align-items:center;gap:4px}
+.ctrl-btn{width:36px;height:36px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:1rem;transition:background var(--transition)}
+.ctrl-btn:hover{background:rgba(255,255,255,.12)}
+.ctrl-btn.big{font-size:1.3rem}
+.ctrl-btn.disabled{opacity:.3;pointer-events:none}
+.ctrl-divider{width:1px;height:18px;background:rgba(255,255,255,.12);margin:0 2px}
+.time-display{font-size:.75rem;color:var(--text-secondary);margin-left:6px;font-variant-numeric:tabular-nums}
+.ep-info{font-size:.7rem;color:var(--text-muted);margin-left:4px;white-space:nowrap}
+.speed-menu,.skip-menu,.sub-menu{position:absolute;bottom:100%;right:0;background:var(--bg-secondary);border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:6px 0;min-width:120px;box-shadow:0 8px 32px rgba(0,0,0,.5);display:none;z-index:20}
+.speed-menu.open,.skip-menu.open,.sub-menu.open{display:block}
+.menu-option{display:flex;align-items:center;justify-content:space-between;padding:7px 14px;font-size:.82rem;cursor:pointer;transition:background var(--transition)}
+.menu-option:hover{background:var(--bg-hover)}
+.menu-option.active{color:var(--accent);font-weight:600}
+.menu-option.active::after{content:'✓';margin-left:8px}
+.ctrl-btn-wrap{position:relative}
+.volume-wrapper{display:flex;align-items:center;gap:4px}
+.volume-slider{width:70px;height:4px;-webkit-appearance:none;appearance:none;background:rgba(255,255,255,.2);border-radius:2px;outline:none}
+.volume-slider::-webkit-slider-thumb{-webkit-appearance:none;width:12px;height:12px;border-radius:50%;background:#fff;cursor:pointer}
+.loading{display:flex;align-items:center;justify-content:center;padding:80px 20px;gap:12px}
+.spinner{width:28px;height:28px;border:3px solid var(--bg-hover);border-top-color:var(--accent);border-radius:50%;animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* Genre tags */
+.genre-tags{display:flex;gap:4px;flex-wrap:wrap;margin-top:4px}
+.genre-tag{font-size:.62rem;padding:2px 6px;border-radius:3px;background:rgba(255,255,255,.06);color:var(--text-secondary);font-weight:600}
+
+/* Responsive */
+@media(max-width:900px){
+  .sidebar{transform:translateX(-100%)}.sidebar.open{transform:translateX(0)}.sidebar-overlay.open{display:block}
+  .hamburger{display:flex}.main{margin-left:0}
+  .hero{min-height:300px;padding:28px 20px 24px}.hero-title{font-size:1.5rem}
+  .section{padding:18px 16px 8px}.top-bar{padding:10px 16px;padding-left:56px}
+  .card{width:136px}.grid{grid-template-columns:repeat(auto-fill,minmax(125px,1fr));gap:14px 10px}
+  .player-controls{padding:0 12px 10px}.settings{padding:20px 16px}
+  .show-detail{padding:24px 16px}.show-detail-header{flex-direction:column;align-items:center;text-align:center}
+  .form-row{flex-direction:column}
+}
+@media(max-width:480px){.card{width:115px}.grid{grid-template-columns:repeat(auto-fill,minmax(105px,1fr))}.hero{min-height:240px}.hero-title{font-size:1.2rem}}
+</style>
+</head>
+<body>
+
+<!-- Profile screen -->
+<div class="profile-screen" id="profileScreen"><h1>Who's watching?</h1><p>Select your profile</p><div class="profiles-grid" id="profilesGrid"></div></div>
+
+<button class="hamburger" onclick="toggleSidebar()">&#9776;</button>
+<div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleSidebar()"></div>
+
+<div class="app" id="appContainer" style="display:none">
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header"><div class="sidebar-logo">&#9654;</div><span class="sidebar-brand">Local Stream</span></div>
+    <nav class="sidebar-nav">
+      <div class="nav-label">Browse</div>
+      <button class="nav-item active" data-view="home" onclick="nav('home',this)"><span class="nav-icon">&#127968;</span> Home</button>
+      <button class="nav-item" data-view="movies" onclick="nav('movies',this)"><span class="nav-icon">&#127916;</span> Movies</button>
+      <button class="nav-item" data-view="shows" onclick="nav('shows',this)"><span class="nav-icon">&#128250;</span> TV Shows</button>
+      <button class="nav-item" data-view="continue" onclick="nav('continue',this)"><span class="nav-icon">&#9654;&#65039;</span> Continue Watching</button>
+      <button class="nav-item" data-view="queue" onclick="nav('queue',this)"><span class="nav-icon">&#128203;</span> Up Next <span class="nav-badge" id="queueBadge" style="display:none">0</span></button>
+      <button class="nav-item" data-view="history" onclick="nav('history',this)"><span class="nav-icon">&#128337;</span> History</button>
+      <div class="nav-label">System</div>
+      <button class="nav-item" data-view="settings" onclick="nav('settings',this)"><span class="nav-icon">&#9881;&#65039;</span> Media Folders</button>
+    </nav>
+    <div class="sidebar-profile" onclick="switchProfile()">
+      <div class="sidebar-profile-avatar" id="sidebarAvatar"></div>
+      <span class="sidebar-profile-name" id="sidebarName"></span>
+      <span class="sidebar-profile-switch">Switch</span>
+    </div>
+    <div class="sidebar-footer"><div id="libraryStats">Loading...</div></div>
+  </aside>
+
+  <main class="main">
+    <div class="top-bar" id="topBar">
+      <input class="search-input" type="text" placeholder="Search your library..." id="searchInput" oninput="handleSearch()">
+      <select class="sort-select" id="sortSelect" onchange="renderView()">
+        <option value="title-asc">Title A-Z</option>
+        <option value="title-desc">Title Z-A</option>
+        <option value="year-desc">Year (New)</option>
+        <option value="year-asc">Year (Old)</option>
+        <option value="recent">Recently Added</option>
+      </select>
+      <button class="filter-btn" id="filterAllBtn" onclick="setFilter('all')">All</button>
+      <button class="filter-btn" id="filterUnwatchedBtn" onclick="setFilter('unwatched')">Unwatched</button>
+      <button class="filter-btn" id="filterWatchedBtn" onclick="setFilter('watched')">Watched</button>
+      <button class="btn-ghost" onclick="playRandom()" title="Random pick">&#127922; Shuffle</button>
+      <span class="lib-count" id="libCount"></span>
+    </div>
+    <div id="contentArea"><div class="loading"><div class="spinner"></div> Loading...</div></div>
+  </main>
+</div>
+
+<!-- Player -->
+<div class="player-modal" id="playerModal">
+  <div class="player-top-bar">
+    <button class="player-close" onclick="closePlayer()">&#10005;</button>
+    <span class="player-now-playing" id="playerTitle"></span>
+  </div>
+  <div class="player-video-wrapper" onclick="togglePlay(event)">
+    <video id="videoElement" preload="metadata"></video>
+  </div>
+  <div class="player-controls">
+    <div class="progress-container" id="progressContainer">
+      <div class="progress-track"><div class="progress-filled" id="progressFilled" style="width:0%"><div class="progress-thumb"></div></div></div>
+    </div>
+    <div class="controls-row">
+      <div class="controls-left">
+        <button class="ctrl-btn disabled" id="prevEpBtn" onclick="playPrevEp()" title="Previous">&#9198;</button>
+        <button class="ctrl-btn" id="skipBackBtn" onclick="skipBack()" title="Rewind 10s">&#9194;</button>
+        <button class="ctrl-btn big" id="playPauseBtn" onclick="togglePlay()">&#9654;&#65039;</button>
+        <button class="ctrl-btn" id="skipFwdBtn" onclick="skipFwd()" title="Forward 10s">&#9193;</button>
+        <button class="ctrl-btn disabled" id="nextEpBtn" onclick="playNextEp()" title="Next">&#9197;</button>
+        <span class="time-display" id="timeDisplay">0:00 / 0:00</span>
+        <span class="ep-info" id="epInfo"></span>
+      </div>
+      <div class="controls-right">
+        <div class="ctrl-btn-wrap"><button class="ctrl-btn" onclick="toggleMenu('skipMenu',event)" id="skipIntervalBtn" style="font-size:.72rem;font-weight:700">10s</button><div class="skip-menu" id="skipMenu"><div class="menu-option" onclick="setSkip(5)">5s</div><div class="menu-option active" onclick="setSkip(10)">10s</div><div class="menu-option" onclick="setSkip(15)">15s</div><div class="menu-option" onclick="setSkip(30)">30s</div><div class="menu-option" onclick="setSkip(60)">60s</div></div></div>
+        <div class="ctrl-divider"></div>
+        <div class="ctrl-btn-wrap"><button class="ctrl-btn" onclick="toggleMenu('speedMenu',event)" id="speedBtn" style="font-size:.72rem;font-weight:700">1x</button><div class="speed-menu" id="speedMenu"><div class="menu-option" onclick="setSpd(.5)">0.5x</div><div class="menu-option" onclick="setSpd(.75)">0.75x</div><div class="menu-option active" onclick="setSpd(1)">1x</div><div class="menu-option" onclick="setSpd(1.25)">1.25x</div><div class="menu-option" onclick="setSpd(1.5)">1.5x</div><div class="menu-option" onclick="setSpd(2)">2x</div></div></div>
+        <div class="ctrl-divider"></div>
+        <div class="ctrl-btn-wrap"><button class="ctrl-btn" onclick="toggleMenu('subMenu',event)" id="subBtn" title="Subtitles" style="font-size:.72rem;font-weight:700">CC</button><div class="sub-menu" id="subMenu"><div class="menu-option active" onclick="setSub(-1)">Off</div></div></div>
+        <div class="ctrl-divider"></div>
+        <div class="volume-wrapper"><button class="ctrl-btn" id="volumeBtn" onclick="toggleMute()">&#128266;</button><input class="volume-slider" type="range" min="0" max="1" step="0.05" value="1" id="volumeSlider" oninput="setVol(this.value)"></div>
+        <button class="ctrl-btn" onclick="togglePiP()" title="PiP" id="pipBtn">&#128247;</button>
+        <button class="ctrl-btn" onclick="toggleFS()" title="Fullscreen">&#x26F6;</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ══════════════════════════════════════════════════════════════════════
+// State
+// ══════════════════════════════════════════════════════════════════════
+let library=[],currentView='home',currentMedia=null,controlsTimeout=null,progressSaveInterval=null;
+let folderConfig=[],activeProfile=null,profileQueue=[];
+let skipInterval=10,playbackSpeed=1,watchFilter='all';
+
+const V=document.getElementById('videoElement'),modal=document.getElementById('playerModal');
+const progContainer=document.getElementById('progressContainer');
+
+// ══════════════════════════════════════════════════════════════════════
+// Profiles
+// ══════════════════════════════════════════════════════════════════════
+async function loadProfiles(){
+  const res=await fetch('/api/profiles');
+  return res.json();
+}
+
+async function showProfileScreen(){
+  const profiles=await loadProfiles();
+  document.getElementById('profileScreen').style.display='';
+  document.getElementById('appContainer').style.display='none';
+  const grid=document.getElementById('profilesGrid');
+  grid.innerHTML=profiles.map(p=>`
+    <div class="profile-item" onclick="selectProfile('${p.id}',${p.hasPin})">
+      <div class="profile-avatar" style="background:${p.avatar}">${p.name[0].toUpperCase()}</div>
+      <div class="profile-name">${esc(p.name)}${p.hasPin?' 🔒':''}</div>
+    </div>`).join('')+`
+    <div class="profile-item" onclick="createProfile()">
+      <div class="profile-avatar profile-add">+</div>
+      <div class="profile-name" style="color:var(--text-muted)">Add</div>
+    </div>`;
+
+  // If only 1 profile without PIN, auto-select
+  if(profiles.length===1&&!profiles[0].hasPin){selectProfile(profiles[0].id,false);}
+}
+
+async function selectProfile(id,hasPin){
+  if(hasPin){
+    const pin=prompt('Enter PIN:');
+    if(!pin)return;
+    const res=await fetch(`/api/profiles/${id}/verify-pin`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pin})});
+    if(!res.ok){alert('Incorrect PIN');return;}
+  }
+  activeProfile=id;
+  document.getElementById('profileScreen').style.display='none';
+  document.getElementById('appContainer').style.display='';
+  // Update sidebar profile display
+  const profiles=await loadProfiles();
+  const p=profiles.find(x=>x.id===id);
+  if(p){
+    document.getElementById('sidebarAvatar').style.background=p.avatar;
+    document.getElementById('sidebarAvatar').textContent=p.name[0].toUpperCase();
+    document.getElementById('sidebarName').textContent=p.name;
+  }
+  await fetchLib();
+  await fetchQueue();
+  setupSSE();
+}
+
+async function createProfile(){
+  const name=prompt('Profile name:');
+  if(!name)return;
+  const pin=prompt('Optional PIN (leave empty for none):');
+  const colors=['#00a4dc','#e5484d','#30a46c','#aa64ff','#f5a623','#e879f9','#38bdf8','#fb923c'];
+  const avatar=colors[Math.floor(Math.random()*colors.length)];
+  await fetch('/api/profiles',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,pin:pin||'',avatar})});
+  showProfileScreen();
+}
+
+function switchProfile(){
+  activeProfile=null;
+  showProfileScreen();
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Data fetching
+// ══════════════════════════════════════════════════════════════════════
+async function fetchLib(){
+  try{
+    const res=await fetch(`/api/library?profile=${activeProfile}`);
+    library=await res.json();
+    updateStats();
+    if(currentView!=='settings')renderView();
+  }catch{
+    document.getElementById('contentArea').innerHTML='<div class="empty-state"><div class="empty-icon">&#9888;&#65039;</div><div class="empty-title">Connection Error</div></div>';
+  }
+}
+
+async function fetchConfig(){
+  try{folderConfig=await(await fetch('/api/config')).json();}catch{folderConfig=[];}
+}
+
+async function fetchQueue(){
+  try{
+    profileQueue=await(await fetch(`/api/queue?profile=${activeProfile}`)).json();
+    const badge=document.getElementById('queueBadge');
+    if(profileQueue.length>0){badge.style.display='';badge.textContent=profileQueue.length;}
+    else badge.style.display='none';
+  }catch{profileQueue=[];}
+}
+
+function updateStats(){
+  const m=library.filter(i=>i.type==='movie').length,s=library.filter(i=>i.type==='show').length;
+  document.getElementById('libraryStats').textContent=`${library.length} items · ${m} movies · ${s} shows`;
+  document.getElementById('libCount').textContent=`${library.length} items`;
+}
+
+// SSE for live updates
+function setupSSE(){
+  const es=new EventSource('/api/events');
+  es.addEventListener('library-updated',()=>{fetchLib();});
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Navigation & Rendering
+// ══════════════════════════════════════════════════════════════════════
+function nav(view,btn){
+  currentView=view;
+  document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
+  if(btn)btn.classList.add('active');
+  document.getElementById('searchInput').value='';
+  document.getElementById('topBar').style.display=(view==='settings'||view==='showDetail')?'none':'';
+  renderView();
+  document.getElementById('sidebar').classList.remove('open');
+  document.getElementById('sidebarOverlay').classList.remove('open');
+}
+
+function toggleSidebar(){document.getElementById('sidebar').classList.toggle('open');document.getElementById('sidebarOverlay').classList.toggle('open');}
+
+function renderView(){
+  const a=document.getElementById('contentArea');
+  switch(currentView){
+    case 'home':a.innerHTML=renderHome();break;
+    case 'movies':a.innerHTML=renderGrid('movie','Movies');break;
+    case 'shows':a.innerHTML=renderShowsView();break;
+    case 'continue':a.innerHTML=renderContinue();break;
+    case 'queue':a.innerHTML=renderQueue();break;
+    case 'history':renderHistory();return;
+    case 'settings':renderSettings();return;
+    case 'showDetail':a.innerHTML=renderShowDetail(currentShowName);break;
+  }
+}
+
+// ── Sorting & filtering helpers ────────────────────────────────────────
+function getFiltered(items){
+  let f=items;
+  if(watchFilter==='watched')f=f.filter(i=>i.watched);
+  if(watchFilter==='unwatched')f=f.filter(i=>!i.watched);
+  return sortItems(f);
+}
+
+function sortItems(items){
+  const s=document.getElementById('sortSelect').value;
+  const copy=[...items];
+  switch(s){
+    case 'title-asc':return copy.sort((a,b)=>a.title.localeCompare(b.title));
+    case 'title-desc':return copy.sort((a,b)=>b.title.localeCompare(a.title));
+    case 'year-desc':return copy.sort((a,b)=>(b.year||0)-(a.year||0));
+    case 'year-asc':return copy.sort((a,b)=>(a.year||9999)-(b.year||9999));
+    case 'recent':return copy.reverse();
+  }
+  return copy;
+}
+
+function setFilter(f){
+  watchFilter=f;
+  document.querySelectorAll('.filter-btn').forEach(b=>b.classList.remove('active'));
+  document.getElementById(`filter${f.charAt(0).toUpperCase()+f.slice(1)}Btn`).classList.add('active');
+  renderView();
+}
+
+// ── Home ───────────────────────────────────────────────────────────────
+function renderHome(){
+  if(library.length===0){
+    const hf=folderConfig.length>0;
+    return `<div class="empty-state"><div class="empty-icon">&#127916;</div><div class="empty-title">${hf?'No Media Found':'Welcome to Local Stream'}</div><div class="empty-text">${hf?'No video files found in your linked folders.':'Get started by linking your media folders.'}</div><div style="margin-top:18px"><button class="btn btn-primary" onclick="nav('settings',document.querySelector('[data-view=settings]'))">&#9881;&#65039; ${hf?'Manage':'Add'} Folders</button></div></div>`;
+  }
+  const cw=library.filter(m=>m.progress.percent>0&&m.progress.percent<95);
+  const movies=library.filter(m=>m.type==='movie');
+  const shows=library.filter(m=>m.type==='show');
+  const hero=cw.length>0?cw[0]:library[Math.floor(Math.random()*library.length)];
+  let h=renderHero(hero);
+  if(cw.length>0)h+=carousel('Continue Watching',cw);
+  if(library.length>0)h+=carousel('Recently Added',[...library].reverse().slice(0,18));
+  if(movies.length>0)h+=carousel('Movies',movies.slice(0,18));
+  if(shows.length>0)h+=carousel('TV Shows',shows.slice(0,18));
+  return h;
+}
+
+function renderHero(item){
+  const bg=item.posterUrl?`background-image:url('${item.posterUrl}')`:'';
+  const rt=item.progress.percent>0?'Resume':'Play';
+  return `<div class="hero"><div class="hero-bg" style="${bg}"></div><div class="hero-content"><span class="hero-tag">${item.type==='movie'?'Movie':'TV Show'}</span><h1 class="hero-title">${esc(item.title)}</h1><p class="hero-meta">${item.year?item.year+' · ':''}${item.type==='movie'?'Movie':'TV Show'}${item.progress.percent>0?' · '+item.progress.percent+'% watched':''}</p><div class="hero-actions"><button class="btn btn-primary" onclick='playMedia("${item.id}")'>&#9654; ${rt}</button><button class="btn btn-secondary" onclick='addToQueue("${item.id}")'>&#128203; Queue</button></div></div></div>`;
+}
+
+// ── Cards ──────────────────────────────────────────────────────────────
+function card(item){
+  const poster=item.posterUrl?`<img src="${item.posterUrl}" alt="${esc(item.title)}" loading="lazy">`:`<div class="card-placeholder">&#127916;</div>`;
+  const prog=item.progress.percent>0?`<div class="card-progress"><div class="card-progress-fill" style="width:${item.progress.percent}%"></div></div>`:'';
+  const watched=item.watched?`<div class="card-watched-badge">✓</div>`:'';
+  const genres=item.genres&&item.genres.length?`<div class="genre-tags">${item.genres.map(g=>`<span class="genre-tag">${esc(g)}</span>`).join('')}</div>`:'';
+  return `<div class="card" onclick='playMedia("${item.id}")'><div class="card-poster">${poster}${prog}${watched}<div class="card-actions"><button class="card-action-btn" onclick="event.stopPropagation();toggleWatched('${item.id}',${!item.watched})" title="${item.watched?'Mark unwatched':'Mark watched'}">&#128065;</button><button class="card-action-btn" onclick="event.stopPropagation();addToQueue('${item.id}')" title="Add to queue">+Q</button></div><div class="card-overlay"><div class="play-icon">&#9654;</div></div></div><div class="card-info"><div class="card-title">${esc(item.title)}</div>${item.year?`<div class="card-year">${item.year}</div>`:''}<span class="card-type ${item.type}">${item.type==='movie'?'Movie':'TV Show'}</span>${genres}</div></div>`;
+}
+
+function carousel(title,items){
+  return `<div class="section"><div class="section-header"><h2 class="section-title">${title}</h2></div><div class="carousel-wrapper"><button class="carousel-btn left" onclick="this.parentElement.querySelector('.carousel').scrollBy({left:-400,behavior:'smooth'})">&#10094;</button><div class="carousel">${items.map(card).join('')}</div><button class="carousel-btn right" onclick="this.parentElement.querySelector('.carousel').scrollBy({left:400,behavior:'smooth'})">&#10095;</button></div></div>`;
+}
+
+function renderGrid(type,label){
+  const items=getFiltered(library.filter(m=>m.type===type));
+  if(items.length===0)return `<div class="empty-state"><div class="empty-icon">${type==='movie'?'&#127916;':'&#128250;'}</div><div class="empty-title">No ${label} Found</div><div class="empty-text">Link a folder or adjust your filters.</div></div>`;
+  return `<div class="section"><div class="section-header"><h2 class="section-title">${label} (${items.length})</h2></div><div class="grid">${items.map(card).join('')}</div></div>`;
+}
+
+function renderContinue(){
+  const items=library.filter(m=>m.progress.percent>0&&m.progress.percent<95);
+  if(!items.length)return '<div class="empty-state"><div class="empty-icon">&#9654;&#65039;</div><div class="empty-title">Nothing in Progress</div><div class="empty-text">Start watching something and it will appear here.</div></div>';
+  items.sort((a,b)=>b.progress.percent-a.progress.percent);
+  return `<div class="section"><div class="section-header"><h2 class="section-title">Continue Watching</h2></div><div class="grid">${items.map(card).join('')}</div></div>`;
+}
+
+// ── Shows grouped view ─────────────────────────────────────────────────
+let currentShowName=null;
+
+function renderShowsView(){
+  const showItems=library.filter(m=>m.type==='show');
+  // Group by showName
+  const shows={};
+  for(const item of showItems){
+    const name=item.showName||item.title;
+    if(!shows[name])shows[name]={name,items:[],poster:null};
+    shows[name].items.push(item);
+    if(item.posterUrl&&!shows[name].poster)shows[name].poster=item.posterUrl;
+  }
+  const showList=Object.values(shows).sort((a,b)=>a.name.localeCompare(b.name));
+
+  if(!showList.length)return '<div class="empty-state"><div class="empty-icon">&#128250;</div><div class="empty-title">No TV Shows Found</div><div class="empty-text">Link a folder for TV Shows in settings.</div></div>';
+
+  // Show as cards that open detail pages
+  const cards=showList.map(s=>{
+    const ep=s.items.length;
+    const poster=s.poster?`<img src="${s.poster}" loading="lazy">`:`<div class="card-placeholder">&#128250;</div>`;
+    return `<div class="card" onclick="openShow('${escAttr(s.name)}')"><div class="card-poster">${poster}<div class="card-overlay"><div class="play-icon">&#9654;</div></div></div><div class="card-info"><div class="card-title">${esc(s.name)}</div><div class="card-year">${ep} episode${ep>1?'s':''}</div><span class="card-type show">TV Show</span></div></div>`;
+  });
+
+  return `<div class="section"><div class="section-header"><h2 class="section-title">TV Shows (${showList.length})</h2></div><div class="grid">${cards.join('')}</div></div>`;
+}
+
+function openShow(name){
+  currentShowName=name;
+  currentView='showDetail';
+  document.getElementById('topBar').style.display='none';
+  renderView();
+}
+
+function renderShowDetail(showName){
+  const items=library.filter(m=>m.type==='show'&&(m.showName||m.title)===showName);
+  if(!items.length)return '<div class="empty-state"><div class="empty-title">Show not found</div></div>';
+
+  items.sort((a,b)=>{
+    if(a.epInfo&&b.epInfo){
+      if(a.epInfo.season!==b.epInfo.season)return a.epInfo.season-b.epInfo.season;
+      return a.epInfo.episode-b.epInfo.episode;
+    }
+    return a.filename.localeCompare(b.filename,undefined,{numeric:true});
+  });
+
+  // Group by season
+  const seasons={};
+  for(const item of items){
+    const s=item.epInfo?item.epInfo.season:0;
+    if(!seasons[s])seasons[s]=[];
+    seasons[s].push(item);
+  }
+
+  const poster=items.find(i=>i.posterUrl);
+  const totalEps=items.length;
+  const watchedEps=items.filter(i=>i.watched).length;
+
+  let seasonsHtml=Object.entries(seasons).sort(([a],[b])=>a-b).map(([sNum,eps])=>{
+    const epRows=eps.map(ep=>{
+      const epNum=ep.epInfo?`E${String(ep.epInfo.episode).padStart(2,'0')}`:'';
+      const prog=ep.progress.percent||0;
+      return `<div class="episode-row" onclick='playMedia("${ep.id}")'><div class="episode-num">${epNum}</div><div class="episode-info"><div class="episode-title">${esc(ep.title)}</div><div class="episode-file">${esc(ep.filename)}</div></div><div class="episode-progress"><div class="episode-progress-fill" style="width:${prog}%"></div></div>${ep.watched?'<div class="episode-watched">✓</div>':''}</div>`;
+    }).join('');
+    return `<div class="season-section"><div class="season-title">${sNum==='0'?'Episodes':`Season ${sNum}`} (${eps.length} episodes)</div><div class="episode-list">${epRows}</div></div>`;
+  }).join('');
+
+  return `<div class="show-detail"><button class="btn btn-ghost" onclick="nav('shows',document.querySelector('[data-view=shows]'))" style="margin-bottom:16px">← Back to Shows</button><div class="show-detail-header">${poster?`<div class="show-detail-poster"><img src="${poster.posterUrl}"></div>`:''}<div class="show-detail-info"><h1>${esc(showName)}</h1><div class="show-detail-meta">${totalEps} episodes · ${watchedEps} watched</div><div class="show-detail-actions"><button class="btn btn-primary btn-sm" onclick='playMedia("${items[0].id}")'>&#9654; Play First</button><button class="btn btn-secondary btn-sm" onclick="markAllWatched('${escAttr(showName)}',true)">Mark All Watched</button><button class="btn btn-ghost" onclick="markAllWatched('${escAttr(showName)}',false)">Reset</button></div></div></div>${seasonsHtml}</div>`;
+}
+
+async function markAllWatched(showName,watched){
+  const items=library.filter(m=>m.type==='show'&&(m.showName||m.title)===showName);
+  for(const item of items){
+    await fetch('/api/watched',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:item.id,watched,profile:activeProfile})});
+  }
+  await fetchLib();
+}
+
+// ── Queue ──────────────────────────────────────────────────────────────
+function renderQueue(){
+  if(!profileQueue.length)return '<div class="empty-state"><div class="empty-icon">&#128203;</div><div class="empty-title">Queue is Empty</div><div class="empty-text">Add titles from the library to build your watch list.</div></div>';
+  const items=profileQueue.map((id,i)=>{
+    const item=library.find(m=>m.id===id);
+    if(!item)return '';
+    return `<div class="queue-item" onclick='playMedia("${id}")'><div class="queue-num">${i+1}</div><div class="queue-title">${esc(item.title)}</div><div class="queue-type">${item.type}</div><button class="btn-ghost" onclick="event.stopPropagation();removeFromQueue('${id}')" style="color:var(--danger)">&#10005;</button></div>`;
+  }).join('');
+  return `<div class="section"><div class="section-header"><h2 class="section-title">Up Next (${profileQueue.length})</h2><button class="btn btn-ghost" onclick="clearQueue()">Clear All</button></div>${items}</div>`;
+}
+
+async function addToQueue(id){
+  await fetch('/api/queue/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,profile:activeProfile})});
+  await fetchQueue();
+  if(currentView==='queue')renderView();
+}
+
+async function removeFromQueue(id){
+  await fetch('/api/queue/remove',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,profile:activeProfile})});
+  await fetchQueue();
+  if(currentView==='queue')renderView();
+}
+
+async function clearQueue(){
+  await fetch('/api/queue',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({queue:[],profile:activeProfile})});
+  await fetchQueue();renderView();
+}
+
+// ── History ────────────────────────────────────────────────────────────
+async function renderHistory(){
+  const res=await fetch(`/api/history?profile=${activeProfile}`);
+  const history=await res.json();
+  const a=document.getElementById('contentArea');
+  if(!history.length){a.innerHTML='<div class="empty-state"><div class="empty-icon">&#128337;</div><div class="empty-title">No Watch History</div></div>';return;}
+  const items=history.map(h=>{
+    const item=library.find(m=>m.id===h.id);
+    const time=new Date(h.timestamp).toLocaleDateString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+    return `<div class="history-item" onclick='playMedia("${h.id}")'><div class="history-time">${time}</div><div class="history-title">${esc(h.title||'Unknown')}</div></div>`;
+  }).join('');
+  a.innerHTML=`<div class="section"><div class="section-header"><h2 class="section-title">Watch History</h2></div>${items}</div>`;
+}
+
+// ── Watched toggle ─────────────────────────────────────────────────────
+async function toggleWatched(id,watched){
+  await fetch('/api/watched',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,watched,profile:activeProfile})});
+  await fetchLib();
+}
+
+// ── Random / Shuffle ───────────────────────────────────────────────────
+function playRandom(){
+  const pool=library.filter(m=>!m.watched);
+  if(!pool.length){alert('Everything is watched!');return;}
+  const pick=pool[Math.floor(Math.random()*pool.length)];
+  playMedia(pick.id);
+}
+
+// ── Search ─────────────────────────────────────────────────────────────
+function handleSearch(){
+  const q=document.getElementById('searchInput').value.toLowerCase().trim();
+  if(!q){renderView();return;}
+  const r=library.filter(m=>m.title.toLowerCase().includes(q)||(m.year&&m.year.includes(q))||(m.showName&&m.showName.toLowerCase().includes(q)));
+  const a=document.getElementById('contentArea');
+  if(!r.length)a.innerHTML='<div class="empty-state"><div class="empty-icon">&#128269;</div><div class="empty-title">No Results</div></div>';
+  else a.innerHTML=`<div class="section"><div class="section-header"><h2 class="section-title">${r.length} result${r.length>1?'s':''}</h2></div><div class="grid">${r.map(card).join('')}</div></div>`;
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Settings
+// ══════════════════════════════════════════════════════════════════════
+async function renderSettings(){
+  await Promise.all([fetchConfig(),fetchStats()]);
+  const a=document.getElementById('contentArea');
+
+  let fh='';
+  if(folderConfig.length===0)fh='<div style="text-align:center;padding:24px 0;color:var(--text-muted)">No folders linked yet.</div>';
+  else{
+    fh='<div class="folder-list">';
+    for(const f of folderConfig){
+      const ti={movie:'&#127916;',show:'&#128250;',auto:'&#128194;'};
+      const tl={movie:'Movies',show:'TV Shows',auto:'Auto'};
+      fh+=`<div class="folder-card"><div class="folder-card-icon ${f.type}">${ti[f.type]||ti.auto}</div><div class="folder-card-body"><div class="folder-card-label">${esc(f.label)}</div><div class="folder-card-path" title="${esc(f.path)}">${esc(f.path)}</div><div class="folder-card-meta"><span class="folder-meta-tag ${f.type}">${tl[f.type]||'Auto'}</span><span class="folder-meta-count">${f.fileCount||0} videos</span><span class="folder-card-status ${f.exists?'ok':'err'}">${f.exists?'✓ Connected':'✗ Not found'}</span></div></div><button class="btn btn-danger btn-sm" onclick="removeFolder('${escAttr(f.path)}')">Remove</button></div>`;
+    }
+    fh+='</div>';
+  }
+
+  // Stats
+  let sh='';
+  if(statsData){
+    const sz=formatSize(statsData.totalSize);
+    sh=`<h3 style="font-size:1rem;font-weight:700;margin:20px 0 12px">Library Stats</h3><div class="stats-grid"><div class="stat-card"><div class="stat-value">${statsData.totalFiles}</div><div class="stat-label">Total Files</div></div><div class="stat-card"><div class="stat-value">${statsData.movies}</div><div class="stat-label">Movies</div></div><div class="stat-card"><div class="stat-value">${statsData.shows}</div><div class="stat-label">Shows</div></div><div class="stat-card"><div class="stat-value">${statsData.episodes}</div><div class="stat-label">Episodes</div></div><div class="stat-card"><div class="stat-value">${sz}</div><div class="stat-label">Total Size</div></div></div>`;
+    if(Object.keys(statsData.byFolder).length){
+      sh+='<div style="margin-bottom:20px">';
+      for(const[name,info]of Object.entries(statsData.byFolder)){
+        sh+=`<div class="folder-stat"><span class="folder-stat-name">${esc(name)}</span><span class="folder-stat-info">${info.count} files · ${formatSize(info.size)}</span></div>`;
+      }
+      sh+='</div>';
+    }
+  }
+
+  a.innerHTML=`<div class="settings"><h1 class="settings-title">Media Folders</h1><p class="settings-subtitle">Link folders from anywhere on this computer. Each folder can be Movies, TV Shows, or Auto-detect.</p><div id="settingsAlert" class="alert"></div>${fh}<div class="add-folder-section"><h3>&#10010; Link a New Folder</h3><div class="form-row"><div class="form-group grow"><label class="form-label">Folder path</label><input class="form-input" type="text" id="addFolderPath" placeholder="/path/to/movies" oninput="onPathInput(this.value)"></div><div class="form-group"><label class="form-label">Type</label><select class="form-select" id="addFolderType"><option value="movie">Movies</option><option value="show">TV Shows</option><option value="auto">Auto-detect</option></select></div><div class="form-group"><label class="form-label">Label</label><input class="form-input" type="text" id="addFolderLabel" placeholder="My Movies" style="width:140px"></div></div><div id="folderBrowser"></div><div style="display:flex;gap:8px;margin-top:4px"><button class="btn btn-primary btn-sm" onclick="addFolder()">&#10010; Link Folder</button><button class="btn btn-secondary btn-sm" onclick="toggleBrowser()">&#128194; Browse</button></div></div>${sh}</div>`;
+  if(folderConfig.length===0)toggleBrowser();
+}
+
+let statsData=null;
+async function fetchStats(){try{statsData=await(await fetch('/api/stats')).json();}catch{statsData=null;}}
+
+let browserOpen=false;
+function toggleBrowser(){browserOpen=!browserOpen;if(browserOpen){browseTo(document.getElementById('addFolderPath')?.value||'~');}else{const el=document.getElementById('folderBrowser');if(el)el.innerHTML='';}}
+async function browseTo(p){
+  try{const r=await fetch(`/api/browse?path=${encodeURIComponent(p)}`);if(!r.ok)throw 0;const d=await r.json();browserPath=d.current;browserData=d;renderBrowser();}
+  catch{const el=document.getElementById('folderBrowser');if(el)el.innerHTML='<div style="padding:12px;color:var(--danger);font-size:.83rem">Cannot access directory.</div>';}
+}
+let browserPath='',browserData=null;
+function renderBrowser(){
+  if(!browserData)return;const d=browserData;let items='';
+  if(d.parent&&d.parent!==d.current)items+=`<div class="browser-item parent" onclick="browseTo('${escAttr(d.parent)}')"><span class="browser-item-icon">&#11168;</span><span class="browser-item-name">..</span></div>`;
+  for(const dir of d.dirs){const fp=d.current+(d.current.endsWith('/')?'':'/')+dir;items+=`<div class="browser-item" onclick="browseTo('${escAttr(fp)}')"><span class="browser-item-icon">&#128194;</span><span class="browser-item-name">${esc(dir)}</span></div>`;}
+  const vc=d.videoCount>0?`<span class="browser-video-count">${d.videoCount} video${d.videoCount===1?'':'s'}</span>`:'';
+  const el=document.getElementById('folderBrowser');
+  if(el)el.innerHTML=`<div class="browser-panel"><div class="browser-path-bar">&#128194; <span>${esc(d.current)}</span>${vc}</div><div class="browser-list">${items}</div><div class="browser-actions"><span class="browser-selected">Selected: ${esc(d.current)}</span><button class="btn btn-primary btn-sm" onclick="selectBrowserPath()">&#10003; Use This</button></div></div>`;
+}
+function selectBrowserPath(){if(!browserPath)return;document.getElementById('addFolderPath').value=browserPath;const l=document.getElementById('addFolderLabel');if(!l.value){const p=browserPath.replace(/\/+$/,'').split('/');l.value=p[p.length-1]||'';}browserOpen=false;const el=document.getElementById('folderBrowser');if(el)el.innerHTML='';}
+function onPathInput(v){if(browserOpen&&v.length>2){clearTimeout(window._bt);window._bt=setTimeout(()=>browseTo(v),400);}}
+async function addFolder(){
+  const p=document.getElementById('addFolderPath'),t=document.getElementById('addFolderType'),l=document.getElementById('addFolderLabel');
+  if(!p.value.trim()){showSettingsAlert('Enter a folder path.','error');return;}
+  try{const r=await fetch('/api/config/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:p.value.trim(),type:t.value,label:l.value.trim()})});const d=await r.json();if(!r.ok){showSettingsAlert(d.error||'Error','error');return;}
+  showSettingsAlert('Folder linked!','success');p.value='';l.value='';browserOpen=false;await renderSettings();fetchLib();}catch{showSettingsAlert('Server error.','error');}
+}
+async function removeFolder(fp){try{await fetch('/api/config/remove',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:fp})});await renderSettings();fetchLib();}catch{}}
+function showSettingsAlert(m,t){const e=document.getElementById('settingsAlert');if(!e)return;e.className=`alert ${t}`;e.textContent=m;setTimeout(()=>{e.className='alert';},3500);}
+
+// ══════════════════════════════════════════════════════════════════════
+// Video Player
+// ══════════════════════════════════════════════════════════════════════
+function getPlaylist(){if(!currentMedia)return[];return library.filter(m=>m.folder===currentMedia.folder&&m.type===currentMedia.type).sort((a,b)=>a.filename.localeCompare(b.filename,undefined,{numeric:true}));}
+function getCurIdx(){return getPlaylist().findIndex(m=>m.id===currentMedia.id);}
+
+function updateEpBtns(){
+  const pl=getPlaylist(),idx=getCurIdx();
+  document.getElementById('prevEpBtn').classList.toggle('disabled',idx<=0);
+  document.getElementById('nextEpBtn').classList.toggle('disabled',pl.length<=1||idx>=pl.length-1);
+  document.getElementById('epInfo').textContent=pl.length>1?`${idx+1}/${pl.length}`:'';
+}
+
+function playNextEp(){const pl=getPlaylist(),i=getCurIdx();if(i<pl.length-1){saveProg();playMedia(pl[i+1].id);}}
+function playPrevEp(){const pl=getPlaylist(),i=getCurIdx();if(i>0){saveProg();playMedia(pl[i-1].id);}}
+
+function skipBack(){V.currentTime=Math.max(0,V.currentTime-skipInterval);}
+function skipFwd(){V.currentTime=Math.min(V.duration||0,V.currentTime+skipInterval);}
+
+function setSkip(v){
+  skipInterval=v;document.getElementById('skipIntervalBtn').textContent=v+'s';
+  document.getElementById('skipBackBtn').title=`Rewind ${v}s`;document.getElementById('skipFwdBtn').title=`Forward ${v}s`;
+  document.querySelectorAll('#skipMenu .menu-option').forEach(e=>e.classList.toggle('active',parseInt(e.textContent)===v));closeMenus();
+}
+function setSpd(v){
+  playbackSpeed=v;V.playbackRate=v;document.getElementById('speedBtn').textContent=v+'x';
+  document.querySelectorAll('#speedMenu .menu-option').forEach(e=>e.classList.toggle('active',parseFloat(e.textContent)===v));closeMenus();
+}
+
+// Subtitles
+function buildSubMenu(){
+  const menu=document.getElementById('subMenu');
+  let html='<div class="menu-option active" onclick="setSub(-1)">Off</div>';
+  if(currentMedia&&currentMedia.subtitles){
+    currentMedia.subtitles.forEach((s,i)=>{
+      html+=`<div class="menu-option" onclick="setSub(${i})">${esc(s.label)}</div>`;
+    });
+  }
+  menu.innerHTML=html;
+}
+
+function setSub(idx){
+  // Remove existing tracks
+  V.querySelectorAll('track').forEach(t=>t.remove());
+  document.querySelectorAll('#subMenu .menu-option').forEach((e,i)=>e.classList.toggle('active',i===(idx+1)));
+  if(idx>=0&&currentMedia&&currentMedia.subtitles[idx]){
+    const track=document.createElement('track');
+    track.kind='subtitles';track.label=currentMedia.subtitles[idx].label;
+    track.src=currentMedia.subtitles[idx].url;track.default=true;
+    V.appendChild(track);
+    // Enable the track
+    setTimeout(()=>{if(V.textTracks[0])V.textTracks[0].mode='showing';},200);
+  }
+  closeMenus();
+}
+
+function toggleMenu(id,e){e.stopPropagation();const m=document.getElementById(id);const o=m.classList.contains('open');closeMenus();if(!o)m.classList.add('open');}
+function closeMenus(){document.querySelectorAll('.speed-menu,.skip-menu,.sub-menu').forEach(m=>m.classList.remove('open'));}
+document.addEventListener('click',e=>{if(!e.target.closest('.ctrl-btn-wrap'))closeMenus();});
+
+async function togglePiP(){try{if(document.pictureInPictureElement)await document.exitPictureInPicture();else if(V.requestPictureInPicture)await V.requestPictureInPicture();}catch{}}
+if(!document.pictureInPictureEnabled){const b=document.getElementById('pipBtn');if(b)b.style.display='none';}
+
+function playMedia(id){
+  const item=library.find(m=>m.id===id);if(!item)return;
+  currentMedia=item;
+  document.getElementById('playerTitle').textContent=item.title;
+  V.src=item.videoUrl;V.playbackRate=playbackSpeed;
+  if(item.progress.currentTime>5)V.currentTime=item.progress.currentTime;
+  modal.classList.add('active');V.play().catch(()=>{});
+  startProgressSync();showControls();
+  modal.addEventListener('mousemove',showControls);
+  updateEpBtns();buildSubMenu();
+  // Remove from queue if present
+  if(profileQueue.includes(id))removeFromQueue(id);
+}
+
+function closePlayer(){
+  saveProg();V.pause();V.removeAttribute('src');V.load();
+  V.querySelectorAll('track').forEach(t=>t.remove());
+  modal.classList.remove('active');currentMedia=null;
+  clearInterval(progressSaveInterval);modal.removeEventListener('mousemove',showControls);
+  closeMenus();fetchLib();fetchQueue();
+}
+
+function togglePlay(e){if(e&&e.target.closest('.player-controls,.player-top-bar'))return;V.paused?V.play():V.pause();}
+function toggleMute(){V.muted=!V.muted;document.getElementById('volumeBtn').innerHTML=V.muted?'&#128263;':'&#128266;';document.getElementById('volumeSlider').value=V.muted?0:V.volume;}
+function setVol(v){V.volume=v;V.muted=v==0;document.getElementById('volumeBtn').innerHTML=v==0?'&#128263;':v<.5?'&#128265;':'&#128266;';}
+function toggleFS(){document.fullscreenElement?document.exitFullscreen():modal.requestFullscreen().catch(()=>{});}
+
+// Progress bar
+let isSeeking=false;
+progContainer.addEventListener('mousedown',e=>{isSeeking=true;seek(e);});
+document.addEventListener('mousemove',e=>{if(isSeeking)seek(e);});
+document.addEventListener('mouseup',()=>{isSeeking=false;});
+progContainer.addEventListener('touchstart',e=>{isSeeking=true;seek(e.touches[0]);},{passive:true});
+document.addEventListener('touchmove',e=>{if(isSeeking)seek(e.touches[0]);},{passive:true});
+document.addEventListener('touchend',()=>{isSeeking=false;});
+function seek(e){const r=progContainer.getBoundingClientRect();const p=Math.max(0,Math.min(1,(e.clientX-r.left)/r.width));if(V.duration)V.currentTime=p*V.duration;}
+
+V.addEventListener('timeupdate',()=>{if(!V.duration||isSeeking)return;const p=(V.currentTime/V.duration)*100;document.getElementById('progressFilled').style.width=p+'%';document.getElementById('timeDisplay').textContent=fmt(V.currentTime)+' / '+fmt(V.duration);});
+V.addEventListener('play',()=>{document.getElementById('playPauseBtn').innerHTML='&#10074;&#10074;';});
+V.addEventListener('pause',()=>{document.getElementById('playPauseBtn').innerHTML='&#9654;&#65039;';});
+V.addEventListener('ended',()=>{const pl=getPlaylist(),i=getCurIdx();if(pl.length>1&&i<pl.length-1){saveProg();playMedia(pl[i+1].id);}});
+
+document.addEventListener('keydown',e=>{
+  if(!modal.classList.contains('active'))return;
+  switch(e.key){
+    case ' ':case 'k':e.preventDefault();togglePlay();break;
+    case 'ArrowLeft':e.preventDefault();skipBack();break;case 'ArrowRight':e.preventDefault();skipFwd();break;
+    case 'ArrowUp':e.preventDefault();setVol(Math.min(1,V.volume+.1));document.getElementById('volumeSlider').value=V.volume;break;
+    case 'ArrowDown':e.preventDefault();setVol(Math.max(0,V.volume-.1));document.getElementById('volumeSlider').value=V.volume;break;
+    case 'f':toggleFS();break;case 'm':toggleMute();break;case 'p':togglePiP();break;
+    case 'n':case 'N':e.preventDefault();playNextEp();break;case 'b':case 'B':e.preventDefault();playPrevEp();break;
+    case '>':e.preventDefault();setSpd(Math.min(2,playbackSpeed+.25));break;case '<':e.preventDefault();setSpd(Math.max(.25,playbackSpeed-.25));break;
+    case 'c':setSub(V.textTracks.length>0&&V.textTracks[0].mode==='showing'?-1:0);break;
+    case 'Escape':closePlayer();break;
+  }
+});
+
+function showControls(){modal.classList.add('controls-visible');clearTimeout(controlsTimeout);controlsTimeout=setTimeout(()=>{if(!V.paused)modal.classList.remove('controls-visible');},3000);}
+
+function startProgressSync(){clearInterval(progressSaveInterval);progressSaveInterval=setInterval(saveProg,5000);}
+async function saveProg(){
+  if(!currentMedia||!V.duration)return;
+  try{await fetch('/api/progress',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:currentMedia.id,currentTime:V.currentTime,duration:V.duration,profile:activeProfile})});
+  currentMedia.progress={currentTime:V.currentTime,duration:V.duration,percent:Math.round((V.currentTime/V.duration)*100)};}catch{}
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Helpers
+// ══════════════════════════════════════════════════════════════════════
+function fmt(s){if(!s||isNaN(s))return '0:00';const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sec=Math.floor(s%60);return h>0?`${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`:`${m}:${String(sec).padStart(2,'0')}`;}
+function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML;}
+function escAttr(s){return s.replace(/\\/g,'\\\\').replace(/'/g,"\\'");}
+function formatSize(b){if(b<1024)return b+' B';if(b<1048576)return(b/1024).toFixed(1)+' KB';if(b<1073741824)return(b/1048576).toFixed(1)+' MB';return(b/1073741824).toFixed(1)+' GB';}
+
+// ══════════════════════════════════════════════════════════════════════
+// Init
+// ══════════════════════════════════════════════════════════════════════
+setSkip(10);
+setFilter('all');
+fetchConfig().then(()=>showProfileScreen());
+</script>
+</body>
+</html>
