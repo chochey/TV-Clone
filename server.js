@@ -1065,6 +1065,7 @@ function waitForTranscodeIdle() {
 }
 
 const spriteJobs = {}; // id -> { done, thumbId, totalSheets, duration }
+const spriteQueue = { total: 0, completed: 0, current: '', running: false };
 
 function getThumbId(filePath) {
   return crypto.createHash('md5').update(filePath).digest('hex').slice(0, 16);
@@ -1202,28 +1203,138 @@ async function startSpriteGen(id, filePath) {
 // Background: generate sprites for all movies in library
 function queueAllSpriteGen() {
   const lib = scanLibrary();
-  let queued = 0;
   const pending = [];
+  let alreadyDone = 0;
   for (const item of lib) {
     const filePath = fileIndex[item.id];
     if (!filePath) continue;
     const thumbId = getThumbId(filePath);
-    // Quick check: does at least the first sheet exist?
-    if (fs.existsSync(spriteFilePath(thumbId, 0))) continue;
+    if (fs.existsSync(spriteFilePath(thumbId, 0))) { alreadyDone++; continue; }
     pending.push({ id: item.id, filePath, title: item.title });
-    queued++;
   }
-  if (queued === 0) { console.log('[SPRITE] All movies have sprites'); return; }
-  console.log(`[SPRITE] Queuing ${queued} movies for sprite generation`);
-  // Process sequentially to avoid overloading the system
+  spriteQueue.total = alreadyDone + pending.length;
+  spriteQueue.completed = alreadyDone;
+  if (pending.length === 0) {
+    spriteQueue.running = false;
+    spriteQueue.current = '';
+    console.log('[SPRITE] All movies have sprites');
+    return;
+  }
+  spriteQueue.running = true;
+  console.log(`[SPRITE] Queuing ${pending.length} movies (${alreadyDone} already done)`);
   (async () => {
     for (const { id, filePath, title } of pending) {
+      spriteQueue.current = title;
       console.log(`[SPRITE] Processing: ${title}`);
       await startSpriteGen(id, filePath);
+      spriteQueue.completed++;
     }
+    spriteQueue.running = false;
+    spriteQueue.current = '';
     console.log('[SPRITE] All queued movies processed');
   })();
 }
+
+// Sprite progress API — counts actual files on disk for accuracy
+app.get('/api/sprites/progress', (_req, res) => {
+  const lib = scanLibrary();
+  let total = 0, completed = 0;
+  for (const item of lib) {
+    const filePath = fileIndex[item.id];
+    if (!filePath) continue;
+    total++;
+    const thumbId = getThumbId(filePath);
+    if (fs.existsSync(spriteFilePath(thumbId, 0))) completed++;
+  }
+  res.json({
+    total,
+    completed,
+    current: spriteQueue.current,
+    running: spriteQueue.running,
+    percent: total > 0 ? Math.round((completed / total) * 100) : 100,
+  });
+});
+
+// System stats API
+let _prevCpu = null;
+app.get('/api/system/stats', (_req, res) => {
+  const cpus = os.cpus();
+  const cpuModel = cpus[0]?.model || 'Unknown';
+  const cpuCores = cpus.length;
+
+  // CPU usage % (compare with previous snapshot)
+  const cpuTotals = cpus.reduce((acc, c) => {
+    acc.user += c.times.user; acc.nice += c.times.nice;
+    acc.sys += c.times.sys; acc.idle += c.times.idle;
+    acc.irq += c.times.irq;
+    return acc;
+  }, { user: 0, nice: 0, sys: 0, idle: 0, irq: 0 });
+  const total = cpuTotals.user + cpuTotals.nice + cpuTotals.sys + cpuTotals.idle + cpuTotals.irq;
+  const idle = cpuTotals.idle;
+  let cpuPercent = 0;
+  if (_prevCpu) {
+    const dTotal = total - _prevCpu.total;
+    const dIdle = idle - _prevCpu.idle;
+    cpuPercent = dTotal > 0 ? Math.round(((dTotal - dIdle) / dTotal) * 100) : 0;
+  }
+  _prevCpu = { total, idle };
+
+  // Memory
+  const memTotal = os.totalmem();
+  const memFree = os.freemem();
+  const memUsed = memTotal - memFree;
+
+  // Disk
+  let disks = [];
+  try {
+    let dfOut;
+    try {
+      dfOut = execFileSync('df', ['-B1', '--output=source,size,used,avail,pcent,target'], { timeout: 5000, encoding: 'utf-8' });
+    } catch (e) {
+      dfOut = e.stdout || ''; // df may exit 1 due to stale mounts but still produce output
+    }
+    const lines = dfOut.trim().split('\n').slice(1);
+    for (const line of lines) {
+      const parts = line.trim().split(/\s+/);
+      if (parts.length >= 6 && /^\/(mnt|media|$)/.test(parts[5])) {
+        disks.push({
+          mount: parts.slice(5).join(' '), source: parts[0],
+          total: parseInt(parts[1]) || 0, used: parseInt(parts[2]) || 0,
+          available: parseInt(parts[3]) || 0, percent: parseInt(parts[4]) || 0,
+        });
+      }
+    }
+  } catch {}
+
+  // GPU
+  let gpu = null;
+  try {
+    const lspci = execFileSync('lspci', [], { timeout: 5000, encoding: 'utf-8' });
+    const vga = lspci.split('\n').find(l => /vga/i.test(l));
+    const gpuName = vga ? vga.replace(/^.*:\s*/, '').trim() : null;
+    let freq = null, maxFreq = null;
+    try { freq = parseInt(fs.readFileSync('/sys/class/drm/card1/gt_cur_freq_mhz', 'utf-8').trim()); } catch {}
+    try { maxFreq = parseInt(fs.readFileSync('/sys/class/drm/card1/gt_max_freq_mhz', 'utf-8').trim()); } catch {}
+    if (!freq) try { freq = parseInt(fs.readFileSync('/sys/class/drm/card0/gt_cur_freq_mhz', 'utf-8').trim()); } catch {}
+    if (!maxFreq) try { maxFreq = parseInt(fs.readFileSync('/sys/class/drm/card0/gt_max_freq_mhz', 'utf-8').trim()); } catch {}
+    if (gpuName) gpu = { name: gpuName, freqMhz: freq, maxFreqMhz: maxFreq };
+  } catch {}
+
+  // Uptime
+  const uptimeSec = os.uptime();
+
+  // Active transcodes
+  const activeTranscodes = Object.keys(transcodeSessions).length;
+
+  res.json({
+    cpu: { model: cpuModel, cores: cpuCores, percent: cpuPercent, loadAvg: os.loadavg() },
+    memory: { total: memTotal, used: memUsed, free: memFree, percent: Math.round((memUsed / memTotal) * 100) },
+    disks,
+    gpu,
+    uptime: uptimeSec,
+    activeTranscodes,
+  });
+});
 
 // Trigger sprite generation + return sprite metadata
 app.post('/api/sprites/:id/generate', (req, res) => {

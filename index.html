@@ -215,6 +215,25 @@ select,input{font-family:inherit}
 .stat-value{font-size:1.5rem;font-weight:800;color:var(--accent)}
 .stat-label{font-size:.72rem;color:var(--text-secondary);margin-top:4px;text-transform:uppercase;letter-spacing:.04em}
 .folder-stat{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.06);font-size:.85rem}
+.sprite-progress{background:var(--bg-card);border-radius:10px;padding:16px 20px;margin-bottom:20px}
+.sprite-progress-title{font-size:.9rem;font-weight:700;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between}
+.sprite-progress-bar{height:8px;background:rgba(255,255,255,.1);border-radius:4px;overflow:hidden;margin-bottom:8px}
+.sprite-progress-fill{height:100%;background:var(--accent);border-radius:4px;transition:width .5s ease}
+.sprite-progress-info{font-size:.78rem;color:var(--text-secondary);display:flex;justify-content:space-between}
+.sprite-progress-current{font-size:.78rem;color:var(--text-muted);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sprite-badge{font-size:.7rem;padding:2px 8px;border-radius:10px;font-weight:600}
+.sprite-badge.running{background:rgba(0,164,220,.15);color:var(--accent)}
+.sprite-badge.done{background:rgba(76,175,80,.15);color:#4caf50}
+.sys-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:20px}
+.sys-card{background:var(--bg-card);border-radius:10px;padding:16px}
+.sys-card-title{font-size:.75rem;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;font-weight:600}
+.sys-card-value{font-size:1.3rem;font-weight:800;color:var(--text-primary)}
+.sys-card-sub{font-size:.75rem;color:var(--text-muted);margin-top:4px}
+.sys-bar{height:6px;background:rgba(255,255,255,.1);border-radius:3px;overflow:hidden;margin-top:8px}
+.sys-bar-fill{height:100%;border-radius:3px;transition:width .5s ease}
+.sys-bar-fill.ok{background:var(--accent)}
+.sys-bar-fill.warn{background:#ffa726}
+.sys-bar-fill.crit{background:#ef5350}
 .folder-stat:last-child{border-bottom:none}
 .folder-stat-name{font-weight:600}
 .folder-stat-info{color:var(--text-secondary)}
@@ -812,8 +831,37 @@ function handleSearch(){
 // ══════════════════════════════════════════════════════════════════════
 // Settings
 // ══════════════════════════════════════════════════════════════════════
+let spriteProgress=null;
+async function fetchSpriteProgress(){try{spriteProgress=await(await fetch('/api/sprites/progress')).json();}catch{spriteProgress=null;}}
+let sysStats=null;
+async function fetchSysStats(){try{sysStats=await(await fetch('/api/system/stats')).json();}catch{sysStats=null;}}
+function fmtBytes(b){if(b>=1e12)return (b/1e12).toFixed(1)+'TB';if(b>=1e9)return (b/1e9).toFixed(1)+'GB';if(b>=1e6)return (b/1e6).toFixed(0)+'MB';return (b/1e3).toFixed(0)+'KB';}
+function fmtUptime(s){const d=Math.floor(s/86400),h=Math.floor((s%86400)/3600),m=Math.floor((s%3600)/60);return (d?d+'d ':'')+(h?h+'h ':'')+(m?m+'m':'');}
+function barClass(p){return p>=90?'crit':p>=70?'warn':'ok';}
+function renderSysStats(){
+  if(!sysStats)return '';
+  const s=sysStats;
+  let html='<h3 style="font-size:1rem;font-weight:700;margin:20px 0 12px">System</h3><div class="sys-stats" id="sysStatsGrid">';
+  // CPU
+  html+=`<div class="sys-card"><div class="sys-card-title">CPU</div><div class="sys-card-value">${s.cpu.percent}%</div><div class="sys-bar"><div class="sys-bar-fill ${barClass(s.cpu.percent)}" style="width:${s.cpu.percent}%"></div></div><div class="sys-card-sub">${esc(s.cpu.model.replace(/\(R\)|\(TM\)/g,''))}<br>${s.cpu.cores} cores · Load: ${s.cpu.loadAvg[0].toFixed(1)}</div></div>`;
+  // Memory
+  html+=`<div class="sys-card"><div class="sys-card-title">Memory</div><div class="sys-card-value">${fmtBytes(s.memory.used)} / ${fmtBytes(s.memory.total)}</div><div class="sys-bar"><div class="sys-bar-fill ${barClass(s.memory.percent)}" style="width:${s.memory.percent}%"></div></div><div class="sys-card-sub">${s.memory.percent}% used · ${fmtBytes(s.memory.free)} free</div></div>`;
+  // GPU
+  if(s.gpu){
+    const gpuPct=s.gpu.freqMhz&&s.gpu.maxFreqMhz?Math.round((s.gpu.freqMhz/s.gpu.maxFreqMhz)*100):0;
+    html+=`<div class="sys-card"><div class="sys-card-title">GPU</div><div class="sys-card-value">${s.gpu.freqMhz||'--'} MHz</div><div class="sys-bar"><div class="sys-bar-fill ${barClass(gpuPct)}" style="width:${gpuPct}%"></div></div><div class="sys-card-sub">${esc(s.gpu.name.replace(/.*\]\s*/,''))}<br>Max: ${s.gpu.maxFreqMhz} MHz</div></div>`;
+  }
+  // Uptime + Transcodes
+  html+=`<div class="sys-card"><div class="sys-card-title">Server</div><div class="sys-card-value">${fmtUptime(s.uptime)}</div><div class="sys-card-sub">Uptime<br>Active transcodes: ${s.activeTranscodes}</div></div>`;
+  // Disks
+  for(const d of s.disks){
+    html+=`<div class="sys-card"><div class="sys-card-title">${esc(d.mount)}</div><div class="sys-card-value">${fmtBytes(d.used)} / ${fmtBytes(d.total)}</div><div class="sys-bar"><div class="sys-bar-fill ${barClass(d.percent)}" style="width:${d.percent}%"></div></div><div class="sys-card-sub">${d.percent}% used · ${fmtBytes(d.available)} free</div></div>`;
+  }
+  html+='</div>';
+  return html;
+}
 async function renderSettings(){
-  await Promise.all([fetchConfig(),fetchStats()]);
+  await Promise.all([fetchConfig(),fetchStats(),fetchSpriteProgress(),fetchSysStats()]);
   const a=document.getElementById('contentArea');
 
   let fh='';
@@ -842,12 +890,50 @@ async function renderSettings(){
     }
   }
 
-  a.innerHTML=`<div class="settings"><h1 class="settings-title">Media Folders</h1><p class="settings-subtitle">Link folders from anywhere on this computer. Each folder can be Movies, TV Shows, or Auto-detect.</p><div id="settingsAlert" class="alert"></div>${fh}<div class="add-folder-section"><h3>&#10010; Link a New Folder</h3><div class="form-row"><div class="form-group grow"><label class="form-label">Folder path</label><input class="form-input" type="text" id="addFolderPath" placeholder="/path/to/movies" oninput="onPathInput(this.value)"></div><div class="form-group"><label class="form-label">Type</label><select class="form-select" id="addFolderType"><option value="movie">Movies</option><option value="show">TV Shows</option><option value="auto">Auto-detect</option></select></div><div class="form-group"><label class="form-label">Label</label><input class="form-input" type="text" id="addFolderLabel" placeholder="My Movies" style="width:140px"></div></div><div id="folderBrowser"></div><div style="display:flex;gap:8px;margin-top:4px"><button class="btn btn-primary btn-sm" onclick="addFolder()">&#10010; Link Folder</button><button class="btn btn-secondary btn-sm" onclick="toggleBrowser()">&#128194; Browse</button></div></div>${sh}</div>`;
+  // Sprite progress
+  let sph='';
+  if(spriteProgress){
+    const sp=spriteProgress;
+    const badge=sp.running?'<span class="sprite-badge running">Generating</span>':'<span class="sprite-badge done">Complete</span>';
+    sph=`<h3 style="font-size:1rem;font-weight:700;margin:20px 0 12px">Thumbnail Sprites</h3><div class="sprite-progress"><div class="sprite-progress-title"><span>Progress</span>${badge}</div><div class="sprite-progress-bar"><div class="sprite-progress-fill" style="width:${sp.percent}%"></div></div><div class="sprite-progress-info"><span>${sp.completed} / ${sp.total} media</span><span>${sp.percent}%</span></div>${sp.running&&sp.current?`<div class="sprite-progress-current">Currently: ${esc(sp.current)}</div>`:''}</div>`;
+  }
+
+  const sysh=renderSysStats();
+
+  a.innerHTML=`<div class="settings"><h1 class="settings-title">Media Folders</h1><p class="settings-subtitle">Link folders from anywhere on this computer. Each folder can be Movies, TV Shows, or Auto-detect.</p><div id="settingsAlert" class="alert"></div>${fh}<div class="add-folder-section"><h3>&#10010; Link a New Folder</h3><div class="form-row"><div class="form-group grow"><label class="form-label">Folder path</label><input class="form-input" type="text" id="addFolderPath" placeholder="/path/to/movies" oninput="onPathInput(this.value)"></div><div class="form-group"><label class="form-label">Type</label><select class="form-select" id="addFolderType"><option value="movie">Movies</option><option value="show">TV Shows</option><option value="auto">Auto-detect</option></select></div><div class="form-group"><label class="form-label">Label</label><input class="form-input" type="text" id="addFolderLabel" placeholder="My Movies" style="width:140px"></div></div><div id="folderBrowser"></div><div style="display:flex;gap:8px;margin-top:4px"><button class="btn btn-primary btn-sm" onclick="addFolder()">&#10010; Link Folder</button><button class="btn btn-secondary btn-sm" onclick="toggleBrowser()">&#128194; Browse</button></div></div>${sh}${sph}${sysh}</div>`;
+  // Auto-refresh sprite progress + system stats
+  startSettingsRefresh();
   if(folderConfig.length===0)toggleBrowser();
 }
 
 let statsData=null;
 async function fetchStats(){try{statsData=await(await fetch('/api/stats')).json();}catch{statsData=null;}}
+
+function updateSpriteProgress(){
+  const el=document.querySelector('.sprite-progress');
+  if(!el||!spriteProgress)return;
+  const sp=spriteProgress;
+  const badge=sp.running?'<span class="sprite-badge running">Generating</span>':'<span class="sprite-badge done">Complete</span>';
+  el.innerHTML=`<div class="sprite-progress-title"><span>Progress</span>${badge}</div><div class="sprite-progress-bar"><div class="sprite-progress-fill" style="width:${sp.percent}%"></div></div><div class="sprite-progress-info"><span>${sp.completed} / ${sp.total} media</span><span>${sp.percent}%</span></div>${sp.running&&sp.current?`<div class="sprite-progress-current">Currently: ${esc(sp.current)}</div>`:''}`;
+}
+function updateSysStats(){
+  const el=document.getElementById('sysStatsGrid');
+  if(!el||!sysStats)return;
+  // Re-render just the grid content
+  const tmp=document.createElement('div');
+  tmp.innerHTML=renderSysStats();
+  const newGrid=tmp.querySelector('#sysStatsGrid');
+  if(newGrid)el.innerHTML=newGrid.innerHTML;
+}
+function startSettingsRefresh(){
+  clearInterval(window._settingsInterval);
+  window._settingsInterval=setInterval(async()=>{
+    if(currentView!=='settings'){clearInterval(window._settingsInterval);return;}
+    await Promise.all([fetchSpriteProgress(),fetchSysStats()]);
+    updateSpriteProgress();
+    updateSysStats();
+  },3000);
+}
 
 let browserOpen=false;
 function toggleBrowser(){browserOpen=!browserOpen;if(browserOpen){browseTo(document.getElementById('addFolderPath')?.value||'~');}else{const el=document.getElementById('folderBrowser');if(el)el.innerHTML='';}}
