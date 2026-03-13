@@ -399,8 +399,15 @@ function httpGet(url) {
 function normalizeTitle(title) {
   return title
     .replace(/\b(REMASTERED|UNRATED|EXTENDED|DIRECTORS\s*CUT|THEATRICAL|IMAX|PROPER)\b/gi, '')
-    .replace(/\s*-\s*$/, '')  // trailing dash
+    .replace(/\b\d{3,4}p\b/gi, '')             // 1080p, 720p etc
+    .replace(/\b(brrip|bluray|x264|yify|gaz|webrip|hdtv)\b/gi, '') // release tags
+    .replace(/\[.*?\]/g, '')                     // [tags]
+    .replace(/\bm\.c\b/gi, 'M.C.')             // M.C. -> M.C.
+    .replace(/\bu n c l e\b/gi, 'U.N.C.L.E.')  // U.N.C.L.E.
+    .replace(/\bsg-1\b/gi, 'SG-1')             // SG-1
+    .replace(/- /g, ': ')                        // dashes to colons (subtitle separators)
     .replace(/\s+/g, ' ')
+    .replace(/\s*-\s*$/, '')
     .trim();
 }
 
@@ -420,6 +427,20 @@ async function fetchOmdbData(title, year, type) {
     const raw = await httpGet(url);
     const data = JSON.parse(raw.toString('utf-8'));
 
+    if (data.Response === 'False' && year) {
+      // Retry without year — year might be wrong or part of the title
+      const params2 = new URLSearchParams({ apikey: OMDB_API_KEY, t: title, plot: 'short' });
+      if (type === 'show') params2.set('type', 'series');
+      else if (type === 'movie') params2.set('type', 'movie');
+      try {
+        const raw2 = await httpGet(`${OMDB_BASE_URL}?${params2.toString()}`);
+        const data2 = JSON.parse(raw2.toString('utf-8'));
+        if (data2.Response !== 'False') {
+          Object.assign(data, data2);
+          data.Response = 'True';
+        }
+      } catch {}
+    }
     if (data.Response === 'False') {
       // Cache the miss so we don't re-fetch
       omdbCache[key] = { _miss: true, _fetchedAt: Date.now() };
@@ -508,14 +529,11 @@ async function backgroundOmdbFetch() {
   bgOmdbRunning = true;
   const lib = libraryCache || [];
   let fetchCount = 0;
-  const maxFetches = 500;
 
   // Deduplicate: for shows, only fetch once per showName
   const seen = new Set();
 
   for (const item of lib) {
-    if (fetchCount >= maxFetches) break;
-
     let searchTitle, searchYear, itemType;
     if (item.type === 'show' && item.showName) {
       searchYear = parseYearFromName(item.showName);
@@ -1826,4 +1844,14 @@ app.listen(PORT, '0.0.0.0', () => {
 
   // Start background sprite generation for all movies
   setTimeout(() => queueAllSpriteGen(), 5000);
+
+  // Start background OMDB poster fetch for all media
+  setTimeout(() => {
+    console.log('[OMDB] Starting background poster fetch...');
+    backgroundOmdbFetch().then(() => {
+      invalidateLibrary();
+      scanLibrary();
+      console.log('[OMDB] Background fetch complete, library refreshed');
+    });
+  }, 8000);
 });
