@@ -8,10 +8,10 @@ const https = require('https');
 const { spawn, execFileSync } = require('child_process');
 
 const app = express();
-const PORT = 3000;
+const PORT = parseInt(process.env.PORT, 10) || 3000;
 const CONFIG_FILE = path.join(__dirname, 'config.json');
 const DATA_DIR = path.join(__dirname, 'data');
-const TRANSCODE_DIR = path.join(__dirname, 'transcode_tmp');
+const TRANSCODE_DIR = path.join(__dirname, PORT === 3000 ? 'transcode_tmp' : `transcode_tmp_${PORT}`);
 const PROBE_CACHE_FILE = path.join(DATA_DIR, 'probe_cache.json');
 const OMDB_CACHE_FILE = path.join(DATA_DIR, 'omdb_cache.json');
 const OMDB_POSTER_DIR = path.join(DATA_DIR, 'posters');
@@ -575,7 +575,11 @@ function walkDir(dir, collected) {
 
 let libraryCache = null;
 
-function invalidateLibrary() { libraryCache = null; }
+function invalidateLibrary() {
+  libraryCache = null;
+  // Queue sprite generation for any new items after rescan
+  setTimeout(() => { try { queueAllSpriteGen(); } catch {} }, 3000);
+}
 
 function scanLibrary() {
   if (libraryCache) return libraryCache;
@@ -1038,6 +1042,238 @@ app.get('/poster/:id', (req, res) => {
   res.sendFile(p);
 });
 
+// ── Thumbnail preview for seek bar ───────────────────────────────────
+const THUMB_DIR = path.join(DATA_DIR, 'thumbnails');
+if (!fs.existsSync(THUMB_DIR)) fs.mkdirSync(THUMB_DIR, { recursive: true });
+
+// YouTube-style sprite sheet thumbnails
+// Each sprite = 5x5 grid of 160x90 thumbnails, one frame every 10s = 250s per sheet
+const SPRITE_COLS = 5, SPRITE_ROWS = 5, SPRITE_INTERVAL = 10;
+const SPRITE_W = 160, SPRITE_H = 90;
+const FRAMES_PER_SPRITE = SPRITE_COLS * SPRITE_ROWS; // 25
+const PARALLEL_EXTRACTS = 4; // concurrent ffmpeg frame extractions
+
+// Pause sprite generation when transcoding is active to prioritize playback
+function waitForTranscodeIdle() {
+  return new Promise((resolve) => {
+    const check = () => {
+      if (Object.keys(transcodeSessions).length === 0) return resolve();
+      setTimeout(check, 2000);
+    };
+    check();
+  });
+}
+
+const spriteJobs = {}; // id -> { done, thumbId, totalSheets, duration }
+
+function getThumbId(filePath) {
+  return crypto.createHash('md5').update(filePath).digest('hex').slice(0, 16);
+}
+
+function spriteFilePath(thumbId, sheetNum) {
+  return path.join(THUMB_DIR, `${thumbId}_sprite_${sheetNum}.jpg`);
+}
+
+// Extract a single frame at timestamp using fast -ss input seeking (low priority)
+function extractFrame(filePath, timestamp, outFile) {
+  return new Promise((resolve) => {
+    const proc = spawn('nice', ['-n', '15', 'ffmpeg',
+      '-hide_banner', '-loglevel', 'error',
+      '-ss', String(timestamp), '-i', filePath,
+      '-vframes', '1', '-vf', `scale=${SPRITE_W}:${SPRITE_H}:force_original_aspect_ratio=decrease,pad=${SPRITE_W}:${SPRITE_H}:(ow-iw)/2:(oh-ih)/2`,
+      '-q:v', '5', '-y', outFile,
+    ]);
+    proc.on('close', (code) => resolve(code === 0));
+    proc.on('error', () => resolve(false));
+  });
+}
+
+// Stitch individual frame files into a sprite sheet using ffmpeg xstack
+function stitchSprite(frameFiles, outFile, cols, rows) {
+  return new Promise((resolve) => {
+    const inputs = [];
+    for (const f of frameFiles) { inputs.push('-i', f); }
+    const filterInputs = frameFiles.map((_, i) => `[${i}:v]`).join('');
+    const proc = spawn('ffmpeg', [
+      '-hide_banner', '-loglevel', 'error',
+      ...inputs,
+      '-filter_complex', `${filterInputs}xstack=inputs=${frameFiles.length}:layout=${generateXstackLayout(frameFiles.length, cols, rows)}`,
+      '-q:v', '5', '-update', '1', '-y', outFile,
+    ]);
+    proc.on('close', (code) => resolve(code === 0));
+    proc.on('error', () => resolve(false));
+  });
+}
+
+function generateXstackLayout(count, cols, rows) {
+  const parts = [];
+  for (let i = 0; i < count; i++) {
+    const col = i % cols;
+    const row = Math.floor(i / cols);
+    parts.push(`${col * SPRITE_W}_${row * SPRITE_H}`);
+  }
+  return parts.join('|');
+}
+
+async function startSpriteGen(id, filePath) {
+  const thumbId = getThumbId(filePath);
+  if (spriteJobs[id] && spriteJobs[id].thumbId === thumbId) return spriteJobs[id];
+
+  const duration = probeDuration(filePath);
+  if (duration <= 0) return null;
+
+  const totalFrames = Math.ceil(duration / SPRITE_INTERVAL);
+  const totalSheets = Math.ceil(totalFrames / FRAMES_PER_SPRITE);
+
+  // Check if all sprites already exist on disk
+  let allExist = true;
+  for (let s = 0; s < totalSheets; s++) {
+    if (!fs.existsSync(spriteFilePath(thumbId, s))) { allExist = false; break; }
+  }
+  if (allExist) {
+    spriteJobs[id] = { done: true, thumbId, totalSheets, duration };
+    return spriteJobs[id];
+  }
+
+  // Mark as in-progress
+  spriteJobs[id] = { done: false, thumbId, totalSheets, duration };
+  console.log(`[SPRITE] Starting for ${path.basename(filePath)} (${totalFrames} frames, ${totalSheets} sheets)`);
+
+  const tmpDir = path.join(THUMB_DIR, `_tmp_${thumbId}`);
+  if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
+
+  // Extract all frames in parallel batches
+  const allTimestamps = [];
+  for (let i = 0; i < totalFrames; i++) allTimestamps.push(i * SPRITE_INTERVAL);
+
+  for (let batch = 0; batch < allTimestamps.length; batch += PARALLEL_EXTRACTS) {
+    // Pause if someone is actively watching — don't steal CPU from transcoding
+    await waitForTranscodeIdle();
+
+    const chunk = allTimestamps.slice(batch, batch + PARALLEL_EXTRACTS);
+    await Promise.all(chunk.map((t, idx) => {
+      const frameIdx = batch + idx;
+      const frameFile = path.join(tmpDir, `frame_${String(frameIdx).padStart(5, '0')}.jpg`);
+      if (fs.existsSync(frameFile)) return Promise.resolve(true); // skip existing
+      return extractFrame(filePath, t, frameFile);
+    }));
+
+    // Check if we completed a sprite sheet worth of frames — stitch it
+    const currentFrameCount = batch + chunk.length;
+    const completedSheets = Math.floor(currentFrameCount / FRAMES_PER_SPRITE);
+    for (let s = 0; s < completedSheets; s++) {
+      const spriteOut = spriteFilePath(thumbId, s);
+      if (fs.existsSync(spriteOut)) continue;
+      const startFrame = s * FRAMES_PER_SPRITE;
+      const frameFiles = [];
+      for (let f = startFrame; f < startFrame + FRAMES_PER_SPRITE && f < totalFrames; f++) {
+        frameFiles.push(path.join(tmpDir, `frame_${String(f).padStart(5, '0')}.jpg`));
+      }
+      if (frameFiles.every(f => fs.existsSync(f))) {
+        await stitchSprite(frameFiles, spriteOut, SPRITE_COLS, SPRITE_ROWS);
+        console.log(`[SPRITE] Sheet ${s}/${totalSheets - 1} done for ${path.basename(filePath)}`);
+      }
+    }
+  }
+
+  // Stitch any remaining (last partial sheet)
+  for (let s = 0; s < totalSheets; s++) {
+    const spriteOut = spriteFilePath(thumbId, s);
+    if (fs.existsSync(spriteOut)) continue;
+    const startFrame = s * FRAMES_PER_SPRITE;
+    const frameFiles = [];
+    for (let f = startFrame; f < startFrame + FRAMES_PER_SPRITE && f < totalFrames; f++) {
+      const ff = path.join(tmpDir, `frame_${String(f).padStart(5, '0')}.jpg`);
+      if (fs.existsSync(ff)) frameFiles.push(ff);
+    }
+    if (frameFiles.length > 0) {
+      await stitchSprite(frameFiles, spriteOut, SPRITE_COLS, SPRITE_ROWS);
+      console.log(`[SPRITE] Sheet ${s}/${totalSheets - 1} done for ${path.basename(filePath)}`);
+    }
+  }
+
+  // Clean up temp frames
+  try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+  if (spriteJobs[id]) spriteJobs[id].done = true;
+  console.log(`[SPRITE] Complete for ${path.basename(filePath)}: ${totalSheets} sheets`);
+  return spriteJobs[id];
+}
+
+// Background: generate sprites for all movies in library
+function queueAllSpriteGen() {
+  const lib = scanLibrary();
+  let queued = 0;
+  const pending = [];
+  for (const item of lib) {
+    const filePath = fileIndex[item.id];
+    if (!filePath) continue;
+    const thumbId = getThumbId(filePath);
+    // Quick check: does at least the first sheet exist?
+    if (fs.existsSync(spriteFilePath(thumbId, 0))) continue;
+    pending.push({ id: item.id, filePath, title: item.title });
+    queued++;
+  }
+  if (queued === 0) { console.log('[SPRITE] All movies have sprites'); return; }
+  console.log(`[SPRITE] Queuing ${queued} movies for sprite generation`);
+  // Process sequentially to avoid overloading the system
+  (async () => {
+    for (const { id, filePath, title } of pending) {
+      console.log(`[SPRITE] Processing: ${title}`);
+      await startSpriteGen(id, filePath);
+    }
+    console.log('[SPRITE] All queued movies processed');
+  })();
+}
+
+// Trigger sprite generation + return sprite metadata
+app.post('/api/sprites/:id/generate', (req, res) => {
+  if (Object.keys(fileIndex).length === 0) scanLibrary();
+  const filePath = fileIndex[req.params.id];
+  if (!filePath || !fs.existsSync(filePath)) return res.status(404).send('Not found');
+  const thumbId = getThumbId(filePath);
+  const duration = probeDuration(filePath);
+  const totalFrames = Math.ceil(duration / SPRITE_INTERVAL);
+  const totalSheets = Math.ceil(totalFrames / FRAMES_PER_SPRITE);
+
+  // Check current status
+  const job = spriteJobs[req.params.id];
+  const allExist = (() => {
+    for (let s = 0; s < totalSheets; s++) {
+      if (!fs.existsSync(spriteFilePath(thumbId, s))) return false;
+    }
+    return true;
+  })();
+
+  if (!allExist && (!job || job.done === true)) {
+    // Not started or previously failed — kick it off
+    startSpriteGen(req.params.id, filePath);
+  }
+
+  res.json({
+    status: allExist ? 'ready' : 'generating',
+    totalSheets,
+    cols: SPRITE_COLS, rows: SPRITE_ROWS,
+    width: SPRITE_W, height: SPRITE_H,
+    interval: SPRITE_INTERVAL,
+    duration,
+  });
+});
+
+// Serve individual sprite sheet
+app.get('/api/sprites/:id/:sheet', (req, res) => {
+  if (Object.keys(fileIndex).length === 0) scanLibrary();
+  const filePath = fileIndex[req.params.id];
+  if (!filePath || !fs.existsSync(filePath)) return res.status(404).send('Not found');
+  const thumbId = getThumbId(filePath);
+  const sheetNum = parseInt(req.params.sheet, 10) || 0;
+  const file = spriteFilePath(thumbId, sheetNum);
+  if (fs.existsSync(file)) {
+    res.set({ 'Content-Type': 'image/jpeg', 'Cache-Control': 'public, max-age=604800' });
+    return res.sendFile(file);
+  }
+  res.status(202).send('Generating');
+});
+
 app.get('/subtitle/:id', (req, res) => {
   if (Object.keys(subtitleIndex).length === 0) scanLibrary();
   const sub = subtitleIndex[req.params.id];
@@ -1118,16 +1354,18 @@ function startFfmpeg(id, filePath, sessionDir, seekTime, startSegNum) {
   const mode = getStreamMode(filePath);
   const ffmpegArgs = ['-hide_banner', '-loglevel', 'error', '-threads', '0'];
   if (seekTime > 0) ffmpegArgs.push('-ss', String(seekTime));
-  ffmpegArgs.push('-i', filePath);
+  ffmpegArgs.push('-i', filePath, '-muxdelay', '0', '-muxpreload', '0');
 
   if (mode === 'remux' || mode === 'remux-audio') {
-    ffmpegArgs.push('-c:v', 'copy', '-c:a', 'aac', '-ac', '2', '-b:a', '192k');
+    ffmpegArgs.push('-c:v', 'copy', '-c:a', 'aac', '-ac', '2', '-b:a', '192k',
+      '-af', 'aresample=async=1:first_pts=0');
   } else if (VAAPI_AVAILABLE) {
     ffmpegArgs.push(
       '-vaapi_device', '/dev/dri/renderD128',
       '-vf', 'format=nv12,hwupload',
       '-c:v', 'h264_vaapi', '-qp', '22',
       '-c:a', 'aac', '-ac', '2', '-b:a', '192k',
+      '-af', 'aresample=async=1:first_pts=0',
     );
   } else {
     ffmpegArgs.push(
@@ -1135,11 +1373,13 @@ function startFfmpeg(id, filePath, sessionDir, seekTime, startSegNum) {
       '-maxrate', '4M', '-bufsize', '8M',
       '-pix_fmt', 'yuv420p',
       '-c:a', 'aac', '-ac', '2', '-b:a', '192k',
+      '-af', 'aresample=async=1:first_pts=0',
     );
   }
 
   ffmpegArgs.push(
-    '-f', 'hls', '-hls_time', String(HLS_SEG_DURATION), '-hls_list_size', '0',
+    '-f', 'hls', '-hls_time', String(HLS_SEG_DURATION), '-hls_init_time', '1',
+    '-hls_list_size', '0',
     '-hls_flags', 'temp_file', '-hls_playlist_type', 'event',
     '-hls_segment_filename', path.join(sessionDir, 'seg_%04d.ts'),
     '-start_number', String(startSegNum),
@@ -1182,21 +1422,28 @@ app.get('/hls/:id/master.m3u8', async (req, res) => {
   if (transcodeSessions[id]) {
     const sameSeek = (transcodeSessions[id].seekOffset || 0) === startTime;
     if (sameSeek && fs.existsSync(m3u8Path) && fs.statSync(m3u8Path).size > 0) {
-      clearTimeout(transcodeSessions[id].timeout);
-      transcodeSessions[id].timeout = setTimeout(() => cleanupSession(id), 120000);
-      res.set({
-        'Content-Type': 'application/vnd.apple.mpegurl', 'Cache-Control': 'no-cache',
-        'X-Total-Duration': String(duration), 'X-Seek-Offset': String(transcodeSessions[id].seekOffset || 0),
-      });
-      return res.sendFile(m3u8Path);
+      // Verify m3u8 actually has segment data (not just a header from a killed session)
+      try {
+        const content = fs.readFileSync(m3u8Path, 'utf-8');
+        if (content.includes('#EXTINF:')) {
+          clearTimeout(transcodeSessions[id].timeout);
+          transcodeSessions[id].timeout = setTimeout(() => cleanupSession(id), 120000);
+          res.set({
+            'Content-Type': 'application/vnd.apple.mpegurl', 'Cache-Control': 'no-cache',
+            'X-Total-Duration': String(duration), 'X-Seek-Offset': String(transcodeSessions[id].seekOffset || 0),
+          });
+          return res.sendFile(m3u8Path);
+        }
+      } catch {}
     }
   }
 
-  // Kill existing session for this ID
+  // Kill existing session for this ID — use SIGKILL and wait for cleanup
   if (transcodeSessions[id]) {
-    try { transcodeSessions[id].process.kill('SIGTERM'); } catch {}
+    try { transcodeSessions[id].process.kill('SIGKILL'); } catch {}
     clearTimeout(transcodeSessions[id].timeout);
     delete transcodeSessions[id];
+    await new Promise(r => setTimeout(r, 200)); // let process die
   }
 
   // Limit concurrent transcode sessions
@@ -1228,7 +1475,7 @@ app.get('/hls/:id/master.m3u8', async (req, res) => {
   // Wait for ffmpeg to produce its m3u8 with real segment durations
   let waited = 0;
   const poll = setInterval(() => {
-    waited += 200;
+    waited += 100;
     try {
       if (fs.existsSync(m3u8Path) && fs.statSync(m3u8Path).size > 0) {
         const content = fs.readFileSync(m3u8Path, 'utf-8');
@@ -1247,7 +1494,7 @@ app.get('/hls/:id/master.m3u8', async (req, res) => {
       clearInterval(poll);
       res.status(504).send('Transcode startup timeout');
     }
-  }, 200);
+  }, 100);
 });
 
 app.get('/hls/:id/:segment', (req, res) => {
@@ -1297,7 +1544,7 @@ app.get('/hls/:id/:segment', (req, res) => {
   let waited = 0;
   const maxWait = 60000; // 60s timeout — first segment after seek on slow transcode can take time
   const poll = setInterval(() => {
-    waited += 300;
+    waited += 100;
     if (fs.existsSync(segPath)) {
       try {
         if (fs.statSync(segPath).size > 0) {
@@ -1312,7 +1559,7 @@ app.get('/hls/:id/:segment', (req, res) => {
       clearInterval(poll);
       res.status(404).send('Segment not ready');
     }
-  }, 300);
+  }, 100);
 });
 
 // ══════════════════════════════════════════════════════════════════════
@@ -1465,4 +1712,7 @@ app.listen(PORT, '0.0.0.0', () => {
   const probed = library.filter(i => i.codec).length;
   console.log(`  Total media: ${library.length} file(s) (${probed} probed)`);
   console.log('');
+
+  // Start background sprite generation for all movies
+  setTimeout(() => queueAllSpriteGen(), 5000);
 });

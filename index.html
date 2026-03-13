@@ -250,6 +250,10 @@ select,input{font-family:inherit}
 .progress-filled{height:100%;background:var(--accent);border-radius:2px;position:relative}
 .progress-thumb{position:absolute;right:-6px;top:50%;transform:translateY(-50%);width:12px;height:12px;border-radius:50%;background:var(--accent);opacity:0;transition:opacity .15s;box-shadow:0 0 6px rgba(0,164,220,.5)}
 .progress-container:hover .progress-thumb{opacity:1}
+.seek-preview{position:absolute;bottom:24px;transform:translateX(-50%);pointer-events:none;opacity:0;transition:opacity .15s;z-index:10}
+.seek-preview.visible{opacity:1}
+.seek-preview-thumb{width:160px;height:90px;border-radius:6px;border:2px solid rgba(255,255,255,.3);box-shadow:0 4px 20px rgba(0,0,0,.7);background-size:cover;background-color:#000;overflow:hidden}
+.seek-preview-time{text-align:center;font-size:.75rem;color:#fff;margin-top:4px;text-shadow:0 1px 3px rgba(0,0,0,.8)}
 .controls-row{display:flex;align-items:center;justify-content:space-between}
 .controls-left,.controls-right{display:flex;align-items:center;gap:4px}
 .ctrl-btn{width:36px;height:36px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:1rem;transition:background var(--transition)}
@@ -378,6 +382,7 @@ select,input{font-family:inherit}
   </div>
   <div class="player-controls">
     <div class="progress-container" id="progressContainer">
+      <div class="seek-preview" id="seekPreview"><div class="seek-preview-thumb" id="seekPreviewThumb"></div><div class="seek-preview-time" id="seekPreviewTime"></div></div>
       <div class="progress-track"><div class="progress-filled" id="progressFilled" style="width:0%"><div class="progress-thumb"></div></div></div>
     </div>
     <div class="controls-row">
@@ -981,6 +986,9 @@ function playMedia(id){
   const item=library.find(m=>m.id===id);if(!item)return;
   currentMedia=item;
   document.getElementById('playerTitle').textContent=item.title;
+  if(typeof _clearThumbCache==='function')_clearThumbCache();
+  // Trigger sprite sheet generation in background
+  if(typeof _loadSprites==='function')_loadSprites(id);
 
   // Fully reset video element
   if(hlsInstance){hlsInstance.destroy();hlsInstance=null;}
@@ -996,23 +1004,29 @@ function playMedia(id){
     window._hlsSeekOffset=startTime;
     window._hlsTotalDur=0;
     window._hlsRetries=0;
+    window._hlsLoadId=0;
     window._hlsLoad=function(url){
       if(hlsInstance){hlsInstance.destroy();hlsInstance=null;}
+      V.removeAttribute('src');V.load();
       window._hlsRetries=0;
-      // Fetch manifest first to get duration headers and start ffmpeg session
+      var loadId=++window._hlsLoadId;
+      // Fetch manifest to get duration headers and start ffmpeg session
       fetch(url).then(r=>{
+        if(loadId!==window._hlsLoadId)return; // stale seek, skip
         const totalDur=parseFloat(r.headers.get('X-Total-Duration'))||0;
         const seekOff=parseFloat(r.headers.get('X-Seek-Offset'))||0;
         if(totalDur>0) window._hlsTotalDur=totalDur;
         if(seekOff>=0) window._hlsSeekOffset=seekOff;
-        // Now load same URL in hls.js (server reuses session, no duplicate ffmpeg)
+        if(hlsInstance){hlsInstance.destroy();hlsInstance=null;}
         hlsInstance=new Hls({
-          maxBufferLength:15,maxMaxBufferLength:60,startFragPrefetch:true,
+          maxBufferLength:30,maxMaxBufferLength:120,startFragPrefetch:true,
           liveSyncDuration:0,liveMaxLatencyDuration:Infinity,
+          highBufferWatchdogPeriod:2,nudgeOffset:0.2,enableWorker:true,
         });
         hlsInstance.loadSource(url);
         hlsInstance.attachMedia(V);
         hlsInstance.on(Hls.Events.MANIFEST_PARSED,function(){
+          if(loadId!==window._hlsLoadId)return;
           V.playbackRate=playbackSpeed;
           V.play().catch(()=>{});
         });
@@ -1025,7 +1039,8 @@ function playMedia(id){
             else if(data.type===Hls.ErrorTypes.MEDIA_ERROR)hlsInstance.recoverMediaError();
           }
         });
-      }).catch(err=>console.error('Failed to load HLS:',err));
+        _hlsSeekPending=false;
+      }).catch(err=>{console.error('Failed to load HLS:',err);_hlsSeekPending=false;});
     };
     window._hlsLoad(hlsUrl);
   } else if(V.canPlayType('application/vnd.apple.mpegurl')){
@@ -1077,6 +1092,86 @@ progContainer.addEventListener('touchstart',e=>{isSeeking=true;seekVisual(e.touc
 document.addEventListener('touchmove',e=>{if(isSeeking)seekVisual(e.touches[0]);},{passive:true});
 document.addEventListener('touchend',()=>{if(isSeeking){isSeeking=false;seekCommit();}});
 
+// YouTube-style sprite sheet seek preview
+const seekPreview=document.getElementById('seekPreview');
+const seekPreviewThumb=document.getElementById('seekPreviewThumb');
+const seekPreviewTime=document.getElementById('seekPreviewTime');
+let _spriteData=null, _spriteMediaId='', _spriteSheets={}, _lastSpriteT=-1;
+
+function _clearThumbCache(){
+  _spriteData=null;_spriteMediaId='';_spriteSheets={};_lastSpriteT=-1;
+  seekPreviewThumb.style.backgroundImage='';
+}
+
+function _loadSprites(id){
+  if(_spriteMediaId===id && _spriteData) return;
+  _spriteMediaId=id;
+  fetch('/api/sprites/'+id+'/generate',{method:'POST'}).then(r=>r.json()).then(data=>{
+    if(_spriteMediaId!==id) return;
+    _spriteData=data;
+    // Preload all sprite sheets
+    for(let s=0;s<data.totalSheets;s++){
+      if(!_spriteSheets[id+'_'+s]){
+        const img=new Image();
+        const sheetUrl='/api/sprites/'+id+'/'+s;
+        img.onload=function(){_spriteSheets[id+'_'+s]=sheetUrl;};
+        img.src=sheetUrl;
+      }
+    }
+    // If still generating, poll until done
+    if(data.status!=='ready'){
+      const poll=setInterval(()=>{
+        if(_spriteMediaId!==id){clearInterval(poll);return;}
+        fetch('/api/sprites/'+id+'/generate',{method:'POST'}).then(r=>r.json()).then(d=>{
+          if(d.status==='ready'){
+            clearInterval(poll);
+            _spriteData=d;
+            for(let s=0;s<d.totalSheets;s++){
+              if(!_spriteSheets[id+'_'+s]){
+                const img=new Image();
+                const u='/api/sprites/'+id+'/'+s;
+                img.onload=function(){_spriteSheets[id+'_'+s]=u;};
+                img.src=u;
+              }
+            }
+          }
+        }).catch(()=>{});
+      },3000);
+    }
+  }).catch(()=>{});
+}
+
+progContainer.addEventListener('mousemove',e=>{
+  if(!currentMedia)return;
+  if(_spriteMediaId!==currentMedia.id){_clearThumbCache();_loadSprites(currentMedia.id);}
+  const r=progContainer.getBoundingClientRect();
+  const p=Math.max(0,Math.min(1,(e.clientX-r.left)/r.width));
+  const t=p*_hlsTotalDuration();
+  const roundedT=Math.floor(t/10)*10;
+  const left=Math.max(85,Math.min(r.width-85,e.clientX-r.left));
+  seekPreview.style.left=left+'px';
+  seekPreview.classList.add('visible');
+  seekPreviewTime.textContent=fmt(t);
+  if(roundedT!==_lastSpriteT && _spriteData){
+    _lastSpriteT=roundedT;
+    const frameIndex=Math.floor(roundedT/_spriteData.interval);
+    const sheetNum=Math.floor(frameIndex/(_spriteData.cols*_spriteData.rows));
+    const posInSheet=frameIndex%(_spriteData.cols*_spriteData.rows);
+    const col=posInSheet%_spriteData.cols;
+    const row=Math.floor(posInSheet/_spriteData.cols);
+    const sheetKey=currentMedia.id+'_'+sheetNum;
+    if(_spriteSheets[sheetKey]){
+      seekPreviewThumb.style.backgroundImage='url('+_spriteSheets[sheetKey]+')';
+      seekPreviewThumb.style.backgroundSize=(_spriteData.cols*160)+'px '+(_spriteData.rows*90)+'px';
+      seekPreviewThumb.style.backgroundPosition='-'+(col*160)+'px -'+(row*90)+'px';
+    }
+  }
+});
+progContainer.addEventListener('mouseleave',()=>{
+  seekPreview.classList.remove('visible');
+  _lastSpriteT=-1;
+});
+
 let _seekTarget=0;
 function _hlsTotalDuration(){return window._hlsTotalDur||(window._hlsSeekOffset||0)+(V.duration||0);}
 function seekVisual(e){
@@ -1091,11 +1186,9 @@ function seekCommit(){
   const isHls=currentMedia.streamMode&&currentMedia.streamMode!=='direct';
   if(isHls&&typeof window._hlsLoad==='function'){
     // For HLS: restart ffmpeg from seek position and reload stream
-    if(_hlsSeekPending)return;
-    _hlsSeekPending=true;
     window._hlsSeekOffset=_seekTarget;
+    _hlsSeekPending=true;
     window._hlsLoad('/hls/'+currentMedia.id+'/master.m3u8?start='+_seekTarget);
-    _hlsSeekPending=false;
   } else {
     // Direct play: just set currentTime
     if(V.duration)V.currentTime=_seekTarget;
