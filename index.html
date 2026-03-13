@@ -412,6 +412,9 @@ select,input{font-family:inherit}
 let library=[],currentView='home',currentMedia=null,controlsTimeout=null,progressSaveInterval=null;
 let folderConfig=[],activeProfile=null,profileQueue=[];
 let skipInterval=10,playbackSpeed=1,watchFilter='all';
+const ADMIN_TOKEN=window.__ADMIN_TOKEN||'';
+function adminHeaders(){return{'Content-Type':'application/json','X-Admin-Token':ADMIN_TOKEN};}
+function adminFetch(url,opts={}){opts.headers={...opts.headers,'X-Admin-Token':ADMIN_TOKEN};return fetch(url,opts);}
 
 const V=document.getElementById('videoElement'),modal=document.getElementById('playerModal');
 const progContainer=document.getElementById('progressContainer');
@@ -498,7 +501,7 @@ async function fetchLib(){
 }
 
 async function fetchConfig(){
-  try{folderConfig=await(await fetch('/api/config')).json();}catch{folderConfig=[];}
+  try{folderConfig=await(await adminFetch('/api/config')).json();}catch{folderConfig=[];}
 }
 
 async function fetchQueue(){
@@ -844,7 +847,7 @@ async function fetchStats(){try{statsData=await(await fetch('/api/stats')).json(
 let browserOpen=false;
 function toggleBrowser(){browserOpen=!browserOpen;if(browserOpen){browseTo(document.getElementById('addFolderPath')?.value||'~');}else{const el=document.getElementById('folderBrowser');if(el)el.innerHTML='';}}
 async function browseTo(p){
-  try{const r=await fetch(`/api/browse?path=${encodeURIComponent(p)}`);if(!r.ok)throw 0;const d=await r.json();browserPath=d.current;browserData=d;renderBrowser();}
+  try{const r=await adminFetch(`/api/browse?path=${encodeURIComponent(p)}`);if(!r.ok)throw 0;const d=await r.json();browserPath=d.current;browserData=d;renderBrowser();}
   catch{const el=document.getElementById('folderBrowser');if(el)el.innerHTML='<div style="padding:12px;color:var(--danger);font-size:.83rem">Cannot access directory.</div>';}
 }
 let browserPath='',browserData=null;
@@ -861,10 +864,10 @@ function onPathInput(v){if(browserOpen&&v.length>2){clearTimeout(window._bt);win
 async function addFolder(){
   const p=document.getElementById('addFolderPath'),t=document.getElementById('addFolderType'),l=document.getElementById('addFolderLabel');
   if(!p.value.trim()){showSettingsAlert('Enter a folder path.','error');return;}
-  try{const r=await fetch('/api/config/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:p.value.trim(),type:t.value,label:l.value.trim()})});const d=await r.json();if(!r.ok){showSettingsAlert(d.error||'Error','error');return;}
+  try{const r=await adminFetch('/api/config/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:p.value.trim(),type:t.value,label:l.value.trim()})});const d=await r.json();if(!r.ok){showSettingsAlert(d.error||'Error','error');return;}
   showSettingsAlert('Folder linked!','success');p.value='';l.value='';browserOpen=false;await renderSettings();fetchLib();}catch{showSettingsAlert('Server error.','error');}
 }
-async function removeFolder(fp){try{await fetch('/api/config/remove',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:fp})});await renderSettings();fetchLib();}catch{}}
+async function removeFolder(fp){try{await adminFetch('/api/config/remove',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:fp})});await renderSettings();fetchLib();}catch{}}
 function showSettingsAlert(m,t){const e=document.getElementById('settingsAlert');if(!e)return;e.className=`alert ${t}`;e.textContent=m;setTimeout(()=>{e.className='alert';},3500);}
 
 function scanLibrary(){
@@ -872,7 +875,7 @@ function scanLibrary(){
   const orig=btn.innerHTML;
   btn.innerHTML='<span class="nav-icon">&#8987;</span> Scanning...';
   btn.disabled=true;
-  fetch('/api/scan',{method:'POST'}).then(r=>r.json()).then(d=>{
+  adminFetch('/api/scan',{method:'POST'}).then(r=>r.json()).then(d=>{
     if(d.ok){
       // Poll until scan completes by waiting for library-updated SSE event
       // Meanwhile just show scanning state, the SSE handler will refresh
@@ -885,7 +888,7 @@ function scanLibrary(){
 
 function restartServer(){
   if(!confirm('Restart the server? Playback will be interrupted.'))return;
-  fetch('/api/restart',{method:'POST'}).then(()=>{
+  adminFetch('/api/restart',{method:'POST'}).then(()=>{
     document.getElementById('contentArea').innerHTML='<div class="empty-state"><div class="empty-icon">&#128260;</div><div class="empty-title">Restarting Server...</div><div class="empty-text">Reconnecting automatically...</div></div>';
     const poll=setInterval(()=>{
       fetch('/api/stats').then(r=>{if(r.ok){clearInterval(poll);location.reload();}}).catch(()=>{});
@@ -979,55 +982,55 @@ function playMedia(id){
   currentMedia=item;
   document.getElementById('playerTitle').textContent=item.title;
 
-  // Destroy previous HLS instance
+  // Fully reset video element
   if(hlsInstance){hlsInstance.destroy();hlsInstance=null;}
+  V.removeAttribute('src');
+  V.load();
 
-  const ext=(item.filename||'').split('.').pop().toLowerCase();
-  let mode=item.streamMode||'unknown';
-  if(mode==='unknown') mode=(ext==='mp4'?'direct':'hls');
+  // All playback via HLS for reliable cross-browser support
+  const startTime=item.progress.currentTime>5?item.progress.currentTime:0;
+  const hlsUrl='/hls/'+item.id+'/master.m3u8'+(startTime?'?start='+startTime:'');
+  modal.classList.add('active');
 
-  if(mode==='direct'){
-    // Direct play — native browser playback
-    window._hlsSeekOffset=0;window._hlsLoad=null;
-    V.src=item.videoUrl;
-    V.playbackRate=playbackSpeed;
-    if(item.progress.currentTime>5)V.currentTime=item.progress.currentTime;
-    modal.classList.add('active');V.play().catch(()=>{});
-  } else {
-    // Remux or transcode via HLS
-    const startTime=item.progress.currentTime>5?item.progress.currentTime:0;
-    const hlsUrl='/hls/'+item.id+'/master.m3u8'+(startTime?'?start='+startTime:'');
-    modal.classList.add('active');
-
-    if(typeof Hls!=='undefined'&&Hls.isSupported()){
-      window._hlsSeekOffset=startTime; // track real movie position
-      window._hlsLoad=function(url){
-        if(hlsInstance){hlsInstance.destroy();hlsInstance=null;}
-        hlsInstance=new Hls({maxBufferLength:30,maxMaxBufferLength:60});
+  if(typeof Hls!=='undefined'&&Hls.isSupported()){
+    window._hlsSeekOffset=startTime;
+    window._hlsTotalDur=0;
+    window._hlsRetries=0;
+    window._hlsLoad=function(url){
+      if(hlsInstance){hlsInstance.destroy();hlsInstance=null;}
+      window._hlsRetries=0;
+      // Fetch manifest first to get duration headers and start ffmpeg session
+      fetch(url).then(r=>{
+        const totalDur=parseFloat(r.headers.get('X-Total-Duration'))||0;
+        const seekOff=parseFloat(r.headers.get('X-Seek-Offset'))||0;
+        if(totalDur>0) window._hlsTotalDur=totalDur;
+        if(seekOff>=0) window._hlsSeekOffset=seekOff;
+        // Now load same URL in hls.js (server reuses session, no duplicate ffmpeg)
+        hlsInstance=new Hls({
+          maxBufferLength:15,maxMaxBufferLength:60,startFragPrefetch:true,
+          liveSyncDuration:0,liveMaxLatencyDuration:Infinity,
+        });
         hlsInstance.loadSource(url);
         hlsInstance.attachMedia(V);
-        hlsInstance.on(Hls.Events.MANIFEST_PARSED,()=>{
+        hlsInstance.on(Hls.Events.MANIFEST_PARSED,function(){
           V.playbackRate=playbackSpeed;
           V.play().catch(()=>{});
         });
         hlsInstance.on(Hls.Events.ERROR,(_e,data)=>{
           if(data.fatal){
-            console.error('HLS error',data);
+            console.error('HLS fatal error:',data.type,data.details,data.reason);
+            window._hlsRetries++;
+            if(window._hlsRetries>3){console.error('HLS: giving up after 3 retries');return;}
             if(data.type===Hls.ErrorTypes.NETWORK_ERROR)hlsInstance.startLoad();
             else if(data.type===Hls.ErrorTypes.MEDIA_ERROR)hlsInstance.recoverMediaError();
           }
         });
-      };
-      window._hlsLoad(hlsUrl);
-    } else if(V.canPlayType('application/vnd.apple.mpegurl')){
-      // Safari native HLS
-      V.src=hlsUrl;V.playbackRate=playbackSpeed;V.play().catch(()=>{});
-    } else {
-      // Last resort: try direct stream
-      V.src=item.videoUrl;V.playbackRate=playbackSpeed;
-      if(item.progress.currentTime>5)V.currentTime=item.progress.currentTime;
-      V.play().catch(()=>{});
-    }
+      }).catch(err=>console.error('Failed to load HLS:',err));
+    };
+    window._hlsLoad(hlsUrl);
+  } else if(V.canPlayType('application/vnd.apple.mpegurl')){
+    // Safari native HLS
+    V.src=hlsUrl;V.playbackRate=playbackSpeed;V.play().catch(()=>{});
   }
 
   startProgressSync();showControls();resetUpNext();
@@ -1051,17 +1054,17 @@ function toggleMute(){V.muted=!V.muted;document.getElementById('volumeBtn').inne
 function setVol(v){V.volume=v;V.muted=v==0;document.getElementById('volumeBtn').innerHTML=v==0?'&#128263;':v<.5?'&#128265;':'&#128266;';}
 function toggleFS(){document.fullscreenElement?document.exitFullscreen():modal.requestFullscreen().catch(()=>{});}
 
-// Click vs double-click on video wrapper
-let _clickTimer=null;
+// Click vs double-click on video wrapper (manual detection for reliability)
+let _clickCount=0,_clickTimer=null;
 document.getElementById('videoWrapper').addEventListener('click',function(e){
   if(e.target.closest('.player-controls,.player-top-bar,.up-next-overlay'))return;
-  if(_clickTimer){clearTimeout(_clickTimer);_clickTimer=null;return;}
-  _clickTimer=setTimeout(()=>{_clickTimer=null;V.paused?V.play():V.pause();},250);
-});
-document.getElementById('videoWrapper').addEventListener('dblclick',function(e){
-  if(e.target.closest('.player-controls,.player-top-bar,.up-next-overlay'))return;
-  if(_clickTimer){clearTimeout(_clickTimer);_clickTimer=null;}
-  toggleFS();
+  _clickCount++;
+  if(_clickCount===1){
+    _clickTimer=setTimeout(()=>{_clickCount=0;V.paused?V.play():V.pause();},300);
+  } else if(_clickCount>=2){
+    clearTimeout(_clickTimer);_clickCount=0;
+    toggleFS();
+  }
 });
 
 // Progress bar
@@ -1075,7 +1078,7 @@ document.addEventListener('touchmove',e=>{if(isSeeking)seekVisual(e.touches[0]);
 document.addEventListener('touchend',()=>{if(isSeeking){isSeeking=false;seekCommit();}});
 
 let _seekTarget=0;
-function _hlsTotalDuration(){return (window._hlsSeekOffset||0)+(V.duration||0);}
+function _hlsTotalDuration(){return window._hlsTotalDur||(window._hlsSeekOffset||0)+(V.duration||0);}
 function seekVisual(e){
   const r=progContainer.getBoundingClientRect();
   const p=Math.max(0,Math.min(1,(e.clientX-r.left)/r.width));
@@ -1091,10 +1094,8 @@ function seekCommit(){
     if(_hlsSeekPending)return;
     _hlsSeekPending=true;
     window._hlsSeekOffset=_seekTarget;
-    fetch('/hls/'+currentMedia.id+'/master.m3u8?start='+_seekTarget).then(()=>{
-      window._hlsLoad('/hls/'+currentMedia.id+'/master.m3u8');
-      _hlsSeekPending=false;
-    }).catch(()=>{_hlsSeekPending=false;});
+    window._hlsLoad('/hls/'+currentMedia.id+'/master.m3u8?start='+_seekTarget);
+    _hlsSeekPending=false;
   } else {
     // Direct play: just set currentTime
     if(V.duration)V.currentTime=_seekTarget;
@@ -1132,7 +1133,7 @@ function resetUpNext(){_upNextShown=false;_upNextCancelled=false;hideUpNext();}
 V.addEventListener('timeupdate',()=>{
   if(!V.duration||isSeeking)return;
   const offset=window._hlsSeekOffset||0;
-  const total=offset+V.duration;const cur=offset+V.currentTime;
+  const total=window._hlsTotalDur||(offset+V.duration);const cur=offset+V.currentTime;
   const p=(cur/total)*100;
   document.getElementById('progressFilled').style.width=p+'%';
   document.getElementById('timeDisplay').textContent=fmt(cur)+' / '+fmt(total);
@@ -1184,7 +1185,7 @@ async function saveProg(){
 // ══════════════════════════════════════════════════════════════════════
 function fmt(s){if(!s||isNaN(s))return '0:00';const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sec=Math.floor(s%60);return h>0?`${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`:`${m}:${String(sec).padStart(2,'0')}`;}
 function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML;}
-function escAttr(s){return s.replace(/\\/g,'\\\\').replace(/'/g,"\\'");}
+function escAttr(s){return s.replace(/&/g,'&amp;').replace(/'/g,'&#39;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\\/g,'\\\\');}
 function formatSize(b){if(b<1024)return b+' B';if(b<1048576)return(b/1024).toFixed(1)+' KB';if(b<1073741824)return(b/1048576).toFixed(1)+' MB';return(b/1073741824).toFixed(1)+' GB';}
 
 // ══════════════════════════════════════════════════════════════════════

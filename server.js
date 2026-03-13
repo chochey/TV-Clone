@@ -39,7 +39,7 @@ app.use(express.json());
 
 // Debug: log HLS requests
 app.use((req, res, next) => {
-  if (req.path.startsWith('/hls')) console.log(`[HLS-REQ] ${req.method} ${req.path}`);
+  if (req.path.startsWith('/hls')) console.log(`[HLS-REQ] ${req.method} ${req.originalUrl}`);
   next();
 });
 
@@ -69,6 +69,9 @@ function saveJSON(filePath, data) {
   fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
 }
 
+// Admin token — generated fresh each startup, required for dangerous endpoints
+const adminToken = crypto.randomBytes(24).toString('hex');
+
 let config = loadJSON(CONFIG_FILE, DEFAULT_CONFIG);
 if (!config.profiles || config.profiles.length === 0) {
   config.profiles = DEFAULT_CONFIG.profiles;
@@ -76,8 +79,12 @@ if (!config.profiles || config.profiles.length === 0) {
 if (!config.genres) config.genres = {};
 
 // Per-profile data: progress, history, queue, watched
+function sanitizeProfileId(profileId) {
+  return String(profileId).replace(/[^a-zA-Z0-9_-]/g, '');
+}
+
 function profileDataPath(profileId) {
-  return path.join(DATA_DIR, `profile_${profileId}.json`);
+  return path.join(DATA_DIR, `profile_${sanitizeProfileId(profileId)}.json`);
 }
 
 function loadProfileData(profileId) {
@@ -197,6 +204,11 @@ let subProbeCacheDirty = false;
 
 let probeCache = loadJSON(PROBE_CACHE_FILE, {});
 let probeCacheDirty = false;
+const AUDIO_PROBE_CACHE_FILE = path.join(DATA_DIR, 'audio_probe_cache.json');
+let audioProbeCache = loadJSON(AUDIO_PROBE_CACHE_FILE, {});
+let audioProbeCacheDirty = false;
+// Audio codecs browsers can play natively
+const BROWSER_AUDIO_CODECS = new Set(['aac', 'mp3', 'opus', 'vorbis', 'flac']);
 
 function probeFile(filePath) {
   if (probeCache[filePath]) return probeCache[filePath];
@@ -225,48 +237,39 @@ function probeDuration(filePath) {
   } catch { return 0; }
 }
 
-function generateManifest(totalDuration, startTime, segDuration, sessionDir) {
-  const remaining = totalDuration - startTime;
-  if (remaining <= 0) return;
-  const numSegs = Math.ceil(remaining / segDuration);
-  let m3u8 = '#EXTM3U\n#EXT-X-VERSION:3\n';
-  m3u8 += `#EXT-X-TARGETDURATION:${Math.ceil(segDuration) + 1}\n`;
-  m3u8 += '#EXT-X-MEDIA-SEQUENCE:0\n#EXT-X-PLAYLIST-TYPE:VOD\n';
-  for (let i = 0; i < numSegs; i++) {
-    const left = remaining - i * segDuration;
-    const dur = Math.min(segDuration, left);
-    m3u8 += `#EXTINF:${dur.toFixed(6)},\nseg_${String(i).padStart(4, '0')}.ts\n`;
-  }
-  m3u8 += '#EXT-X-ENDLIST\n';
-  fs.writeFileSync(path.join(sessionDir, 'manifest.m3u8'), m3u8);
-}
 
 function getStreamMode(filePath) {
   const ext = path.extname(filePath).toLowerCase();
   const codec = probeCache[filePath];
+  const audioCodec = audioProbeCache[filePath];
   if (!codec) {
-    // Not probed yet — guess from extension
-    return ext === '.mp4' ? 'direct' : 'unknown';
+    return 'unknown';
   }
-  if (codec === 'h264' && ext === '.mp4') return 'direct';
-  if (codec === 'h264') return 'remux';
-  return 'transcode';
+  // Always transcode audio to normalize timestamps for HLS compatibility
+  if (codec === 'h264') return 'remux';   // copy video, transcode audio
+  return 'transcode';                      // full transcode
 }
 
 function probeFileAsync(filePath) {
   return new Promise((resolve) => {
+    // Probe both video and audio codecs in one call
     const proc = spawn('ffprobe', [
-      '-v', 'error', '-select_streams', 'v:0',
-      '-show_entries', 'stream=codec_name', '-of', 'json', filePath,
+      '-v', 'error',
+      '-show_entries', 'stream=codec_name,codec_type',
+      '-of', 'json', filePath,
     ]);
     let out = '';
     proc.stdout.on('data', d => out += d);
     proc.on('close', () => {
       try {
-        const codec = JSON.parse(out).streams?.[0]?.codec_name || 'unknown';
-        probeCache[filePath] = codec;
+        const streams = JSON.parse(out).streams || [];
+        const videoCodec = streams.find(s => s.codec_type === 'video')?.codec_name || 'unknown';
+        const audioCodec = streams.find(s => s.codec_type === 'audio')?.codec_name || 'unknown';
+        probeCache[filePath] = videoCodec;
         probeCacheDirty = true;
-        resolve(codec);
+        audioProbeCache[filePath] = audioCodec;
+        audioProbeCacheDirty = true;
+        resolve(videoCodec);
       } catch {
         probeCache[filePath] = 'unknown';
         probeCacheDirty = true;
@@ -321,8 +324,8 @@ async function backgroundProbe() {
   for (const item of lib) {
     const fp = fileIndex[item.id];
     if (!fp) continue;
-    // Video codec probe
-    if (!probeCache[fp]) {
+    // Video + audio codec probe
+    if (!probeCache[fp] || !audioProbeCache[fp]) {
       await probeFileAsync(fp);
       codecCount++;
       await new Promise(r => setTimeout(r, 50));
@@ -338,11 +341,13 @@ async function backgroundProbe() {
     }
     if ((codecCount + subCount) % 100 === 0 && (codecCount + subCount) > 0) {
       if (probeCacheDirty) { saveJSON(PROBE_CACHE_FILE, probeCache); probeCacheDirty = false; }
+      if (audioProbeCacheDirty) { saveJSON(AUDIO_PROBE_CACHE_FILE, audioProbeCache); audioProbeCacheDirty = false; }
       if (subProbeCacheDirty) { saveJSON(SUB_PROBE_CACHE_FILE, subProbeCache); subProbeCacheDirty = false; }
       console.log(`  [probe] ${codecCount} codec + ${subCount} subtitle probes...`);
     }
   }
   if (probeCacheDirty) { saveJSON(PROBE_CACHE_FILE, probeCache); probeCacheDirty = false; }
+  if (audioProbeCacheDirty) { saveJSON(AUDIO_PROBE_CACHE_FILE, audioProbeCache); audioProbeCacheDirty = false; }
   if (subProbeCacheDirty) { saveJSON(SUB_PROBE_CACHE_FILE, subProbeCache); subProbeCacheDirty = false; }
   if (codecCount > 0 || subCount > 0) console.log(`  [probe] Complete — ${codecCount} codec + ${subCount} subtitle probes.`);
   bgProbeRunning = false;
@@ -698,11 +703,22 @@ app.delete('/api/profiles/:id', (req, res) => {
   res.json({ ok: true });
 });
 
+const pinAttempts = {}; // ip -> { count, lastAttempt }
 app.post('/api/profiles/:id/verify-pin', (req, res) => {
+  const ip = req.ip;
+  const now = Date.now();
+  if (!pinAttempts[ip]) pinAttempts[ip] = { count: 0, lastAttempt: 0 };
+  // Reset after 5 minutes
+  if (now - pinAttempts[ip].lastAttempt > 300000) pinAttempts[ip].count = 0;
+  if (pinAttempts[ip].count >= 10) return res.status(429).json({ error: 'Too many attempts. Try again later.' });
+
   const p = config.profiles.find(p => p.id === req.params.id);
   if (!p) return res.status(404).json({ error: 'Profile not found' });
   if (!p.pin) return res.json({ ok: true });
-  if (req.body.pin === p.pin) return res.json({ ok: true });
+  pinAttempts[ip].lastAttempt = now;
+  const input = String(req.body.pin || '');
+  if (input.length === p.pin.length && crypto.timingSafeEqual(Buffer.from(input), Buffer.from(p.pin))) return res.json({ ok: true });
+  pinAttempts[ip].count++;
   res.status(403).json({ error: 'Incorrect PIN' });
 });
 
@@ -898,6 +914,13 @@ app.get('/api/stats', (_req, res) => {
 // ── Config APIs (folders) ────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════
 
+// Admin auth: token is embedded in the page at load time, required for dangerous operations
+function requireAdmin(req, res, next) {
+  const token = req.headers['x-admin-token'] || req.query.token;
+  if (token !== adminToken) return res.status(403).json({ error: 'Unauthorized' });
+  next();
+}
+
 app.get('/api/config', (_req, res) => {
   const lib = scanLibrary();
   const result = config.folders.map(f => {
@@ -909,7 +932,7 @@ app.get('/api/config', (_req, res) => {
   res.json(result);
 });
 
-app.post('/api/config', (req, res) => {
+app.post('/api/config', requireAdmin, (req, res) => {
   const { folders } = req.body;
   if (!Array.isArray(folders)) return res.status(400).json({ error: 'folders must be an array' });
   config.folders = folders.map(f => ({
@@ -923,7 +946,7 @@ app.post('/api/config', (req, res) => {
   res.json({ ok: true });
 });
 
-app.post('/api/config/add', (req, res) => {
+app.post('/api/config/add', requireAdmin, (req, res) => {
   const { path: folderPath, type, label, genres } = req.body;
   const cleanPath = String(folderPath || '').trim();
   if (!cleanPath) return res.status(400).json({ error: 'Path is required' });
@@ -945,7 +968,7 @@ app.post('/api/config/add', (req, res) => {
   res.json({ ok: true, folder: entry });
 });
 
-app.post('/api/config/remove', (req, res) => {
+app.post('/api/config/remove', requireAdmin, (req, res) => {
   const before = config.folders.length;
   config.folders = config.folders.filter(f => f.path !== req.body.path);
   saveJSON(CONFIG_FILE, config);
@@ -954,14 +977,15 @@ app.post('/api/config/remove', (req, res) => {
   res.json({ ok: true, removed: before - config.folders.length });
 });
 
-app.get('/api/browse', (req, res) => {
+app.get('/api/browse', requireAdmin, (req, res) => {
   let dirPath = req.query.path || os.homedir();
   if (dirPath.startsWith('~')) dirPath = path.join(os.homedir(), dirPath.slice(1));
+  const resolved = path.resolve(dirPath);
   try {
-    if (!fs.existsSync(dirPath) || !fs.statSync(dirPath).isDirectory()) {
+    if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) {
       return res.status(404).json({ error: 'Not a valid directory' });
     }
-    const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+    const entries = fs.readdirSync(resolved, { withFileTypes: true });
     const dirs = [];
     let videoCount = 0;
     for (const entry of entries) {
@@ -970,7 +994,7 @@ app.get('/api/browse', (req, res) => {
       else if (SUPPORTED_EXT.includes(path.extname(entry.name).toLowerCase())) videoCount++;
     }
     dirs.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
-    res.json({ current: dirPath, parent: path.dirname(dirPath), dirs, videoCount });
+    res.json({ current: resolved, parent: path.dirname(resolved), dirs, videoCount });
   } catch { res.status(403).json({ error: 'Cannot read directory' }); }
 });
 
@@ -1062,6 +1086,7 @@ app.get('/subtitle/embedded/:fileId/:streamIndex', (req, res) => {
 // ══════════════════════════════════════════════════════════════════════
 
 const transcodeSessions = {}; // id -> { process, dir, timeout, startSeg, lastRestartAt }
+const MAX_TRANSCODE_SESSIONS = 5;
 const HLS_SEG_DURATION = 4;
 
 function cleanupSession(id, keepFiles) {
@@ -1091,11 +1116,11 @@ function startFfmpeg(id, filePath, sessionDir, seekTime, startSegNum) {
   }
 
   const mode = getStreamMode(filePath);
-  const ffmpegArgs = ['-hide_banner', '-loglevel', 'error'];
+  const ffmpegArgs = ['-hide_banner', '-loglevel', 'error', '-threads', '0'];
   if (seekTime > 0) ffmpegArgs.push('-ss', String(seekTime));
   ffmpegArgs.push('-i', filePath);
 
-  if (mode === 'remux') {
+  if (mode === 'remux' || mode === 'remux-audio') {
     ffmpegArgs.push('-c:v', 'copy', '-c:a', 'aac', '-ac', '2', '-b:a', '192k');
   } else if (VAAPI_AVAILABLE) {
     ffmpegArgs.push(
@@ -1106,7 +1131,7 @@ function startFfmpeg(id, filePath, sessionDir, seekTime, startSegNum) {
     );
   } else {
     ffmpegArgs.push(
-      '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '22',
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23',
       '-maxrate', '4M', '-bufsize', '8M',
       '-pix_fmt', 'yuv420p',
       '-c:a', 'aac', '-ac', '2', '-b:a', '192k',
@@ -1115,7 +1140,7 @@ function startFfmpeg(id, filePath, sessionDir, seekTime, startSegNum) {
 
   ffmpegArgs.push(
     '-f', 'hls', '-hls_time', String(HLS_SEG_DURATION), '-hls_list_size', '0',
-    '-hls_flags', 'temp_file',
+    '-hls_flags', 'temp_file', '-hls_playlist_type', 'event',
     '-hls_segment_filename', path.join(sessionDir, 'seg_%04d.ts'),
     '-start_number', String(startSegNum),
     path.join(sessionDir, 'stream.m3u8'),
@@ -1143,29 +1168,45 @@ app.get('/hls/:id/master.m3u8', async (req, res) => {
   if (!filePath || !fs.existsSync(filePath)) return res.status(404).send('File not found');
 
   const startTime = parseFloat(req.query.start) || 0;
+  const sessionDir = path.join(TRANSCODE_DIR, id);
 
-  // Reuse existing session if not seeking
-  if (transcodeSessions[id] && !req.query.start) {
-    const manifestPath = path.join(transcodeSessions[id].dir, 'manifest.m3u8');
-    clearTimeout(transcodeSessions[id].timeout);
-    transcodeSessions[id].timeout = setTimeout(() => cleanupSession(id), 120000);
-    if (fs.existsSync(manifestPath)) {
-      res.set({ 'Content-Type': 'application/vnd.apple.mpegurl', 'Cache-Control': 'no-cache' });
-      return res.sendFile(manifestPath);
+  // Ensure session dir stays within transcode directory
+  if (!path.resolve(sessionDir).startsWith(path.resolve(TRANSCODE_DIR) + path.sep)) {
+    return res.status(400).send('Invalid session');
+  }
+
+  const m3u8Path = path.join(sessionDir, 'stream.m3u8');
+  const duration = probeDuration(filePath);
+
+  // Reuse existing session if same seek offset (hls.js reloads manifest for live streams)
+  if (transcodeSessions[id]) {
+    const sameSeek = (transcodeSessions[id].seekOffset || 0) === startTime;
+    if (sameSeek && fs.existsSync(m3u8Path) && fs.statSync(m3u8Path).size > 0) {
+      clearTimeout(transcodeSessions[id].timeout);
+      transcodeSessions[id].timeout = setTimeout(() => cleanupSession(id), 120000);
+      res.set({
+        'Content-Type': 'application/vnd.apple.mpegurl', 'Cache-Control': 'no-cache',
+        'X-Total-Duration': String(duration), 'X-Seek-Offset': String(transcodeSessions[id].seekOffset || 0),
+      });
+      return res.sendFile(m3u8Path);
     }
   }
 
-  // Kill existing session
+  // Kill existing session for this ID
   if (transcodeSessions[id]) {
     try { transcodeSessions[id].process.kill('SIGTERM'); } catch {}
     clearTimeout(transcodeSessions[id].timeout);
     delete transcodeSessions[id];
   }
 
+  // Limit concurrent transcode sessions
+  if (Object.keys(transcodeSessions).length >= MAX_TRANSCODE_SESSIONS) {
+    return res.status(503).send('Too many active transcode sessions');
+  }
+
   // Probe on-demand if not yet cached
   if (!probeCache[filePath]) await probeFileAsync(filePath);
 
-  const sessionDir = path.join(TRANSCODE_DIR, id);
   // Clean old segments on every new session start
   try {
     if (fs.existsSync(sessionDir)) {
@@ -1177,36 +1218,32 @@ app.get('/hls/:id/master.m3u8', async (req, res) => {
   } catch {}
   if (!fs.existsSync(sessionDir)) fs.mkdirSync(sessionDir, { recursive: true });
 
-  const duration = probeDuration(filePath);
-  const manifestPath = path.join(sessionDir, 'manifest.m3u8');
-
-  // Generate manifest for remaining duration from seek position
-  if (duration > 0) {
-    generateManifest(duration, startTime, HLS_SEG_DURATION, sessionDir);
-  }
-
-  // Store seek offset so progress tracking knows the real position
-  console.log(`[HLS] Starting ffmpeg for ${id.slice(0,8)} at ${startTime.toFixed(1)}s`);
+  const mode = getStreamMode(filePath);
+  console.log(`[HLS] Starting ${mode} for ${id.slice(0,8)} at ${startTime.toFixed(1)}s`);
   startFfmpeg(id, filePath, sessionDir, startTime, 0);
 
   // Store the seek offset on the session
   if (transcodeSessions[id]) transcodeSessions[id].seekOffset = startTime;
 
-  if (fs.existsSync(manifestPath)) {
-    res.set({ 'Content-Type': 'application/vnd.apple.mpegurl', 'Cache-Control': 'no-cache' });
-    return res.sendFile(manifestPath);
-  }
-
-  // Fallback: wait for ffmpeg's m3u8 if duration probe failed
-  const m3u8Path = path.join(sessionDir, 'stream.m3u8');
+  // Wait for ffmpeg to produce its m3u8 with real segment durations
   let waited = 0;
   const poll = setInterval(() => {
     waited += 200;
-    if (fs.existsSync(m3u8Path) && fs.statSync(m3u8Path).size > 0) {
-      clearInterval(poll);
-      res.set({ 'Content-Type': 'application/vnd.apple.mpegurl', 'Cache-Control': 'no-cache' });
-      res.sendFile(m3u8Path);
-    } else if (waited > 60000) {
+    try {
+      if (fs.existsSync(m3u8Path) && fs.statSync(m3u8Path).size > 0) {
+        const content = fs.readFileSync(m3u8Path, 'utf-8');
+        // Wait until at least one EXTINF entry exists (ffmpeg has written a real segment)
+        if (content.includes('#EXTINF:')) {
+          clearInterval(poll);
+          res.set({
+            'Content-Type': 'application/vnd.apple.mpegurl', 'Cache-Control': 'no-cache',
+            'X-Total-Duration': String(duration), 'X-Seek-Offset': String(startTime),
+          });
+          return res.sendFile(m3u8Path);
+        }
+      }
+    } catch {}
+    if (waited > 60000) {
       clearInterval(poll);
       res.status(504).send('Transcode startup timeout');
     }
@@ -1216,8 +1253,23 @@ app.get('/hls/:id/master.m3u8', async (req, res) => {
 app.get('/hls/:id/:segment', (req, res) => {
   const id = req.params.id;
   const segName = req.params.segment;
+
+  // Validate segment name — only allow expected HLS patterns
+  if (!/^(seg_\d+\.ts|stream\.m3u8)$/.test(segName)) {
+    return res.status(400).send('Invalid segment name');
+  }
+  // Validate session ID exists
+  if (!transcodeSessions[id] && !id.match(/^[a-zA-Z0-9_=-]+$/)) {
+    return res.status(400).send('Invalid session');
+  }
+
   const sessionDir = path.join(TRANSCODE_DIR, id);
   const segPath = path.join(sessionDir, segName);
+
+  // Ensure resolved path stays within transcode directory
+  if (!path.resolve(segPath).startsWith(path.resolve(TRANSCODE_DIR) + path.sep)) {
+    return res.status(400).send('Invalid path');
+  }
 
   // Reset timeout
   if (transcodeSessions[id]) {
@@ -1270,6 +1322,7 @@ app.get('/hls/:id/:segment', (req, res) => {
 let sseClients = [];
 
 app.get('/api/events', (req, res) => {
+  if (sseClients.length >= 50) return res.status(503).send('Too many connections');
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
@@ -1311,8 +1364,12 @@ function setupWatchers() {
 }
 
 // ── Serve frontend ─────────────────────────────────────────────────────
-app.get('/', (_req, res) => res.sendFile(path.join(__dirname, 'index.html')));
-app.use(express.static(__dirname));
+app.get('/', (_req, res) => {
+  let html = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf-8');
+  html = html.replace('</head>', `<script>window.__ADMIN_TOKEN="${adminToken}";</script></head>`);
+  res.type('html').send(html);
+});
+app.get('/hls.min.js', (_req, res) => res.sendFile(path.join(__dirname, 'hls.min.js')));
 
 // ── Start server ───────────────────────────────────────────────────────
 function getLocalIP() {
@@ -1327,7 +1384,7 @@ function getLocalIP() {
 
 // ── Scan endpoint ───────────────────────────────────────────────────────
 let scanRunning = false;
-app.post('/api/scan', async (_req, res) => {
+app.post('/api/scan', requireAdmin, async (_req, res) => {
   if (scanRunning) return res.json({ ok: false, message: 'Scan already in progress' });
   scanRunning = true;
   res.json({ ok: true, message: 'Scan started' });
@@ -1355,7 +1412,7 @@ app.post('/api/scan', async (_req, res) => {
 });
 
 // ── Restart endpoint ────────────────────────────────────────────────────
-app.post('/api/restart', (_req, res) => {
+app.post('/api/restart', requireAdmin, (_req, res) => {
   res.json({ ok: true });
   setTimeout(() => {
     Object.keys(transcodeSessions).forEach(cleanupSession);
