@@ -16,7 +16,7 @@ const PROBE_CACHE_FILE = path.join(DATA_DIR, 'probe_cache.json');
 const OMDB_CACHE_FILE = path.join(DATA_DIR, 'omdb_cache.json');
 const OMDB_POSTER_DIR = path.join(DATA_DIR, 'posters');
 const OMDB_API_KEY = '4882f1b4';
-const OMDB_BASE_URL = 'http://www.omdbapi.com/';
+const OMDB_BASE_URL = 'https://www.omdbapi.com/';
 const SUPPORTED_EXT = ['.mp4', '.mkv', '.avi'];
 const SUBTITLE_EXT = ['.srt', '.vtt'];
 const POSTER_EXT = ['.jpg', '.jpeg', '.png', '.webp'];
@@ -428,6 +428,47 @@ function normalizeTitle(title) {
     .trim();
 }
 
+// Generate apostrophe variations for titles stripped of punctuation
+// e.g. "charlie wilsons war" -> ["charlie wilson's war"]
+// e.g. "dont mess with the zohan" -> ["don't mess with the zohan"]
+function apostropheVariations(title) {
+  const contractions = {
+    'dont': "don't", 'wont': "won't", 'cant': "can't", 'didnt': "didn't",
+    'isnt': "isn't", 'wasnt': "wasn't", 'arent': "aren't", 'werent': "weren't",
+    'wouldnt': "wouldn't", 'couldnt': "couldn't", 'shouldnt': "shouldn't",
+    'hasnt': "hasn't", 'havent': "haven't", 'hadnt': "hadn't",
+    'theyre': "they're", 'youre': "you're", 'were': "we're",
+    'im': "I'm", 'ive': "I've", 'youve': "you've", 'theyve': "they've",
+    'youll': "you'll", 'theyll': "they'll", 'well': "we'll", 'ill': "I'll",
+    'its': "it's", 'hes': "he's", 'shes': "she's", 'whos': "who's",
+    'whats': "what's", 'thats': "that's", 'theres': "there's",
+  };
+  const skip = new Set(['the','this','his','has','was','is','as','us','its','yes','plus',
+    'does','goes','makes','takes','comes','gives','lives','moves','uses','alias',
+    'christmas','campus','bus','focus','bonus','genius','status','virus','corpus',
+    'mess','less','boss','loss','miss','kiss','cross','dress','press','stress','class','glass','grass','pass']);
+  const results = [];
+  // Try contractions
+  let contracted = title;
+  for (const [from, to] of Object.entries(contractions)) {
+    contracted = contracted.replace(new RegExp('\\b' + from + '\\b', 'gi'), to);
+  }
+  if (contracted !== title) results.push(contracted);
+  // Try possessives: for each word ending in 's', try one at a time
+  // "wilsons" -> "wilson's" but NOT "demons" -> "demon's"
+  const words = title.split(/\s+/);
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i];
+    if (w.length < 3 || !w.match(/s$/i) || skip.has(w.toLowerCase())) continue;
+    // Only try words that look like possessives (proper-noun-ish or followed by a noun)
+    const variant = [...words];
+    variant[i] = w.slice(0, -1) + "'s";
+    const v = variant.join(' ');
+    if (!results.includes(v)) results.push(v);
+  }
+  return results;
+}
+
 async function fetchOmdbData(title, year, type) {
   const key = omdbCacheKey(title, year);
   if (omdbCache[key]) return omdbCache[key];
@@ -457,6 +498,26 @@ async function fetchOmdbData(title, year, type) {
           data.Response = 'True';
         }
       } catch {}
+    }
+    if (data.Response === 'False') {
+      // Try apostrophe variations (e.g. "wilsons" -> "wilson's", "dont" -> "don't")
+      const variations = apostropheVariations(title);
+      for (const variant of variations) {
+        try {
+          const vParams = new URLSearchParams({ apikey: OMDB_API_KEY, t: variant, plot: 'short' });
+          if (year) vParams.set('y', year);
+          if (type === 'show') vParams.set('type', 'series');
+          else if (type === 'movie') vParams.set('type', 'movie');
+          const vRaw = await httpGet(`${OMDB_BASE_URL}?${vParams.toString()}`);
+          const vData = JSON.parse(vRaw.toString('utf-8'));
+          if (vData.Response !== 'False') {
+            Object.assign(data, vData);
+            data.Response = 'True';
+            console.log(`  [omdb] Apostrophe fix: "${title}" -> "${variant}"`);
+            break;
+          }
+        } catch {}
+      }
     }
     if (data.Response === 'False') {
       // Cache the miss so we don't re-fetch
