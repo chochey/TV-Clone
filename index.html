@@ -1530,6 +1530,26 @@ V.addEventListener('timeupdate',()=>{
 });
 V.addEventListener('play',()=>{document.getElementById('playPauseBtn').innerHTML='&#10074;&#10074;';});
 V.addEventListener('pause',()=>{document.getElementById('playPauseBtn').innerHTML='&#9654;&#65039;';});
+
+// Stall recovery: if paused too long, the backend session times out and buffer runs dry
+let _stallTimer=null;
+V.addEventListener('waiting',()=>{
+  if(!currentMedia||V.paused)return;
+  // Give it 3 seconds to recover naturally before forcing a reload
+  clearTimeout(_stallTimer);
+  _stallTimer=setTimeout(()=>{
+    if(V.paused||!currentMedia)return;
+    // Check if we're truly stalled (readyState < HAVE_FUTURE_DATA)
+    if(V.readyState<3&&typeof window._hlsLoad==='function'){
+      console.log('[Stall Recovery] Buffer exhausted, reloading HLS from current position');
+      const currentTime=Math.round(V.currentTime+(window._hlsSeekOffset||0));
+      const audioParam=_currentAudioTrack!=null?'&audio='+_currentAudioTrack:'';
+      window._hlsSeekOffset=currentTime;
+      window._hlsLoad('/hls/'+currentMedia.id+'/master.m3u8?start='+currentTime+audioParam);
+    }
+  },3000);
+});
+V.addEventListener('playing',()=>{clearTimeout(_stallTimer);});
 V.addEventListener('ended',()=>{
   const next=getNextEp();
   if(next&&!_upNextCancelled){saveProg();playMedia(next.id);}
