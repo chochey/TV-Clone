@@ -283,8 +283,9 @@ select,input{font-family:inherit}
 .ctrl-divider{width:1px;height:18px;background:rgba(255,255,255,.12);margin:0 2px}
 .time-display{font-size:.75rem;color:var(--text-secondary);margin-left:6px;font-variant-numeric:tabular-nums}
 .ep-info{font-size:.7rem;color:var(--text-muted);margin-left:4px;white-space:nowrap}
-.speed-menu,.skip-menu,.sub-menu{position:absolute;bottom:100%;right:0;background:var(--bg-secondary);border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:6px 0;min-width:120px;box-shadow:0 8px 32px rgba(0,0,0,.5);display:none;z-index:20}
-.speed-menu.open,.skip-menu.open,.sub-menu.open{display:block}
+.speed-menu,.skip-menu,.sub-menu,.audio-menu{position:absolute;bottom:100%;right:0;background:var(--bg-secondary);border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:6px 0;min-width:120px;box-shadow:0 8px 32px rgba(0,0,0,.5);display:none;z-index:20}
+.speed-menu.open,.skip-menu.open,.sub-menu.open,.audio-menu.open{display:block}
+.audio-menu{min-width:180px;max-height:300px;overflow-y:auto}
 .menu-option{display:flex;align-items:center;justify-content:space-between;padding:7px 14px;font-size:.82rem;cursor:pointer;transition:background var(--transition)}
 .menu-option:hover{background:var(--bg-hover)}
 .menu-option.active{color:var(--accent);font-weight:600}
@@ -294,7 +295,33 @@ select,input{font-family:inherit}
 .volume-slider{width:70px;height:4px;-webkit-appearance:none;appearance:none;background:rgba(255,255,255,.2);border-radius:2px;outline:none}
 .volume-slider::-webkit-slider-thumb{-webkit-appearance:none;width:12px;height:12px;border-radius:50%;background:#fff;cursor:pointer}
 /* Up Next overlay */
-.up-next-overlay{position:absolute;bottom:100px;right:24px;z-index:15;background:rgba(0,0,0,.88);border:1px solid rgba(255,255,255,.15);border-radius:12px;padding:16px 20px;max-width:360px;display:none;backdrop-filter:blur(12px);animation:upNextSlide .4s ease}
+.skip-intro-box{position:absolute;bottom:60px;right:24px;z-index:16;border-radius:10px;background:rgba(0,0,0,.85);border:1px solid rgba(255,255,255,.25);backdrop-filter:blur(12px);box-shadow:0 8px 32px rgba(0,0,0,.6);opacity:0;pointer-events:none;transform:translateX(20px);transition:opacity .4s,transform .4s;overflow:hidden}
+.skip-intro-box.visible{opacity:1;pointer-events:auto;transform:translateX(0)}
+.skip-intro-box.fade-out{opacity:0;transform:translateX(20px);pointer-events:none}
+.skip-intro-inner{padding:14px 20px;display:flex;align-items:center;gap:14px}
+.skip-intro-text{font-size:.82rem;color:var(--text-secondary);white-space:nowrap}
+.skip-intro-text strong{color:#fff;font-weight:600;display:block;font-size:.9rem;margin-bottom:2px}
+.skip-intro-btn{padding:8px 20px;border-radius:6px;background:#fff;color:#000;font-size:.85rem;font-weight:700;cursor:pointer;border:none;transition:background .2s,transform .15s;white-space:nowrap}
+.skip-intro-btn:hover{background:var(--accent);color:#fff;transform:scale(1.04)}
+.skip-intro-progress{height:3px;background:rgba(255,255,255,.1);position:relative}
+.skip-intro-progress-bar{height:100%;background:var(--accent);transition:width .3s linear;width:0}
+.mark-intro-panel{position:absolute;bottom:60px;left:24px;z-index:16;background:rgba(0,0,0,.9);border:1px solid rgba(255,255,255,.2);border-radius:10px;padding:12px 16px;backdrop-filter:blur(12px);display:none;min-width:220px}
+.mark-intro-panel.visible{display:block}
+.mark-intro-panel h4{font-size:.8rem;font-weight:600;margin-bottom:8px;color:var(--text-secondary)}
+.mark-intro-row{display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:.82rem}
+.mark-intro-row span{min-width:40px;color:var(--text-secondary)}
+.mark-intro-row .time-val{color:#fff;font-weight:600;min-width:50px}
+.mark-intro-btn{padding:4px 10px;border-radius:5px;font-size:.75rem;font-weight:600;cursor:pointer;border:none;transition:background .2s}
+.mark-intro-btn.set{background:var(--accent);color:#fff}
+.mark-intro-btn.set:hover{background:#0090c0}
+.mark-intro-btn.save{background:var(--success);color:#fff;margin-top:6px;padding:6px 14px}
+.mark-intro-btn.save:hover{background:#28935f}
+.mark-intro-btn.cancel{background:rgba(255,255,255,.1);color:var(--text-secondary);margin-top:6px;padding:6px 14px}
+.mark-intro-btn.cancel:hover{background:rgba(255,255,255,.18)}
+.mark-intro-actions{display:flex;gap:6px;margin-top:8px}
+.mark-intro-check{display:flex;align-items:center;gap:6px;font-size:.75rem;color:var(--text-secondary);margin-top:8px}
+.mark-intro-check input{accent-color:var(--accent)}
+.up-next-overlay{position:absolute;bottom:60px;right:24px;z-index:15;background:rgba(0,0,0,.88);border:1px solid rgba(255,255,255,.15);border-radius:12px;padding:16px 20px;max-width:360px;display:none;backdrop-filter:blur(12px);animation:upNextSlide .4s ease}
 .up-next-overlay.visible{display:block}
 @keyframes upNextSlide{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
 .up-next-label{font-size:.7rem;text-transform:uppercase;letter-spacing:1px;color:var(--text-muted);margin-bottom:6px}
@@ -389,16 +416,33 @@ select,input{font-family:inherit}
   </div>
   <div class="player-video-wrapper" id="videoWrapper">
     <video id="videoElement" preload="metadata"></video>
-    <div class="up-next-overlay" id="upNextOverlay">
-      <div class="up-next-label">Up Next</div>
-      <div class="up-next-title" id="upNextTitle"></div>
-      <div class="up-next-ep" id="upNextEp"></div>
-      <div class="up-next-actions">
-        <button class="up-next-play" id="upNextPlayBtn" onclick="playNextEp()">Play Now</button>
-        <button class="up-next-cancel" onclick="cancelUpNext()">Cancel</button>
-      </div>
-      <div class="up-next-countdown" id="upNextCountdown"></div>
+  </div>
+  <div class="mark-intro-panel" id="markIntroPanel">
+    <h4>Mark Intro Timestamps</h4>
+    <div class="mark-intro-row"><span>Start:</span><span class="time-val" id="markIntroStart">--:--</span><button class="mark-intro-btn set" onclick="markIntroPoint('start')">Set to current</button></div>
+    <div class="mark-intro-row"><span>End:</span><span class="time-val" id="markIntroEnd">--:--</span><button class="mark-intro-btn set" onclick="markIntroPoint('end')">Set to current</button></div>
+    <label class="mark-intro-check"><input type="checkbox" id="markIntroApplyShow" checked>Apply to all episodes of this show</label>
+    <div class="mark-intro-actions">
+      <button class="mark-intro-btn save" onclick="saveMarkedIntro()">Save</button>
+      <button class="mark-intro-btn cancel" onclick="toggleMarkIntro()">Cancel</button>
     </div>
+  </div>
+  <div class="up-next-overlay" id="upNextOverlay">
+    <div class="up-next-label">Up Next</div>
+    <div class="up-next-title" id="upNextTitle"></div>
+    <div class="up-next-ep" id="upNextEp"></div>
+    <div class="up-next-actions">
+      <button class="up-next-play" id="upNextPlayBtn" onclick="playNextEp()">Play Now</button>
+      <button class="up-next-cancel" onclick="cancelUpNext()">Cancel</button>
+    </div>
+    <div class="up-next-countdown" id="upNextCountdown"></div>
+  </div>
+  <div class="skip-intro-box" id="skipIntroBox">
+    <div class="skip-intro-inner">
+      <div class="skip-intro-text"><strong>Intro playing</strong><span id="skipIntroLabel">Skip to continue</span></div>
+      <button class="skip-intro-btn" onclick="skipIntro()">Skip Intro</button>
+    </div>
+    <div class="skip-intro-progress"><div class="skip-intro-progress-bar" id="skipIntroProgress"></div></div>
   </div>
   <div class="player-controls">
     <div class="progress-container" id="progressContainer">
@@ -420,10 +464,13 @@ select,input{font-family:inherit}
         <div class="ctrl-divider"></div>
         <div class="ctrl-btn-wrap"><button class="ctrl-btn" onclick="toggleMenu('speedMenu',event)" id="speedBtn" style="font-size:.72rem;font-weight:700">1x</button><div class="speed-menu" id="speedMenu"><div class="menu-option" onclick="setSpd(.5)">0.5x</div><div class="menu-option" onclick="setSpd(.75)">0.75x</div><div class="menu-option active" onclick="setSpd(1)">1x</div><div class="menu-option" onclick="setSpd(1.25)">1.25x</div><div class="menu-option" onclick="setSpd(1.5)">1.5x</div><div class="menu-option" onclick="setSpd(2)">2x</div></div></div>
         <div class="ctrl-divider"></div>
+        <div class="ctrl-btn-wrap"><button class="ctrl-btn" onclick="toggleMenu('audioMenu',event)" id="audioBtn" title="Audio Track" style="font-size:.72rem;font-weight:700">AUD</button><div class="audio-menu" id="audioMenu"><div class="menu-option active" onclick="setAudioTrack(-1)">Default</div></div></div>
+        <div class="ctrl-divider"></div>
         <div class="ctrl-btn-wrap"><button class="ctrl-btn" onclick="toggleMenu('subMenu',event)" id="subBtn" title="Subtitles" style="font-size:.72rem;font-weight:700">CC</button><div class="sub-menu" id="subMenu"><div class="menu-option active" onclick="setSub(-1)">Off</div></div></div>
         <div class="ctrl-divider"></div>
         <div class="volume-wrapper"><button class="ctrl-btn" id="volumeBtn" onclick="toggleMute()">&#128266;</button><input class="volume-slider" type="range" min="0" max="1" step="0.05" value="1" id="volumeSlider" oninput="setVol(this.value)"></div>
         <button class="ctrl-btn" onclick="togglePiP()" title="PiP" id="pipBtn">&#128247;</button>
+        <button class="ctrl-btn" onclick="toggleMarkIntro()" title="Mark Intro" id="markIntroBtn" style="font-size:.72rem;font-weight:700;display:none">INTRO</button>
         <button class="ctrl-btn" onclick="toggleFS()" title="Fullscreen">&#x26F6;</button>
       </div>
     </div>
@@ -1062,8 +1109,156 @@ function setSub(idx){
   closeMenus();
 }
 
+// Audio track selection
+let _currentAudioTrack=null; // null = default (first track)
+
+function buildAudioMenu(){
+  const menu=document.getElementById('audioMenu');
+  let html='<div class="menu-option active" onclick="setAudioTrack(-1)">Default</div>';
+  const audioWrap=document.getElementById('audioBtn').closest('.ctrl-btn-wrap');
+  const audioDivider=audioWrap?audioWrap.nextElementSibling:null;
+  if(currentMedia&&currentMedia.audioTracks&&currentMedia.audioTracks.length>1){
+    currentMedia.audioTracks.forEach((t,i)=>{
+      html+=`<div class="menu-option" onclick="setAudioTrack(${t.index})">${esc(t.label)}</div>`;
+    });
+    if(audioWrap)audioWrap.style.display='';
+    if(audioDivider&&audioDivider.classList.contains('ctrl-divider'))audioDivider.style.display='';
+  } else {
+    if(audioWrap)audioWrap.style.display='none';
+    if(audioDivider&&audioDivider.classList.contains('ctrl-divider'))audioDivider.style.display='none';
+  }
+  menu.innerHTML=html;
+  _currentAudioTrack=null;
+}
+
+function setAudioTrack(streamIndex){
+  if(streamIndex===-1) streamIndex=null;
+  if(streamIndex===_currentAudioTrack){closeMenus();return;}
+  _currentAudioTrack=streamIndex;
+  // Update menu active state
+  const opts=document.querySelectorAll('#audioMenu .menu-option');
+  opts.forEach((e,i)=>{
+    if(i===0) e.classList.toggle('active',streamIndex===null);
+    else if(currentMedia&&currentMedia.audioTracks) e.classList.toggle('active',currentMedia.audioTracks[i-1]&&currentMedia.audioTracks[i-1].index===streamIndex);
+  });
+  // Restart HLS with new audio track — keep current playback position
+  if(currentMedia){
+    const currentTime=V.currentTime+(window._hlsSeekOffset||0);
+    const audioParam=streamIndex!==null?'&audio='+streamIndex:'';
+    const hlsUrl='/hls/'+currentMedia.id+'/master.m3u8?start='+currentTime+audioParam;
+    window._hlsLoad(hlsUrl);
+  }
+  closeMenus();
+}
+
+// Skip Intro
+let _skipSegments=null;
+let _markIntroStart=null,_markIntroEnd=null;
+
+async function loadSkipSegments(id){
+  _skipSegments=null;_skipIntroDismissed=false;
+  document.getElementById('skipIntroBox').classList.remove('visible','fade-out');
+  try{
+    const res=await fetch('/api/skip-segments/'+id);
+    const data=await res.json();
+    if(data&&data.intro){
+      _skipSegments=data;
+      console.log('[SkipIntro] Loaded:',data.intro.start+'s -',data.intro.end+'s');
+    }
+  }catch(e){console.error('[SkipIntro] Load error:',e);}
+  // Show mark intro button for TV shows
+  const btn=document.getElementById('markIntroBtn');
+  if(btn) btn.style.display=(currentMedia&&currentMedia.type==='show')?'':'none';
+}
+
+const SKIP_INTRO_LEAD=2; // show popup this many seconds before intro starts
+let _skipIntroDismissed=false;
+
+function checkSkipIntro(){
+  if(!_skipSegments||!_skipSegments.intro||_skipIntroDismissed) return;
+  const t=V.currentTime+(window._hlsSeekOffset||0);
+  const box=document.getElementById('skipIntroBox');
+  const introStart=_skipSegments.intro.start;
+  const introEnd=_skipSegments.intro.end;
+  const introDuration=introEnd-introStart;
+
+  // Show popup SKIP_INTRO_LEAD seconds before intro, keep visible through intro
+  if(t>=(introStart-SKIP_INTRO_LEAD)&&t<introEnd){
+    box.classList.add('visible');
+    box.classList.remove('fade-out');
+    // Update progress bar during the intro
+    if(t>=introStart){
+      const pct=Math.min(100,((t-introStart)/introDuration)*100);
+      document.getElementById('skipIntroProgress').style.width=pct+'%';
+      document.getElementById('skipIntroLabel').textContent='Intro · '+Math.ceil(introEnd-t)+'s left';
+    } else {
+      document.getElementById('skipIntroProgress').style.width='0%';
+      document.getElementById('skipIntroLabel').textContent='Intro starting...';
+    }
+  } else if(t>=introEnd&&box.classList.contains('visible')){
+    // Intro ended — fade out
+    box.classList.add('fade-out');
+    setTimeout(()=>{box.classList.remove('visible','fade-out');},500);
+  }
+}
+
+function skipIntro(){
+  if(!_skipSegments||!_skipSegments.intro) return;
+  const targetTime=_skipSegments.intro.end;
+  const offset=window._hlsSeekOffset||0;
+  const box=document.getElementById('skipIntroBox');
+  _skipIntroDismissed=true;
+  box.classList.add('fade-out');
+  setTimeout(()=>{box.classList.remove('visible','fade-out');},400);
+  // If target is beyond current HLS range, do a full seek reload
+  if(targetTime>offset+(V.duration||0)){
+    const hlsUrl='/hls/'+currentMedia.id+'/master.m3u8?start='+targetTime;
+    window._hlsLoad(hlsUrl);
+  } else {
+    V.currentTime=targetTime-offset;
+  }
+}
+
+function toggleMarkIntro(){
+  const panel=document.getElementById('markIntroPanel');
+  if(panel.classList.contains('visible')){
+    panel.classList.remove('visible');
+    _markIntroStart=null;_markIntroEnd=null;
+  } else {
+    _markIntroStart=_skipSegments?.intro?.start||null;
+    _markIntroEnd=_skipSegments?.intro?.end||null;
+    updateMarkIntroDisplay();
+    panel.classList.add('visible');
+  }
+}
+
+function markIntroPoint(which){
+  const t=Math.round(V.currentTime+(window._hlsSeekOffset||0));
+  if(which==='start') _markIntroStart=t;
+  else _markIntroEnd=t;
+  updateMarkIntroDisplay();
+}
+
+function updateMarkIntroDisplay(){
+  document.getElementById('markIntroStart').textContent=_markIntroStart!==null?fmt(_markIntroStart):'--:--';
+  document.getElementById('markIntroEnd').textContent=_markIntroEnd!==null?fmt(_markIntroEnd):'--:--';
+}
+
+async function saveMarkedIntro(){
+  if(_markIntroStart===null||_markIntroEnd===null){alert('Set both start and end times');return;}
+  if(_markIntroEnd<=_markIntroStart){alert('End must be after start');return;}
+  const applyToShow=document.getElementById('markIntroApplyShow').checked;
+  await fetch('/api/skip-segments/'+currentMedia.id,{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({intro:{start:_markIntroStart,end:_markIntroEnd},applyToShow})
+  });
+  _skipSegments={intro:{start:_markIntroStart,end:_markIntroEnd}};
+  document.getElementById('markIntroPanel').classList.remove('visible');
+  console.log('[SkipIntro] Saved intro:',_markIntroStart+'s -',_markIntroEnd+'s',applyToShow?'(all episodes)':'(this episode)');
+}
+
 function toggleMenu(id,e){e.stopPropagation();const m=document.getElementById(id);const o=m.classList.contains('open');closeMenus();if(!o)m.classList.add('open');}
-function closeMenus(){document.querySelectorAll('.speed-menu,.skip-menu,.sub-menu').forEach(m=>m.classList.remove('open'));}
+function closeMenus(){document.querySelectorAll('.speed-menu,.skip-menu,.sub-menu,.audio-menu').forEach(m=>m.classList.remove('open'));}
 document.addEventListener('click',e=>{if(!e.target.closest('.ctrl-btn-wrap'))closeMenus();});
 
 async function togglePiP(){try{if(document.pictureInPictureElement)await document.exitPictureInPicture();else if(V.requestPictureInPicture)await V.requestPictureInPicture();}catch{}}
@@ -1137,7 +1332,8 @@ function playMedia(id){
 
   startProgressSync();showControls();resetUpNext();
   modal.addEventListener('mousemove',showControls);
-  updateEpBtns();buildSubMenu();
+  updateEpBtns();buildSubMenu();buildAudioMenu();
+  loadSkipSegments(id);
   if(profileQueue.includes(id))removeFromQueue(id);
 }
 
@@ -1147,6 +1343,10 @@ function closePlayer(){
   V.removeAttribute('src');V.load();
   V.querySelectorAll('track').forEach(t=>t.remove());
   modal.classList.remove('active');currentMedia=null;
+  _skipSegments=null;_currentAudioTrack=null;_markIntroStart=null;_markIntroEnd=null;_skipIntroDismissed=false;
+  document.getElementById('skipIntroBox').classList.remove('visible','fade-out');
+  document.getElementById('markIntroPanel').classList.remove('visible');
+  document.getElementById('markIntroBtn').style.display='none';
   clearInterval(progressSaveInterval);modal.removeEventListener('mousemove',showControls);
   closeMenus();fetchLib();fetchQueue();
 }
@@ -1159,7 +1359,7 @@ function toggleFS(){document.fullscreenElement?document.exitFullscreen():modal.r
 // Click vs double-click on video wrapper (manual detection for reliability)
 let _clickCount=0,_clickTimer=null;
 document.getElementById('videoWrapper').addEventListener('click',function(e){
-  if(e.target.closest('.player-controls,.player-top-bar,.up-next-overlay'))return;
+  if(e.target.closest('.player-controls,.player-top-bar,.up-next-overlay,.skip-intro-box,.mark-intro-panel'))return;
   _clickCount++;
   if(_clickCount===1){
     _clickTimer=setTimeout(()=>{_clickCount=0;V.paused?V.play():V.pause();},300);
@@ -1317,6 +1517,8 @@ V.addEventListener('timeupdate',()=>{
   const p=(cur/total)*100;
   document.getElementById('progressFilled').style.width=p+'%';
   document.getElementById('timeDisplay').textContent=fmt(cur)+' / '+fmt(total);
+  // Skip intro check
+  checkSkipIntro();
   // Up Next: show overlay near end of episode
   const remaining=total-cur;
   if(remaining<=UP_NEXT_SHOW_AT&&remaining>0&&getNextEp()&&!_upNextCancelled){

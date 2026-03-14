@@ -207,6 +207,10 @@ let probeCacheDirty = false;
 const AUDIO_PROBE_CACHE_FILE = path.join(DATA_DIR, 'audio_probe_cache.json');
 let audioProbeCache = loadJSON(AUDIO_PROBE_CACHE_FILE, {});
 let audioProbeCacheDirty = false;
+// Full audio tracks cache: filePath -> [{ index, codec, lang, title, channels, channelLayout }]
+const AUDIO_TRACKS_CACHE_FILE = path.join(DATA_DIR, 'audio_tracks_cache.json');
+let audioTracksCache = loadJSON(AUDIO_TRACKS_CACHE_FILE, {});
+let audioTracksCacheDirty = false;
 // Audio codecs browsers can play natively
 const BROWSER_AUDIO_CODECS = new Set(['aac', 'mp3', 'opus', 'vorbis', 'flac']);
 
@@ -252,10 +256,10 @@ function getStreamMode(filePath) {
 
 function probeFileAsync(filePath) {
   return new Promise((resolve) => {
-    // Probe both video and audio codecs in one call
+    // Probe video, audio codecs + full audio stream details in one call
     const proc = spawn('ffprobe', [
       '-v', 'error',
-      '-show_entries', 'stream=codec_name,codec_type',
+      '-show_entries', 'stream=index,codec_name,codec_type,channels,channel_layout:stream_tags=language,title',
       '-of', 'json', filePath,
     ]);
     let out = '';
@@ -269,6 +273,17 @@ function probeFileAsync(filePath) {
         probeCacheDirty = true;
         audioProbeCache[filePath] = audioCodec;
         audioProbeCacheDirty = true;
+        // Build full audio tracks list
+        const audioStreams = streams.filter(s => s.codec_type === 'audio');
+        audioTracksCache[filePath] = audioStreams.map(s => ({
+          index: s.index,
+          codec: s.codec_name,
+          lang: s.tags?.language || '',
+          title: s.tags?.title || '',
+          channels: s.channels || 0,
+          channelLayout: s.channel_layout || '',
+        }));
+        audioTracksCacheDirty = true;
         resolve(videoCodec);
       } catch {
         probeCache[filePath] = 'unknown';
@@ -324,8 +339,8 @@ async function backgroundProbe() {
   for (const item of lib) {
     const fp = fileIndex[item.id];
     if (!fp) continue;
-    // Video + audio codec probe
-    if (!probeCache[fp] || !audioProbeCache[fp]) {
+    // Video + audio codec + audio tracks probe
+    if (!probeCache[fp] || !audioProbeCache[fp] || !audioTracksCache[fp]) {
       await probeFileAsync(fp);
       codecCount++;
       await new Promise(r => setTimeout(r, 50));
@@ -342,12 +357,14 @@ async function backgroundProbe() {
     if ((codecCount + subCount) % 100 === 0 && (codecCount + subCount) > 0) {
       if (probeCacheDirty) { saveJSON(PROBE_CACHE_FILE, probeCache); probeCacheDirty = false; }
       if (audioProbeCacheDirty) { saveJSON(AUDIO_PROBE_CACHE_FILE, audioProbeCache); audioProbeCacheDirty = false; }
+      if (audioTracksCacheDirty) { saveJSON(AUDIO_TRACKS_CACHE_FILE, audioTracksCache); audioTracksCacheDirty = false; }
       if (subProbeCacheDirty) { saveJSON(SUB_PROBE_CACHE_FILE, subProbeCache); subProbeCacheDirty = false; }
       console.log(`  [probe] ${codecCount} codec + ${subCount} subtitle probes...`);
     }
   }
   if (probeCacheDirty) { saveJSON(PROBE_CACHE_FILE, probeCache); probeCacheDirty = false; }
   if (audioProbeCacheDirty) { saveJSON(AUDIO_PROBE_CACHE_FILE, audioProbeCache); audioProbeCacheDirty = false; }
+  if (audioTracksCacheDirty) { saveJSON(AUDIO_TRACKS_CACHE_FILE, audioTracksCache); audioTracksCacheDirty = false; }
   if (subProbeCacheDirty) { saveJSON(SUB_PROBE_CACHE_FILE, subProbeCache); subProbeCacheDirty = false; }
   if (codecCount > 0 || subCount > 0) console.log(`  [probe] Complete — ${codecCount} codec + ${subCount} subtitle probes.`);
   bgProbeRunning = false;
@@ -665,6 +682,20 @@ function scanLibrary() {
       const streamMode = getStreamMode(fullPath);
       const codec = probeCache[fullPath] || null;
 
+      // Audio tracks from probe cache
+      const langCodes = { eng: 'English', spa: 'Spanish', fre: 'French', ger: 'German', ita: 'Italian',
+        por: 'Portuguese', jpn: 'Japanese', kor: 'Korean', chi: 'Chinese', zho: 'Chinese',
+        rus: 'Russian', ara: 'Arabic', hin: 'Hindi', dut: 'Dutch', nld: 'Dutch', swe: 'Swedish',
+        nor: 'Norwegian', dan: 'Danish', fin: 'Finnish', pol: 'Polish', tur: 'Turkish',
+        gre: 'Greek', ell: 'Greek', heb: 'Hebrew', tha: 'Thai', und: 'Unknown' };
+      const rawAudioTracks = audioTracksCache[fullPath] || [];
+      const audioTracks = rawAudioTracks.map((t, i) => {
+        const langName = langCodes[t.lang] || (t.lang ? t.lang.toUpperCase() : '');
+        const chLabel = t.channels === 6 ? '5.1' : t.channels === 8 ? '7.1' : t.channels === 2 ? 'Stereo' : t.channels === 1 ? 'Mono' : (t.channels ? t.channels + 'ch' : '');
+        const parts = [t.title || langName || `Track ${i + 1}`, chLabel, t.codec ? t.codec.toUpperCase() : ''].filter(Boolean);
+        return { index: t.index, label: parts.join(' · '), lang: t.lang, channels: t.channels, codec: t.codec };
+      });
+
       library.push({
         id, title, year, type, filename: file,
         folder: folder.label || path.basename(dirPath),
@@ -675,6 +706,7 @@ function scanLibrary() {
           ...subs.map(s => ({ id: s.id, label: s.label, url: `/subtitle/${s.id}` })),
           ...embeddedSubs,
         ],
+        audioTracks,
         showName, epInfo, fileSize, genres,
         streamMode, codec,
       });
@@ -845,6 +877,221 @@ app.post('/api/queue/remove', (req, res) => {
   data.queue = (data.queue || []).filter(q => q !== id);
   saveProfileData(profileId, data);
   res.json({ ok: true, queue: data.queue });
+});
+
+// ── Skip Intro / Outro ──────────────────────────────────────────────────
+const SKIP_SEGMENTS_FILE = path.join(DATA_DIR, 'skip_segments.json');
+let skipSegments = loadJSON(SKIP_SEGMENTS_FILE, {});
+// Format: { showName: { intro: { start, end }, outro: { start, end } }, mediaId: { intro: { start, end } } }
+
+// IntroDB integration — fetch intro timestamps from community database
+const INTRODB_CACHE_FILE = path.join(DATA_DIR, 'introdb_cache.json');
+let introDbCache = loadJSON(INTRODB_CACHE_FILE, {});
+
+function fetchIntroDb(imdbId, season, episode) {
+  return new Promise((resolve) => {
+    const cacheKey = `${imdbId}_s${season}e${episode}`;
+    if (introDbCache[cacheKey]) return resolve(introDbCache[cacheKey]);
+    const url = `https://api.introdb.app/segments?imdb_id=${imdbId}&season=${season}&episode=${episode}`;
+    const req = https.get(url, { timeout: 5000 }, (resp) => {
+      let data = '';
+      resp.on('data', d => data += d);
+      resp.on('end', () => {
+        try {
+          const json = JSON.parse(data);
+          introDbCache[cacheKey] = json;
+          saveJSON(INTRODB_CACHE_FILE, introDbCache);
+          resolve(json);
+        } catch { resolve(null); }
+      });
+    });
+    req.on('error', () => resolve(null));
+    req.on('timeout', () => { req.destroy(); resolve(null); });
+  });
+}
+
+app.get('/api/skip-segments/:id', async (req, res) => {
+  const id = req.params.id;
+  // Check for per-episode override first, then show-level
+  if (skipSegments[id]) return res.json(skipSegments[id]);
+  const lib = scanLibrary();
+  const item = lib.find(i => i.id === id);
+  if (item && item.showName && skipSegments['show:' + item.showName]) {
+    return res.json(skipSegments['show:' + item.showName]);
+  }
+
+  // Fallback: fetch from IntroDB using IMDB ID
+  if (item && item.type === 'show' && item.epInfo) {
+    const omdb = getOmdbForItem(item);
+    const imdbId = omdb?.imdbID;
+    if (imdbId) {
+      const introdb = await fetchIntroDb(imdbId, item.epInfo.season || 1, item.epInfo.episode || 1);
+      if (introdb?.intro?.start_sec != null && introdb?.intro?.end_sec != null) {
+        const result = { intro: { start: introdb.intro.start_sec, end: introdb.intro.end_sec }, source: 'introdb' };
+        // Also check recap and outro
+        if (introdb.recap?.start_sec != null) result.recap = { start: introdb.recap.start_sec, end: introdb.recap.end_sec };
+        if (introdb.outro?.start_sec != null) result.outro = { start: introdb.outro.start_sec, end: introdb.outro.end_sec };
+        return res.json(result);
+      }
+    }
+  }
+  res.json({});
+});
+
+app.post('/api/skip-segments/:id', (req, res) => {
+  const id = req.params.id;
+  const { intro, outro, applyToShow } = req.body;
+  const data = {};
+  if (intro && typeof intro.start === 'number' && typeof intro.end === 'number') data.intro = { start: intro.start, end: intro.end };
+  if (outro && typeof outro.start === 'number' && typeof outro.end === 'number') data.outro = { start: outro.start, end: outro.end };
+
+  if (applyToShow) {
+    // Apply to the whole show
+    const lib = scanLibrary();
+    const item = lib.find(i => i.id === id);
+    if (item && item.showName) {
+      skipSegments['show:' + item.showName] = data;
+    }
+  } else {
+    skipSegments[id] = data;
+  }
+  saveJSON(SKIP_SEGMENTS_FILE, skipSegments);
+  res.json({ ok: true });
+});
+
+app.delete('/api/skip-segments/:id', (req, res) => {
+  delete skipSegments[req.params.id];
+  saveJSON(SKIP_SEGMENTS_FILE, skipSegments);
+  res.json({ ok: true });
+});
+
+// Auto-detect intro by comparing audio energy patterns between episodes
+// Extracts low-res PCM audio, computes per-second energy, finds common high-energy segments
+function getAudioEnergy(filePath, durationSec) {
+  return new Promise((resolve) => {
+    // Extract mono 8kHz signed 16-bit PCM
+    const proc = spawn('ffmpeg', [
+      '-hide_banner', '-loglevel', 'error',
+      '-t', String(durationSec), '-i', filePath,
+      '-ac', '1', '-ar', '8000', '-f', 's16le', '-acodec', 'pcm_s16le', '-',
+    ]);
+    const chunks = [];
+    proc.stdout.on('data', d => chunks.push(d));
+    proc.on('close', () => {
+      const buf = Buffer.concat(chunks);
+      const samples = new Int16Array(buf.buffer, buf.byteOffset, Math.floor(buf.length / 2));
+      // Compute RMS energy per second (8000 samples per second)
+      const SAMPLES_PER_SEC = 8000;
+      const energyPerSec = [];
+      for (let i = 0; i < samples.length; i += SAMPLES_PER_SEC) {
+        const end = Math.min(i + SAMPLES_PER_SEC, samples.length);
+        let sum = 0;
+        for (let j = i; j < end; j++) sum += samples[j] * samples[j];
+        energyPerSec.push(Math.sqrt(sum / (end - i)));
+      }
+      resolve(energyPerSec);
+    });
+    proc.on('error', () => resolve([]));
+  });
+}
+
+// Compare energy patterns using normalized cross-correlation
+function crossCorrelateEnergy(e1, e2, winLen) {
+  if (e1.length < winLen || e2.length < winLen) return { score: 0, offset1: 0, offset2: 0 };
+  let bestScore = 0, bestOff1 = 0, bestOff2 = 0;
+
+  for (let o1 = 0; o1 + winLen <= e1.length; o1 += 2) {
+    const w1 = e1.slice(o1, o1 + winLen);
+    const mean1 = w1.reduce((a, b) => a + b, 0) / winLen;
+    const std1 = Math.sqrt(w1.reduce((a, b) => a + (b - mean1) ** 2, 0) / winLen) || 1;
+
+    for (let o2 = 0; o2 + winLen <= e2.length; o2 += 2) {
+      const w2 = e2.slice(o2, o2 + winLen);
+      const mean2 = w2.reduce((a, b) => a + b, 0) / winLen;
+      const std2 = Math.sqrt(w2.reduce((a, b) => a + (b - mean2) ** 2, 0) / winLen) || 1;
+
+      // Normalized cross-correlation
+      let ncc = 0;
+      for (let i = 0; i < winLen; i++) ncc += (w1[i] - mean1) * (w2[i] - mean2);
+      ncc /= (winLen * std1 * std2);
+
+      if (ncc > bestScore) {
+        bestScore = ncc;
+        bestOff1 = o1;
+        bestOff2 = o2;
+      }
+    }
+  }
+  return { score: bestScore, offset1: bestOff1, offset2: bestOff2 };
+}
+
+async function detectIntroForShow(showName) {
+  const lib = scanLibrary();
+  const episodes = lib.filter(i => i.type === 'show' && i.showName === showName);
+  if (episodes.length < 2) return null;
+
+  // Sort by season/episode and pick non-pilot episodes
+  episodes.sort((a, b) => {
+    const sa = a.epInfo?.season || 0, sb = b.epInfo?.season || 0;
+    const ea = a.epInfo?.episode || 0, eb = b.epInfo?.episode || 0;
+    return sa - sb || ea - eb;
+  });
+  const candidates = episodes.slice(1, 6); // skip pilot, use eps 2-6
+  if (candidates.length < 2) return null;
+
+  const SCAN_DURATION = 240; // scan first 4 minutes
+  console.log(`[SkipIntro] Analyzing "${showName}" (${candidates.length} episodes)...`);
+
+  const energies = [];
+  for (const ep of candidates.slice(0, 3)) {
+    const fp = fileIndex[ep.id];
+    if (!fp) continue;
+    const energy = await getAudioEnergy(fp, SCAN_DURATION);
+    if (energy.length > 10) energies.push(energy);
+  }
+  if (energies.length < 2) return null;
+
+  // Try different window sizes for intro length
+  const WINDOW_SIZES = [15, 20, 25, 30, 40, 50, 60];
+  let best = { score: 0, start: 0, end: 0 };
+
+  for (const winLen of WINDOW_SIZES) {
+    const result = crossCorrelateEnergy(energies[0], energies[1], winLen);
+    if (result.score > best.score) {
+      // Verify with 3rd episode if available
+      let verified = energies.length < 3;
+      if (energies.length >= 3) {
+        const verify = crossCorrelateEnergy(energies[0], energies[2], winLen);
+        if (verify.score > 0.6) verified = true;
+      }
+      if (verified && result.score > 0.65) {
+        best = { score: result.score, start: result.offset1, end: result.offset1 + winLen };
+      }
+    }
+  }
+
+  if (best.score > 0.65) {
+    console.log(`[SkipIntro] Detected intro for "${showName}": ${best.start}s - ${best.end}s (confidence: ${(best.score * 100).toFixed(1)}%)`);
+    return { start: best.start, end: best.end };
+  }
+  console.log(`[SkipIntro] No intro detected for "${showName}" (best score: ${(best.score * 100).toFixed(1)}%)`);
+  return null;
+}
+
+// API to trigger intro detection for a show
+app.post('/api/detect-intro/:id', async (req, res) => {
+  const lib = scanLibrary();
+  const item = lib.find(i => i.id === req.params.id);
+  if (!item || !item.showName) return res.status(400).json({ error: 'Not a TV show episode' });
+
+  const intro = await detectIntroForShow(item.showName);
+  if (intro) {
+    skipSegments['show:' + item.showName] = { intro };
+    saveJSON(SKIP_SEGMENTS_FILE, skipSegments);
+    res.json({ ok: true, intro, showName: item.showName });
+  } else {
+    res.json({ ok: false, message: 'Could not detect intro pattern' });
+  }
 });
 
 // ── Genres ──────────────────────────────────────────────────────────────
@@ -1472,7 +1719,7 @@ function cleanupSession(id, keepFiles) {
   delete transcodeSessions[id];
 }
 
-function startFfmpeg(id, filePath, sessionDir, seekTime, startSegNum) {
+function startFfmpeg(id, filePath, sessionDir, seekTime, startSegNum, audioStreamIndex) {
   // Kill existing process but keep files (segments already produced are still valid)
   if (transcodeSessions[id]) {
     try { transcodeSessions[id].process.kill('SIGTERM'); } catch {}
@@ -1484,6 +1731,14 @@ function startFfmpeg(id, filePath, sessionDir, seekTime, startSegNum) {
   const ffmpegArgs = ['-hide_banner', '-loglevel', 'error', '-threads', '0'];
   if (seekTime > 0) ffmpegArgs.push('-ss', String(seekTime));
   ffmpegArgs.push('-i', filePath, '-muxdelay', '0', '-muxpreload', '0');
+
+  // Map specific video and audio streams
+  ffmpegArgs.push('-map', '0:v:0');
+  if (audioStreamIndex !== undefined && audioStreamIndex !== null) {
+    ffmpegArgs.push('-map', `0:${audioStreamIndex}`);
+  } else {
+    ffmpegArgs.push('-map', '0:a:0');
+  }
 
   if (mode === 'remux' || mode === 'remux-audio') {
     ffmpegArgs.push('-c:v', 'copy', '-c:a', 'aac', '-ac', '2', '-b:a', '192k',
@@ -1537,6 +1792,7 @@ app.get('/hls/:id/master.m3u8', async (req, res) => {
   if (!filePath || !fs.existsSync(filePath)) return res.status(404).send('File not found');
 
   const startTime = parseFloat(req.query.start) || 0;
+  const audioTrack = req.query.audio !== undefined ? parseInt(req.query.audio, 10) : null;
   const sessionDir = path.join(TRANSCODE_DIR, id);
 
   // Ensure session dir stays within transcode directory
@@ -1547,10 +1803,11 @@ app.get('/hls/:id/master.m3u8', async (req, res) => {
   const m3u8Path = path.join(sessionDir, 'stream.m3u8');
   const duration = probeDuration(filePath);
 
-  // Reuse existing session if same seek offset (hls.js reloads manifest for live streams)
+  // Reuse existing session if same seek offset and same audio track
   if (transcodeSessions[id]) {
     const sameSeek = (transcodeSessions[id].seekOffset || 0) === startTime;
-    if (sameSeek && fs.existsSync(m3u8Path) && fs.statSync(m3u8Path).size > 0) {
+    const sameAudio = (transcodeSessions[id].audioTrack || null) === audioTrack;
+    if (sameSeek && sameAudio && fs.existsSync(m3u8Path) && fs.statSync(m3u8Path).size > 0) {
       // Verify m3u8 actually has segment data (not just a header from a killed session)
       try {
         const content = fs.readFileSync(m3u8Path, 'utf-8');
@@ -1595,11 +1852,14 @@ app.get('/hls/:id/master.m3u8', async (req, res) => {
   if (!fs.existsSync(sessionDir)) fs.mkdirSync(sessionDir, { recursive: true });
 
   const mode = getStreamMode(filePath);
-  console.log(`[HLS] Starting ${mode} for ${id.slice(0,8)} at ${startTime.toFixed(1)}s`);
-  startFfmpeg(id, filePath, sessionDir, startTime, 0);
+  console.log(`[HLS] Starting ${mode} for ${id.slice(0,8)} at ${startTime.toFixed(1)}s${audioTrack !== null ? ` audio:${audioTrack}` : ''}`);
+  startFfmpeg(id, filePath, sessionDir, startTime, 0, audioTrack);
 
-  // Store the seek offset on the session
-  if (transcodeSessions[id]) transcodeSessions[id].seekOffset = startTime;
+  // Store the seek offset and audio track on the session
+  if (transcodeSessions[id]) {
+    transcodeSessions[id].seekOffset = startTime;
+    transcodeSessions[id].audioTrack = audioTrack;
+  }
 
   // Wait for ffmpeg to produce its m3u8 with real segment durations
   let waited = 0;
@@ -1841,6 +2101,15 @@ app.listen(PORT, '0.0.0.0', () => {
   const probed = library.filter(i => i.codec).length;
   console.log(`  Total media: ${library.length} file(s) (${probed} probed)`);
   console.log('');
+
+  // Start background probe for audio tracks (and any missing codec data)
+  setTimeout(() => {
+    console.log('[Probe] Starting background audio tracks probe...');
+    backgroundProbe().then(() => {
+      invalidateLibrary();
+      console.log('[Probe] Background probe complete');
+    });
+  }, 3000);
 
   // Start background sprite generation for all movies
   setTimeout(() => queueAllSpriteGen(), 5000);
