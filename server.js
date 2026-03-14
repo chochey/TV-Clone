@@ -37,6 +37,25 @@ try {
 
 app.use(express.json());
 
+// Gzip compression for JSON responses
+const zlib = require('zlib');
+app.use((req, res, next) => {
+  const ae = req.headers['accept-encoding'] || '';
+  if (!ae.includes('gzip')) return next();
+  const origJson = res.json.bind(res);
+  res.json = function(data) {
+    const body = JSON.stringify(data);
+    if (body.length < 1024) return origJson(data);
+    zlib.gzip(Buffer.from(body), { level: 1 }, (err, compressed) => {
+      if (err) return origJson(data);
+      res.set('Content-Encoding', 'gzip');
+      res.set('Content-Type', 'application/json');
+      res.end(compressed);
+    });
+  };
+  next();
+});
+
 // Debug: log HLS requests
 app.use((req, res, next) => {
   if (req.path.startsWith('/hls')) console.log(`[HLS-REQ] ${req.method} ${req.originalUrl}`);
@@ -54,7 +73,7 @@ if (!fs.existsSync(OMDB_POSTER_DIR)) fs.mkdirSync(OMDB_POSTER_DIR, { recursive: 
 
 const DEFAULT_CONFIG = {
   folders: [],
-  profiles: [{ id: 'default', name: 'User', pin: '', avatar: '#00a4dc' }],
+  profiles: [{ id: 'default', name: 'User', pin: '', avatar: '#00a4dc', role: 'admin', password: '' }],
   genres: {},  // fileId -> [genre strings]
 };
 
@@ -77,6 +96,67 @@ if (!config.profiles || config.profiles.length === 0) {
   config.profiles = DEFAULT_CONFIG.profiles;
 }
 if (!config.genres) config.genres = {};
+
+// Ensure existing profiles have role and password fields
+for (const p of config.profiles) {
+  if (!p.role) p.role = 'admin'; // existing profiles default to admin
+  if (p.password === undefined) p.password = '';
+}
+
+// ── Password hashing (scrypt, no external deps) ─────────────────────────
+function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = crypto.scryptSync(password, salt, 64).toString('hex');
+  return `${salt}:${hash}`;
+}
+
+function verifyPassword(password, stored) {
+  if (!stored) return !password; // empty stored = no password set, only match empty input
+  const [salt, hash] = stored.split(':');
+  if (!salt || !hash) return false;
+  const test = crypto.scryptSync(password, salt, 64).toString('hex');
+  return crypto.timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(test, 'hex'));
+}
+
+// ── Session management ──────────────────────────────────────────────────
+const sessions = new Map(); // token -> { profileId, role, createdAt }
+const SESSION_MAX_AGE = 30 * 24 * 60 * 60 * 1000; // 30 days
+
+function createSession(profileId, role) {
+  const token = crypto.randomBytes(32).toString('hex');
+  sessions.set(token, { profileId, role, createdAt: Date.now() });
+  return token;
+}
+
+function getSession(req) {
+  // Check cookie first, then header
+  const cookieHeader = req.headers.cookie || '';
+  const match = cookieHeader.match(/session=([a-f0-9]{64})/);
+  const token = match ? match[1] : req.headers['x-session-token'];
+  if (!token) return null;
+  const session = sessions.get(token);
+  if (!session) return null;
+  if (Date.now() - session.createdAt > SESSION_MAX_AGE) {
+    sessions.delete(token);
+    return null;
+  }
+  return session;
+}
+
+function requireAuth(req, res, next) {
+  const session = getSession(req);
+  if (!session) return res.status(401).json({ error: 'Login required' });
+  req.session = session;
+  next();
+}
+
+function requireAdminSession(req, res, next) {
+  const session = getSession(req);
+  if (!session) return res.status(401).json({ error: 'Login required' });
+  if (session.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
+  req.session = session;
+  next();
+}
 
 // Per-profile data: progress, history, queue, watched
 function sanitizeProfileId(profileId) {
@@ -784,31 +864,80 @@ function scanLibrary() {
 
 app.get('/api/profiles', (_req, res) => {
   res.json(config.profiles.map(p => ({
-    id: p.id, name: p.name, hasPin: !!p.pin, avatar: p.avatar,
+    id: p.id, name: p.name, hasPin: !!p.pin, hasPassword: !!p.password, avatar: p.avatar, role: p.role || 'user',
   })));
 });
 
-app.post('/api/profiles', (req, res) => {
-  const { name, pin, avatar } = req.body;
-  if (!name) return res.status(400).json({ error: 'Name required' });
-  const id = crypto.randomBytes(6).toString('hex');
-  const profile = { id, name, pin: pin || '', avatar: avatar || '#00a4dc' };
-  config.profiles.push(profile);
-  saveJSON(CONFIG_FILE, config);
-  res.json({ ok: true, profile: { id, name, hasPin: !!pin, avatar } });
+// ── Auth: Login / Logout ────────────────────────────────────────────────
+const loginAttempts = {}; // ip -> { count, lastAttempt }
+app.post('/api/login', (req, res) => {
+  const ip = req.ip;
+  const now = Date.now();
+  if (!loginAttempts[ip]) loginAttempts[ip] = { count: 0, lastAttempt: 0 };
+  if (now - loginAttempts[ip].lastAttempt > 300000) loginAttempts[ip].count = 0;
+  if (loginAttempts[ip].count >= 10) return res.status(429).json({ error: 'Too many attempts. Try again in 5 minutes.' });
+
+  const { profileId, password } = req.body;
+  const profile = config.profiles.find(p => p.id === profileId);
+  if (!profile) return res.status(404).json({ error: 'Profile not found' });
+
+  loginAttempts[ip].lastAttempt = now;
+
+  // If profile has no password, allow login without one
+  if (!profile.password) {
+    const token = createSession(profile.id, profile.role || 'user');
+    res.cookie('session', token, { httpOnly: true, maxAge: SESSION_MAX_AGE, sameSite: 'lax' });
+    return res.json({ ok: true, role: profile.role || 'user', profileId: profile.id });
+  }
+
+  if (!verifyPassword(password || '', profile.password)) {
+    loginAttempts[ip].count++;
+    return res.status(403).json({ error: 'Incorrect password' });
+  }
+
+  const token = createSession(profile.id, profile.role || 'user');
+  res.cookie('session', token, { httpOnly: true, maxAge: SESSION_MAX_AGE, sameSite: 'lax' });
+  res.json({ ok: true, role: profile.role || 'user', profileId: profile.id });
 });
 
-app.put('/api/profiles/:id', (req, res) => {
+app.post('/api/logout', (_req, res) => {
+  const cookieHeader = _req.headers.cookie || '';
+  const match = cookieHeader.match(/session=([a-f0-9]{64})/);
+  if (match) sessions.delete(match[1]);
+  res.clearCookie('session');
+  res.json({ ok: true });
+});
+
+app.get('/api/me', (req, res) => {
+  const session = getSession(req);
+  if (!session) return res.json({ loggedIn: false });
+  const profile = config.profiles.find(p => p.id === session.profileId);
+  res.json({ loggedIn: true, profileId: session.profileId, role: session.role, name: profile?.name, avatar: profile?.avatar });
+});
+
+app.post('/api/profiles', requireAdminSession, (req, res) => {
+  const { name, pin, avatar, password, role } = req.body;
+  if (!name) return res.status(400).json({ error: 'Name required' });
+  const id = crypto.randomBytes(6).toString('hex');
+  const profile = { id, name, pin: pin || '', avatar: avatar || '#00a4dc', role: role || 'user', password: password ? hashPassword(password) : '' };
+  config.profiles.push(profile);
+  saveJSON(CONFIG_FILE, config);
+  res.json({ ok: true, profile: { id, name, hasPin: !!pin, hasPassword: !!password, avatar, role: profile.role } });
+});
+
+app.put('/api/profiles/:id', requireAdminSession, (req, res) => {
   const p = config.profiles.find(p => p.id === req.params.id);
   if (!p) return res.status(404).json({ error: 'Profile not found' });
   if (req.body.name) p.name = req.body.name;
   if (req.body.pin !== undefined) p.pin = req.body.pin;
   if (req.body.avatar) p.avatar = req.body.avatar;
+  if (req.body.role) p.role = req.body.role;
+  if (req.body.password !== undefined) p.password = req.body.password ? hashPassword(req.body.password) : '';
   saveJSON(CONFIG_FILE, config);
   res.json({ ok: true });
 });
 
-app.delete('/api/profiles/:id', (req, res) => {
+app.delete('/api/profiles/:id', requireAdminSession, (req, res) => {
   if (config.profiles.length <= 1) return res.status(400).json({ error: 'Must keep at least one profile' });
   config.profiles = config.profiles.filter(p => p.id !== req.params.id);
   saveJSON(CONFIG_FILE, config);
@@ -846,18 +975,54 @@ app.get('/api/library', (req, res) => {
   const lib = scanLibrary();
   const profileData = loadProfileData(profileId);
 
-  // Merge per-profile progress, watched status, and OMDB metadata
+  // Slim response: exclude heavy fields not needed for browsing
   const result = lib.map(item => {
     const omdb = getOmdbForItem(item);
     return {
-      ...item,
+      id: item.id,
+      title: item.title,
+      year: item.year,
+      type: item.type,
+      showName: item.showName,
+      epInfo: item.epInfo,
+      fileSize: item.fileSize,
+      streamMode: item.streamMode,
+      codec: item.codec,
+      posterUrl: item.posterUrl,
+      genres: item.genres,
+      folder: item.folder,
+      hasAudioTracks: item.audioTracks && item.audioTracks.length > 1,
+      hasSubs: item.subtitles && item.subtitles.length > 0,
       progress: profileData.progress[item.id] || { currentTime: 0, duration: 0, percent: 0 },
       watched: !!profileData.watched[item.id],
-      ...(omdb || {}),
+      omdbTitle: omdb?.omdbTitle,
+      omdbYear: omdb?.omdbYear,
+      plot: omdb?.plot,
+      rated: omdb?.rated,
+      genre: omdb?.genre,
+      imdbRating: omdb?.imdbRating,
+      imdbID: omdb?.imdbID,
+      omdbPosterUrl: omdb?.omdbPosterUrl || omdb?.posterUrl,
     };
   });
 
   res.json(result);
+});
+
+// Full item details (for playback — includes subtitles, audioTracks, videoUrl)
+app.get('/api/item/:id', (req, res) => {
+  const lib = scanLibrary();
+  const item = lib.find(m => m.id === req.params.id);
+  if (!item) return res.status(404).json({ error: 'Not found' });
+  const omdb = getOmdbForItem(item);
+  const profileId = req.query.profile || 'default';
+  const profileData = loadProfileData(profileId);
+  res.json({
+    ...item,
+    progress: profileData.progress[item.id] || { currentTime: 0, duration: 0, percent: 0 },
+    watched: !!profileData.watched[item.id],
+    ...(omdb || {}),
+  });
 });
 
 app.post('/api/progress', (req, res) => {
@@ -867,7 +1032,7 @@ app.post('/api/progress', (req, res) => {
   const data = loadProfileData(profileId);
 
   const percent = duration > 0 ? Math.round((currentTime / duration) * 100) : 0;
-  data.progress[id] = { currentTime: currentTime || 0, duration: duration || 0, percent };
+  data.progress[id] = { currentTime: currentTime || 0, duration: duration || 0, percent, updatedAt: Date.now() };
 
   // Auto-mark as watched if >92%
   if (percent > 92) data.watched[id] = true;
@@ -2061,9 +2226,12 @@ function setupWatchers() {
 }
 
 // ── Serve frontend ─────────────────────────────────────────────────────
-app.get('/', (_req, res) => {
+app.get('/', (req, res) => {
   let html = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf-8');
-  html = html.replace('</head>', `<script>window.__ADMIN_TOKEN="${adminToken}";</script></head>`);
+  // Inject admin token (for legacy admin endpoints) and session info
+  const session = getSession(req);
+  const sessionJson = session ? JSON.stringify({ profileId: session.profileId, role: session.role }) : 'null';
+  html = html.replace('</head>', `<script>window.__ADMIN_TOKEN="${adminToken}";window.__SESSION=${sessionJson};</script></head>`);
   res.type('html').send(html);
 });
 app.get('/hls.min.js', (_req, res) => res.sendFile(path.join(__dirname, 'hls.min.js')));

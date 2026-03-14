@@ -37,6 +37,40 @@ select,input{font-family:inherit}
 .profile-item{display:flex;flex-direction:column;align-items:center;gap:0;cursor:pointer}
 .profile-add{background:rgba(255,255,255,.06);border:2px dashed rgba(255,255,255,.15);font-size:2rem;color:var(--text-muted)}
 .pin-input{padding:10px 16px;border-radius:8px;background:var(--bg-card);border:1px solid rgba(255,255,255,.12);color:var(--text-primary);font-size:1.2rem;text-align:center;letter-spacing:.3em;width:160px;outline:none}
+/* Login form */
+.login-form{display:flex;flex-direction:column;align-items:center;gap:12px;margin-top:12px;width:260px}
+.login-form input{width:100%;padding:10px 14px;border-radius:8px;background:var(--bg-card);border:1px solid rgba(255,255,255,.15);color:var(--text-primary);font-size:.95rem;outline:none}
+.login-form input:focus{border-color:var(--accent)}
+.login-form button{width:100%;padding:10px;border-radius:8px;background:var(--accent);color:#fff;border:none;font-size:.95rem;font-weight:600;cursor:pointer}
+.login-form button:hover{opacity:.9}
+.login-error{color:#e5484d;font-size:.8rem;min-height:1.2em}
+.login-back{color:var(--text-muted);font-size:.8rem;cursor:pointer;margin-top:4px}
+.login-back:hover{color:var(--text-primary)}
+.system-section{display:none}
+.system-section.visible{display:block}
+/* Custom modal dialog */
+.modal-overlay{position:fixed;inset:0;z-index:3000;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center;backdrop-filter:blur(4px);opacity:0;pointer-events:none;transition:opacity .2s}
+.modal-overlay.active{opacity:1;pointer-events:auto}
+.modal-dialog{background:var(--bg-secondary);border-radius:16px;padding:28px 32px;min-width:340px;max-width:420px;box-shadow:0 20px 60px rgba(0,0,0,.5);border:1px solid rgba(255,255,255,.08);transform:scale(.95);transition:transform .2s}
+.modal-overlay.active .modal-dialog{transform:scale(1)}
+.modal-dialog h2{font-size:1.2rem;font-weight:700;margin-bottom:20px;text-align:center}
+.modal-field{margin-bottom:16px}
+.modal-field label{display:block;font-size:.8rem;color:var(--text-secondary);margin-bottom:6px;font-weight:600;text-transform:uppercase;letter-spacing:.05em}
+.modal-field input,.modal-field select{width:100%;padding:10px 14px;border-radius:8px;background:var(--bg-card);border:1px solid rgba(255,255,255,.12);color:var(--text-primary);font-size:.95rem;outline:none;box-sizing:border-box}
+.modal-field input:focus,.modal-field select:focus{border-color:var(--accent)}
+.modal-field select{cursor:pointer;appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23999' d='M6 8L1 3h10z'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center}
+.modal-field select option{background:var(--bg-card);color:var(--text-primary)}
+.modal-field .field-hint{font-size:.75rem;color:var(--text-muted);margin-top:4px}
+.modal-actions{display:flex;gap:10px;margin-top:22px}
+.modal-actions button{flex:1;padding:10px;border-radius:8px;font-size:.9rem;font-weight:600;cursor:pointer;border:none;transition:opacity .15s}
+.modal-actions .btn-confirm{background:var(--accent);color:#fff}
+.modal-actions .btn-confirm:hover{opacity:.9}
+.modal-actions .btn-cancel{background:rgba(255,255,255,.08);color:var(--text-secondary)}
+.modal-actions .btn-cancel:hover{background:rgba(255,255,255,.12)}
+.avatar-picker{display:flex;gap:8px;flex-wrap:wrap}
+.avatar-option{width:36px;height:36px;border-radius:10px;cursor:pointer;border:2px solid transparent;transition:transform .15s,border-color .15s}
+.avatar-option:hover{transform:scale(1.1)}
+.avatar-option.selected{border-color:#fff;transform:scale(1.1)}
 .pin-input:focus{border-color:var(--accent)}
 .pin-error{color:var(--danger);font-size:.8rem;margin-top:4px}
 
@@ -361,6 +395,9 @@ select,input{font-family:inherit}
 <!-- Profile screen -->
 <div class="profile-screen" id="profileScreen"><h1>Who's watching?</h1><p>Select your profile</p><div class="profiles-grid" id="profilesGrid"></div></div>
 
+<!-- Reusable modal -->
+<div class="modal-overlay" id="modalOverlay" onclick="if(event.target===this)closeModal()"></div>
+
 <button class="hamburger" onclick="toggleSidebar()">&#9776;</button>
 <div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleSidebar()"></div>
 
@@ -375,10 +412,12 @@ select,input{font-family:inherit}
       <button class="nav-item" data-view="continue" onclick="nav('continue',this)"><span class="nav-icon">&#9654;&#65039;</span> Continue Watching</button>
       <button class="nav-item" data-view="queue" onclick="nav('queue',this)"><span class="nav-icon">&#128203;</span> Up Next <span class="nav-badge" id="queueBadge" style="display:none">0</span></button>
       <button class="nav-item" data-view="history" onclick="nav('history',this)"><span class="nav-icon">&#128337;</span> History</button>
+      <div id="systemSection" class="system-section">
       <div class="nav-label">System</div>
       <button class="nav-item" data-view="settings" onclick="nav('settings',this)"><span class="nav-icon">&#9881;&#65039;</span> Media Folders</button>
       <button class="nav-item" onclick="scanLibrary()"><span class="nav-icon">&#128269;</span> Scan Library</button>
       <button class="nav-item" onclick="restartServer()"><span class="nav-icon">&#128260;</span> Restart Server</button>
+      </div>
     </nav>
     <div class="sidebar-profile" onclick="switchProfile()">
       <div class="sidebar-profile-avatar" id="sidebarAvatar"></div>
@@ -484,9 +523,15 @@ select,input{font-family:inherit}
 let library=[],currentView='home',currentMedia=null,controlsTimeout=null,progressSaveInterval=null;
 let folderConfig=[],activeProfile=null,profileQueue=[];
 let skipInterval=10,playbackSpeed=1,watchFilter='all';
+let currentRole='user'; // 'admin' or 'user'
 const ADMIN_TOKEN=window.__ADMIN_TOKEN||'';
 function adminHeaders(){return{'Content-Type':'application/json','X-Admin-Token':ADMIN_TOKEN};}
 function adminFetch(url,opts={}){opts.headers={...opts.headers,'X-Admin-Token':ADMIN_TOKEN};return fetch(url,opts);}
+
+function updateSystemVisibility(){
+  const el=document.getElementById('systemSection');
+  if(el){currentRole==='admin'?el.classList.add('visible'):el.classList.remove('visible');}
+}
 
 const V=document.getElementById('videoElement'),modal=document.getElementById('playerModal');
 const progContainer=document.getElementById('progressContainer');
@@ -501,61 +546,181 @@ async function loadProfiles(){
   return res.json();
 }
 
-async function showProfileScreen(){
+async function checkExistingSession(){
+  try{
+    const res=await fetch('/api/me');
+    const data=await res.json();
+    if(data.loggedIn){
+      activeProfile=data.profileId;
+      currentRole=data.role||'user';
+      return true;
+    }
+  }catch{}
+  return false;
+}
+
+async function showProfileScreen(skipSessionCheck){
+  // Check for existing session first (skip if user clicked "Switch")
+  if(!skipSessionCheck&&await checkExistingSession()){
+    document.getElementById('profileScreen').style.display='none';
+    document.getElementById('appContainer').style.display='';
+    updateSystemVisibility();
+    const profiles=await loadProfiles();
+    const p=profiles.find(x=>x.id===activeProfile);
+    if(p){
+      document.getElementById('sidebarAvatar').style.background=p.avatar;
+      document.getElementById('sidebarAvatar').textContent=p.name[0].toUpperCase();
+      document.getElementById('sidebarName').textContent=p.name;
+    }
+    await fetchLib();
+    await fetchQueue();
+    setupSSE();
+    return;
+  }
+
   const profiles=await loadProfiles();
+  window._profilesCache=profiles;
   document.getElementById('profileScreen').style.display='';
   document.getElementById('appContainer').style.display='none';
   const grid=document.getElementById('profilesGrid');
-  grid.innerHTML=profiles.map(p=>`
-    <div class="profile-item" onclick="selectProfile('${p.id}',${p.hasPin})">
-      <div class="profile-avatar" style="background:${p.avatar}">${p.name[0].toUpperCase()}</div>
-      <div class="profile-name">${esc(p.name)}${p.hasPin?' 🔒':''}</div>
-    </div>`).join('')+`
+  // Only show Add button if there's an active admin session, or no profiles have passwords yet
+  const anyPasswordSet=profiles.some(p=>p.hasPassword);
+  const showAdd=!anyPasswordSet||currentRole==='admin';
+  const addBtn=showAdd?`
     <div class="profile-item" onclick="createProfile()">
       <div class="profile-avatar profile-add">+</div>
       <div class="profile-name" style="color:var(--text-muted)">Add</div>
+    </div>`:'';
+  grid.innerHTML=profiles.map(p=>`
+    <div class="profile-item" onclick="${p.hasPassword?`showLogin('${p.id}')`:`doLogin('${p.id}','')`}">
+      <div class="profile-avatar" style="background:${p.avatar}">${p.name[0].toUpperCase()}</div>
+      <div class="profile-name">${esc(p.name)}${p.hasPassword?' &#128274;':''}</div>
+    </div>`).join('')+addBtn;
+
+  // If only 1 profile without password, auto-login on initial page load only
+  if(!skipSessionCheck&&profiles.length===1&&!profiles[0].hasPassword){doLogin(profiles[0].id,'');}
+}
+
+function showLogin(profileId){
+  const profiles=window._profilesCache||[];
+  const p=profiles.find(x=>x.id===profileId);
+  if(p&&!p.hasPassword){doLogin(profileId,'');return;}
+
+  const grid=document.getElementById('profilesGrid');
+  grid.innerHTML=`
+    <div style="display:flex;flex-direction:column;align-items:center">
+      <div class="profile-avatar" style="background:${p?p.avatar:'#00a4dc'}">${p?p.name[0].toUpperCase():'?'}</div>
+      <div class="profile-name" style="margin-top:8px;font-size:1rem">${p?esc(p.name):''}</div>
+      <div class="login-form">
+        <input type="password" id="loginPassword" placeholder="Password" onkeydown="if(event.key==='Enter')doLogin('${profileId}',this.value)" autofocus>
+        <div class="login-error" id="loginError"></div>
+        <button onclick="doLogin('${profileId}',document.getElementById('loginPassword').value)">Sign In</button>
+        <div class="login-back" onclick="showProfileScreen()">&#8592; Back</div>
+      </div>
     </div>`;
-
-  // If only 1 profile without PIN, auto-select
-  if(profiles.length===1&&!profiles[0].hasPin){selectProfile(profiles[0].id,false);}
+  setTimeout(()=>{const el=document.getElementById('loginPassword');if(el)el.focus();},100);
 }
 
-async function selectProfile(id,hasPin){
-  if(hasPin){
-    const pin=prompt('Enter PIN:');
-    if(!pin)return;
-    const res=await fetch(`/api/profiles/${id}/verify-pin`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pin})});
-    if(!res.ok){alert('Incorrect PIN');return;}
+async function doLogin(profileId,password){
+  try{
+    const res=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({profileId,password})});
+    const data=await res.json();
+    if(!res.ok){
+      const err=document.getElementById('loginError');
+      if(err)err.textContent=data.error||'Login failed';
+      return;
+    }
+    activeProfile=profileId;
+    currentRole=data.role||'user';
+    document.getElementById('profileScreen').style.display='none';
+    document.getElementById('appContainer').style.display='';
+    updateSystemVisibility();
+    const profiles=await loadProfiles();
+    const p=profiles.find(x=>x.id===profileId);
+    if(p){
+      document.getElementById('sidebarAvatar').style.background=p.avatar;
+      document.getElementById('sidebarAvatar').textContent=p.name[0].toUpperCase();
+      document.getElementById('sidebarName').textContent=p.name;
+    }
+    await fetchLib();
+    await fetchQueue();
+    setupSSE();
+  }catch(e){
+    const err=document.getElementById('loginError');
+    if(err)err.textContent='Connection error';
   }
-  activeProfile=id;
-  document.getElementById('profileScreen').style.display='none';
-  document.getElementById('appContainer').style.display='';
-  // Update sidebar profile display
-  const profiles=await loadProfiles();
-  const p=profiles.find(x=>x.id===id);
-  if(p){
-    document.getElementById('sidebarAvatar').style.background=p.avatar;
-    document.getElementById('sidebarAvatar').textContent=p.name[0].toUpperCase();
-    document.getElementById('sidebarName').textContent=p.name;
-  }
-  await fetchLib();
-  await fetchQueue();
-  setupSSE();
 }
 
-async function createProfile(){
-  const name=prompt('Profile name:');
-  if(!name)return;
-  const pin=prompt('Optional PIN (leave empty for none):');
-  const colors=['#00a4dc','#e5484d','#30a46c','#aa64ff','#f5a623','#e879f9','#38bdf8','#fb923c'];
-  const avatar=colors[Math.floor(Math.random()*colors.length)];
-  await fetch('/api/profiles',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,pin:pin||'',avatar})});
-  showProfileScreen();
+const AVATAR_COLORS=['#00a4dc','#e5484d','#30a46c','#aa64ff','#f5a623','#e879f9','#38bdf8','#fb923c'];
+let _selectedAvatar=AVATAR_COLORS[0];
+
+function closeModal(){
+  const overlay=document.getElementById('modalOverlay');
+  overlay.classList.remove('active');
+  setTimeout(()=>{overlay.innerHTML='';},200);
 }
 
-function switchProfile(){
+function openModal(html){
+  const overlay=document.getElementById('modalOverlay');
+  overlay.innerHTML=`<div class="modal-dialog">${html}</div>`;
+  requestAnimationFrame(()=>overlay.classList.add('active'));
+}
+
+function createProfile(){
+  _selectedAvatar=AVATAR_COLORS[Math.floor(Math.random()*AVATAR_COLORS.length)];
+  openModal(`
+    <h2>Create Profile</h2>
+    <div class="modal-field">
+      <label>Name</label>
+      <input type="text" id="modalName" placeholder="Enter name" autofocus>
+    </div>
+    <div class="modal-field">
+      <label>Password</label>
+      <input type="password" id="modalPassword" placeholder="Optional">
+      <div class="field-hint">Leave empty for no password</div>
+    </div>
+    <div class="modal-field">
+      <label>Role</label>
+      <select id="modalRole">
+        <option value="user">User — browse &amp; watch only</option>
+        <option value="admin">Admin — full system access</option>
+      </select>
+    </div>
+    <div class="modal-field">
+      <label>Avatar Color</label>
+      <div class="avatar-picker" id="avatarPicker">
+        ${AVATAR_COLORS.map(c=>`<div class="avatar-option${c===_selectedAvatar?' selected':''}" style="background:${c}" onclick="pickAvatar('${c}',this)"></div>`).join('')}
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="closeModal()">Cancel</button>
+      <button class="btn-confirm" onclick="submitCreateProfile()">Create</button>
+    </div>
+  `);
+  setTimeout(()=>{const el=document.getElementById('modalName');if(el)el.focus();},100);
+}
+
+function pickAvatar(color,el){
+  _selectedAvatar=color;
+  document.querySelectorAll('#avatarPicker .avatar-option').forEach(e=>e.classList.remove('selected'));
+  el.classList.add('selected');
+}
+
+async function submitCreateProfile(){
+  const name=document.getElementById('modalName').value.trim();
+  if(!name){document.getElementById('modalName').style.borderColor='#e5484d';return;}
+  const password=document.getElementById('modalPassword').value;
+  const role=document.getElementById('modalRole').value;
+  closeModal();
+  await adminFetch('/api/profiles',{method:'POST',headers:adminHeaders(),body:JSON.stringify({name,password:password||'',role,avatar:_selectedAvatar})});
+  showProfileScreen(true);
+}
+
+async function switchProfile(){
+  await fetch('/api/logout',{method:'POST'});
   activeProfile=null;
-  showProfileScreen();
+  currentRole='user';
+  showProfileScreen(true);
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -661,7 +826,7 @@ function renderHome(){
     const hf=folderConfig.length>0;
     return `<div class="empty-state"><div class="empty-icon">&#127916;</div><div class="empty-title">${hf?'No Media Found':'Welcome to Local Stream'}</div><div class="empty-text">${hf?'No video files found in your linked folders.':'Get started by linking your media folders.'}</div><div style="margin-top:18px"><button class="btn btn-primary" onclick="nav('settings',document.querySelector('[data-view=settings]'))">&#9881;&#65039; ${hf?'Manage':'Add'} Folders</button></div></div>`;
   }
-  const cw=library.filter(m=>m.progress.percent>0&&m.progress.percent<95);
+  const cw=getContinueWatching();
   const movies=library.filter(m=>m.type==='movie');
   const shows=library.filter(m=>m.type==='show');
   const hero=cw.length>0?cw[0]:library[Math.floor(Math.random()*library.length)];
@@ -702,10 +867,27 @@ function renderGrid(type,label){
   return `<div class="section"><div class="section-header"><h2 class="section-title">${label} (${items.length})</h2></div><div class="grid">${items.map(card).join('')}</div></div>`;
 }
 
+// Deduplicate Continue Watching: for shows, only show the most recently watched episode per show
+function getContinueWatching(){
+  const inProgress=library.filter(m=>m.progress.percent>0&&m.progress.percent<95);
+  // Sort by most recently updated first
+  inProgress.sort((a,b)=>(b.progress.updatedAt||0)-(a.progress.updatedAt||0));
+  // Deduplicate shows: keep only the most recent episode per showName
+  const seen=new Set();
+  const result=[];
+  for(const item of inProgress){
+    if(item.type==='show'&&item.showName){
+      if(seen.has(item.showName))continue;
+      seen.add(item.showName);
+    }
+    result.push(item);
+  }
+  return result;
+}
+
 function renderContinue(){
-  const items=library.filter(m=>m.progress.percent>0&&m.progress.percent<95);
+  const items=getContinueWatching();
   if(!items.length)return '<div class="empty-state"><div class="empty-icon">&#9654;&#65039;</div><div class="empty-title">Nothing in Progress</div><div class="empty-text">Start watching something and it will appear here.</div></div>';
-  items.sort((a,b)=>b.progress.percent-a.progress.percent);
   return `<div class="section"><div class="section-header"><h2 class="section-title">Continue Watching</h2></div><div class="grid">${items.map(card).join('')}</div></div>`;
 }
 
@@ -1264,8 +1446,14 @@ document.addEventListener('click',e=>{if(!e.target.closest('.ctrl-btn-wrap'))clo
 async function togglePiP(){try{if(document.pictureInPictureElement)await document.exitPictureInPicture();else if(V.requestPictureInPicture)await V.requestPictureInPicture();}catch{}}
 if(!document.pictureInPictureEnabled){const b=document.getElementById('pipBtn');if(b)b.style.display='none';}
 
-function playMedia(id){
+async function playMedia(id){
   const item=library.find(m=>m.id===id);if(!item)return;
+  // Fetch full item details (subtitles, audioTracks, etc.)
+  try{
+    const res=await fetch(`/api/item/${id}?profile=${activeProfile}`);
+    const full=await res.json();
+    Object.assign(item,full);
+  }catch{}
   currentMedia=item;
   document.getElementById('playerTitle').textContent=item.title;
   if(typeof _clearThumbCache==='function')_clearThumbCache();
@@ -1337,8 +1525,8 @@ function playMedia(id){
   if(profileQueue.includes(id))removeFromQueue(id);
 }
 
-function closePlayer(){
-  saveProg();V.pause();resetUpNext();
+async function closePlayer(){
+  await saveProg();V.pause();resetUpNext();
   if(hlsInstance){hlsInstance.destroy();hlsInstance=null;}
   V.removeAttribute('src');V.load();
   V.querySelectorAll('track').forEach(t=>t.remove());
@@ -1579,7 +1767,7 @@ async function saveProg(){
   const cur=offset+V.currentTime;
   const total=offset+V.duration;
   try{await fetch('/api/progress',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:currentMedia.id,currentTime:cur,duration:total,profile:activeProfile})});
-  currentMedia.progress={currentTime:cur,duration:total,percent:Math.round((cur/total)*100)};}catch{}
+  currentMedia.progress={currentTime:cur,duration:total,percent:Math.round((cur/total)*100),updatedAt:Date.now()};}catch{}
 }
 
 // ══════════════════════════════════════════════════════════════════════
