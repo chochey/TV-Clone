@@ -412,6 +412,7 @@ select,input{font-family:inherit}
       <button class="nav-item" data-view="continue" onclick="nav('continue',this)"><span class="nav-icon">&#9654;&#65039;</span> Continue Watching</button>
       <button class="nav-item" data-view="queue" onclick="nav('queue',this)"><span class="nav-icon">&#128203;</span> Up Next <span class="nav-badge" id="queueBadge" style="display:none">0</span></button>
       <button class="nav-item" data-view="history" onclick="nav('history',this)"><span class="nav-icon">&#128337;</span> History</button>
+      <div id="customNavItems"></div>
       <div id="systemSection" class="system-section">
       <div class="nav-label">System</div>
       <button class="nav-item" data-view="settings" onclick="nav('settings',this)"><span class="nav-icon">&#9881;&#65039;</span> Media Folders</button>
@@ -524,9 +525,9 @@ let library=[],currentView='home',currentMedia=null,controlsTimeout=null,progres
 let folderConfig=[],activeProfile=null,profileQueue=[];
 let skipInterval=10,playbackSpeed=1,watchFilter='all';
 let currentRole='user'; // 'admin' or 'user'
-const ADMIN_TOKEN=window.__ADMIN_TOKEN||'';
-function adminHeaders(){return{'Content-Type':'application/json','X-Admin-Token':ADMIN_TOKEN};}
-function adminFetch(url,opts={}){opts.headers={...opts.headers,'X-Admin-Token':ADMIN_TOKEN};return fetch(url,opts);}
+// Admin auth is handled via HttpOnly cookie — no token in JS needed
+function adminHeaders(){return{'Content-Type':'application/json'};}
+function adminFetch(url,opts={}){opts.credentials='same-origin';return fetch(url,opts);}
 
 function updateSystemVisibility(){
   const el=document.getElementById('systemSection');
@@ -592,7 +593,7 @@ async function showProfileScreen(skipSessionCheck){
       <div class="profile-name" style="color:var(--text-muted)">Add</div>
     </div>`:'';
   grid.innerHTML=profiles.map(p=>`
-    <div class="profile-item" onclick="${p.hasPassword?`showLogin('${p.id}')`:`doLogin('${p.id}','')`}">
+    <div class="profile-item" onclick="${p.hasPassword?`showLogin('${escAttr(p.id)}')`:`doLogin('${escAttr(p.id)}','')`}">
       <div class="profile-avatar" style="background:${p.avatar}">${p.name[0].toUpperCase()}</div>
       <div class="profile-name">${esc(p.name)}${p.hasPassword?' &#128274;':''}</div>
     </div>`).join('')+addBtn;
@@ -612,9 +613,9 @@ function showLogin(profileId){
       <div class="profile-avatar" style="background:${p?p.avatar:'#00a4dc'}">${p?p.name[0].toUpperCase():'?'}</div>
       <div class="profile-name" style="margin-top:8px;font-size:1rem">${p?esc(p.name):''}</div>
       <div class="login-form">
-        <input type="password" id="loginPassword" placeholder="Password" onkeydown="if(event.key==='Enter')doLogin('${profileId}',this.value)" autofocus>
+        <input type="password" id="loginPassword" placeholder="Password" onkeydown="if(event.key==='Enter')doLogin('${escAttr(profileId)}',this.value)" autofocus>
         <div class="login-error" id="loginError"></div>
-        <button onclick="doLogin('${profileId}',document.getElementById('loginPassword').value)">Sign In</button>
+        <button onclick="doLogin('${escAttr(profileId)}',document.getElementById('loginPassword').value)">Sign In</button>
         <div class="login-back" onclick="showProfileScreen()">&#8592; Back</div>
       </div>
     </div>`;
@@ -632,9 +633,12 @@ async function doLogin(profileId,password){
     }
     activeProfile=profileId;
     currentRole=data.role||'user';
+    // Admin auth is now handled via HttpOnly cookie set by server
     document.getElementById('profileScreen').style.display='none';
     document.getElementById('appContainer').style.display='';
     updateSystemVisibility();
+    // Always reset to home view on login
+    nav('home',document.querySelector('[data-view="home"]'));
     const profiles=await loadProfiles();
     const p=profiles.find(x=>x.id===profileId);
     if(p){
@@ -713,7 +717,75 @@ async function submitCreateProfile(){
   const role=document.getElementById('modalRole').value;
   closeModal();
   await adminFetch('/api/profiles',{method:'POST',headers:adminHeaders(),body:JSON.stringify({name,password:password||'',role,avatar:_selectedAvatar})});
-  showProfileScreen(true);
+  if(currentView==='settings')renderSettings();
+  else showProfileScreen(true);
+}
+
+async function editAccount(profileId){
+  const profiles=await loadProfiles();
+  const p=profiles.find(x=>x.id===profileId);
+  if(!p)return;
+  _selectedAvatar=p.avatar||AVATAR_COLORS[0];
+  openModal(`
+    <h2>Edit Account</h2>
+    <div class="modal-field">
+      <label>Name</label>
+      <input type="text" id="modalName" value="${esc(p.name)}" autofocus>
+    </div>
+    <div class="modal-field">
+      <label>New Password</label>
+      <input type="password" id="modalPassword" placeholder="Leave empty to keep current">
+      <div class="field-hint">Only fill in to change the password</div>
+    </div>
+    <div class="modal-field">
+      <label>Role</label>
+      <select id="modalRole">
+        <option value="user"${p.role!=='admin'?' selected':''}>User — browse &amp; watch only</option>
+        <option value="admin"${p.role==='admin'?' selected':''}>Admin — full system access</option>
+      </select>
+    </div>
+    <div class="modal-field">
+      <label>Avatar Color</label>
+      <div class="avatar-picker" id="avatarPicker">
+        ${AVATAR_COLORS.map(c=>`<div class="avatar-option${c===_selectedAvatar?' selected':''}" style="background:${c}" onclick="pickAvatar('${c}',this)"></div>`).join('')}
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="closeModal()">Cancel</button>
+      <button class="btn-confirm" onclick="submitEditAccount('${profileId}')">Save</button>
+    </div>
+  `);
+  setTimeout(()=>{const el=document.getElementById('modalName');if(el)el.focus();},100);
+}
+
+async function submitEditAccount(profileId){
+  const name=document.getElementById('modalName').value.trim();
+  if(!name){document.getElementById('modalName').style.borderColor='#e5484d';return;}
+  const password=document.getElementById('modalPassword').value;
+  const role=document.getElementById('modalRole').value;
+  const body={name,role,avatar:_selectedAvatar};
+  if(password) body.password=password; // only update password if provided
+  closeModal();
+  await adminFetch('/api/profiles/'+profileId,{method:'PUT',headers:adminHeaders(),body:JSON.stringify(body)});
+  if(currentView==='settings')renderSettings();
+}
+
+async function deleteAccount(profileId,name){
+  openModal(`
+    <h2>Delete Account</h2>
+    <p style="color:var(--text-secondary);text-align:center;margin-bottom:8px">Are you sure you want to delete <strong>${esc(name)}</strong>?</p>
+    <p style="color:var(--text-muted);font-size:.8rem;text-align:center">This will delete all their watch history and progress.</p>
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="closeModal()">Cancel</button>
+      <button class="btn-confirm" style="background:#e5484d" onclick="confirmDeleteAccount('${escAttr(profileId)}')">Delete</button>
+    </div>
+  `);
+}
+
+async function confirmDeleteAccount(profileId){
+  closeModal();
+  await adminFetch('/api/profiles/'+profileId,{method:'DELETE',headers:adminHeaders()});
+  if(currentView==='settings')renderSettings();
 }
 
 async function switchProfile(){
@@ -731,6 +803,7 @@ async function fetchLib(){
     const res=await fetch(`/api/library?profile=${activeProfile}`);
     library=await res.json();
     updateStats();
+    updateCustomNav();
     if(currentView!=='settings')renderView();
   }catch{
     document.getElementById('contentArea').innerHTML='<div class="empty-state"><div class="empty-icon">&#9888;&#65039;</div><div class="empty-title">Connection Error</div></div>';
@@ -750,9 +823,34 @@ async function fetchQueue(){
   }catch{profileQueue=[];}
 }
 
+function getCustomTypes(){
+  const types=new Set();
+  for(const item of library){if(item.type!=='movie'&&item.type!=='show')types.add(item.type);}
+  return [...types].sort();
+}
+
+function customTypeLabel(type){
+  return type.charAt(0).toUpperCase()+type.slice(1);
+}
+
+function customTypeIcon(type){
+  const icons={anime:'🎌',documentary:'🎬',documentaries:'🎬',sports:'⚽',music:'🎵',kids:'🧸',reality:'📺',standup:'🎤',comedy:'😂'};
+  return icons[type]||'📁';
+}
+
+function updateCustomNav(){
+  const container=document.getElementById('customNavItems');
+  if(!container)return;
+  const types=getCustomTypes();
+  if(!types.length){container.innerHTML='';return;}
+  container.innerHTML=types.map(t=>`<button class="nav-item" data-view="custom_${t}" onclick="nav('custom_${t}',this)"><span class="nav-icon">${customTypeIcon(t)}</span> ${customTypeLabel(t)}</button>`).join('');
+}
+
 function updateStats(){
   const m=library.filter(i=>i.type==='movie').length,s=library.filter(i=>i.type==='show').length;
-  document.getElementById('libraryStats').textContent=`${library.length} items · ${m} movies · ${s} shows`;
+  const custom=getCustomTypes();
+  const extra=custom.map(t=>{const c=library.filter(i=>i.type===t).length;return `${c} ${customTypeLabel(t).toLowerCase()}`;}).join(' · ');
+  document.getElementById('libraryStats').textContent=`${library.length} items · ${m} movies · ${s} shows${extra?' · '+extra:''}`;
   document.getElementById('libCount').textContent=`${library.length} items`;
 }
 
@@ -787,9 +885,59 @@ function renderView(){
     case 'continue':a.innerHTML=renderContinue();break;
     case 'queue':a.innerHTML=renderQueue();break;
     case 'history':renderHistory();return;
-    case 'settings':renderSettings();return;
+    case 'settings':if(currentRole!=='admin'){nav('home',document.querySelector('[data-view="home"]'));return;}renderSettings();return;
     case 'showDetail':a.innerHTML=renderShowDetail(currentShowName);break;
+    default:
+      if(currentView.startsWith('custom_')){
+        const typeName=currentView.slice(7);
+        a.innerHTML=renderCustomTypeView(typeName);
+      }
+      break;
   }
+}
+
+function renderCustomTypeView(typeName){
+  const items=library.filter(m=>m.type===typeName);
+  const label=customTypeLabel(typeName);
+  if(!items.length)return `<div class="empty-state"><div class="empty-icon">${customTypeIcon(typeName)}</div><div class="empty-title">No ${label} Found</div><div class="empty-text">Link a folder with type "${typeName}" in settings.</div></div>`;
+
+  // Check if items have showNames (series-like) — group them
+  const hasShows=items.some(i=>i.showName);
+  if(hasShows){
+    const shows={};
+    for(const item of items){
+      const name=item.showName||item.title;
+      if(!shows[name])shows[name]={name,items:[],poster:null,year:null,imdbRating:null,watched:true};
+      shows[name].items.push(item);
+      if(!shows[name].poster)shows[name].poster=item.omdbPosterUrl||item.posterUrl||null;
+      if(!shows[name].year&&item.year)shows[name].year=item.year;
+      if(!shows[name].imdbRating&&item.imdbRating)shows[name].imdbRating=item.imdbRating;
+      if(!item.watched)shows[name].watched=false;
+    }
+    let showList=Object.values(shows);
+    if(watchFilter==='watched')showList=showList.filter(s=>s.watched);
+    if(watchFilter==='unwatched')showList=showList.filter(s=>!s.watched);
+    const s=document.getElementById('sortSelect').value;
+    switch(s){
+      case 'title-asc':showList.sort((a,b)=>a.name.localeCompare(b.name));break;
+      case 'title-desc':showList.sort((a,b)=>b.name.localeCompare(a.name));break;
+      case 'year-desc':showList.sort((a,b)=>(b.year||0)-(a.year||0));break;
+      case 'year-asc':showList.sort((a,b)=>(a.year||9999)-(b.year||9999));break;
+      case 'rating-desc':showList.sort((a,b)=>(parseFloat(b.imdbRating)||0)-(parseFloat(a.imdbRating)||0));break;
+      default:showList.sort((a,b)=>a.name.localeCompare(b.name));
+    }
+    if(!showList.length)return `<div class="empty-state"><div class="empty-icon">${customTypeIcon(typeName)}</div><div class="empty-title">No ${label} Found</div></div>`;
+    const cards=showList.map(s=>{
+      const ep=s.items.length;
+      const poster=s.poster?`<img src="${s.poster}" loading="lazy">`:`<div class="card-placeholder">${customTypeIcon(typeName)}</div>`;
+      return `<div class="card" onclick="openShow('${escAttr(s.name)}','${escAttr(typeName)}')"><div class="card-poster">${poster}<div class="card-overlay"><div class="play-icon">&#9654;</div></div></div><div class="card-info"><div class="card-title">${esc(s.name)}</div><div class="card-year">${ep} episode${ep>1?'s':''}</div><span class="card-type show">${label}</span></div></div>`;
+    });
+    return `<div class="section"><div class="section-header"><h2 class="section-title">${label} (${showList.length})</h2></div><div class="grid">${cards.join('')}</div></div>`;
+  }
+
+  // Flat grid (movie-like)
+  const filtered=getFiltered(items);
+  return `<div class="section"><div class="section-header"><h2 class="section-title">${label} (${filtered.length})</h2></div><div class="grid">${filtered.map(card).join('')}</div></div>`;
 }
 
 // ── Sorting & filtering helpers ────────────────────────────────────────
@@ -835,6 +983,10 @@ function renderHome(){
   if(library.length>0)h+=carousel('Recently Added',[...library].reverse().slice(0,18));
   if(movies.length>0)h+=carousel('Movies',movies.slice(0,18));
   if(shows.length>0)h+=carousel('TV Shows',shows.slice(0,18));
+  for(const t of getCustomTypes()){
+    const items=library.filter(m=>m.type===t);
+    if(items.length>0)h+=carousel(customTypeLabel(t),items.slice(0,18));
+  }
   return h;
 }
 
@@ -843,7 +995,8 @@ function renderHero(item){
   const rt=item.progress.percent>0?'Resume':'Play';
   const plot=item.plot?`<p class="hero-meta" style="max-width:600px;opacity:.85;margin-top:4px">${esc(item.plot)}</p>`:'';
   const rating=item.imdbRating?` · ★ ${item.imdbRating}`:'';
-  return `<div class="hero"><div class="hero-bg" style="${bg}"></div><div class="hero-content"><span class="hero-tag">${item.type==='movie'?'Movie':'TV Show'}</span><h1 class="hero-title">${esc(item.title)}</h1><p class="hero-meta">${item.year?item.year+' · ':''}${item.type==='movie'?'Movie':'TV Show'}${rating}${item.progress.percent>0?' · '+item.progress.percent+'% watched':''}</p>${plot}<div class="hero-actions"><button class="btn btn-primary" onclick='playMedia("${item.id}")'>&#9654; ${rt}</button><button class="btn btn-secondary" onclick='addToQueue("${item.id}")'>&#128203; Queue</button></div></div></div>`;
+  const heroType=item.type==='movie'?'Movie':item.type==='show'?'TV Show':customTypeLabel(item.type);
+  return `<div class="hero"><div class="hero-bg" style="${bg}"></div><div class="hero-content"><span class="hero-tag">${heroType}</span><h1 class="hero-title">${esc(item.title)}</h1><p class="hero-meta">${item.year?item.year+' · ':''}${heroType}${rating}${item.progress.percent>0?' · '+item.progress.percent+'% watched':''}</p>${plot}<div class="hero-actions"><button class="btn btn-primary" onclick='playMedia("${item.id}")'>&#9654; ${rt}</button><button class="btn btn-secondary" onclick='addToQueue("${item.id}")'>&#128203; Queue</button></div></div></div>`;
 }
 
 // ── Cards ──────────────────────────────────────────────────────────────
@@ -854,7 +1007,8 @@ function card(item){
   const watched=item.watched?`<div class="card-watched-badge">✓</div>`:'';
   const ratingBadge=item.imdbRating?`<div style="position:absolute;top:6px;right:6px;background:rgba(0,0,0,.75);color:#f5c518;padding:2px 6px;border-radius:4px;font-size:.7rem;font-weight:700">★ ${item.imdbRating}</div>`:'';
   const genres=item.genre?`<div class="card-year" style="color:var(--text-muted);font-size:.7rem">${item.genre}</div>`:item.genres&&item.genres.length?`<div class="genre-tags">${item.genres.map(g=>`<span class="genre-tag">${esc(g)}</span>`).join('')}</div>`:'';
-  return `<div class="card" onclick='playMedia("${item.id}")'><div class="card-poster">${poster}${prog}${watched}${ratingBadge}<div class="card-actions"><button class="card-action-btn" onclick="event.stopPropagation();toggleWatched('${item.id}',${!item.watched})" title="${item.watched?'Mark unwatched':'Mark watched'}">&#128065;</button><button class="card-action-btn" onclick="event.stopPropagation();addToQueue('${item.id}')" title="Add to queue">+Q</button></div><div class="card-overlay"><div class="play-icon">&#9654;</div></div></div><div class="card-info"><div class="card-title">${esc(item.title)}</div>${item.year?`<div class="card-year">${item.year}</div>`:''}<span class="card-type ${item.type}">${item.type==='movie'?'Movie':'TV Show'}</span>${genres}</div></div>`;
+  const typeLabel=item.type==='movie'?'Movie':item.type==='show'?'TV Show':customTypeLabel(item.type);
+  return `<div class="card" onclick='playMedia("${item.id}")'><div class="card-poster">${poster}${prog}${watched}${ratingBadge}<div class="card-actions"><button class="card-action-btn" onclick="event.stopPropagation();toggleWatched('${item.id}',${!item.watched})" title="${item.watched?'Mark unwatched':'Mark watched'}">&#128065;</button><button class="card-action-btn" onclick="event.stopPropagation();addToQueue('${item.id}')" title="Add to queue">+Q</button></div><div class="card-overlay"><div class="play-icon">&#9654;</div></div></div><div class="card-info"><div class="card-title">${esc(item.title)}</div>${item.year?`<div class="card-year">${item.year}</div>`:''}<span class="card-type ${item.type}">${typeLabel}</span>${genres}</div></div>`;
 }
 
 function carousel(title,items){
@@ -876,9 +1030,10 @@ function getContinueWatching(){
   const seen=new Set();
   const result=[];
   for(const item of inProgress){
-    if(item.type==='show'&&item.showName){
-      if(seen.has(item.showName))continue;
-      seen.add(item.showName);
+    if(item.showName){
+      const key=item.type+'::'+item.showName;
+      if(seen.has(key))continue;
+      seen.add(key);
     }
     result.push(item);
   }
@@ -893,6 +1048,7 @@ function renderContinue(){
 
 // ── Shows grouped view ─────────────────────────────────────────────────
 let currentShowName=null;
+let currentShowType='show'; // track which type opened the show detail
 
 function renderShowsView(){
   const showItems=library.filter(m=>m.type==='show');
@@ -900,11 +1056,29 @@ function renderShowsView(){
   const shows={};
   for(const item of showItems){
     const name=item.showName||item.title;
-    if(!shows[name])shows[name]={name,items:[],poster:null};
+    if(!shows[name])shows[name]={name,items:[],poster:null,year:null,imdbRating:null,watched:true};
     shows[name].items.push(item);
     if(!shows[name].poster)shows[name].poster=item.omdbPosterUrl||item.posterUrl||null;
+    if(!shows[name].year&&item.year)shows[name].year=item.year;
+    if(!shows[name].imdbRating&&item.imdbRating)shows[name].imdbRating=item.imdbRating;
+    if(!item.watched)shows[name].watched=false;
   }
-  const showList=Object.values(shows).sort((a,b)=>a.name.localeCompare(b.name));
+  let showList=Object.values(shows);
+
+  // Apply watch filter
+  if(watchFilter==='watched')showList=showList.filter(s=>s.watched);
+  if(watchFilter==='unwatched')showList=showList.filter(s=>!s.watched);
+
+  // Apply sort
+  const s=document.getElementById('sortSelect').value;
+  switch(s){
+    case 'title-asc':showList.sort((a,b)=>a.name.localeCompare(b.name));break;
+    case 'title-desc':showList.sort((a,b)=>b.name.localeCompare(a.name));break;
+    case 'year-desc':showList.sort((a,b)=>(b.year||0)-(a.year||0));break;
+    case 'year-asc':showList.sort((a,b)=>(a.year||9999)-(b.year||9999));break;
+    case 'rating-desc':showList.sort((a,b)=>(parseFloat(b.imdbRating)||0)-(parseFloat(a.imdbRating)||0));break;
+    default:showList.sort((a,b)=>a.name.localeCompare(b.name));
+  }
 
   if(!showList.length)return '<div class="empty-state"><div class="empty-icon">&#128250;</div><div class="empty-title">No TV Shows Found</div><div class="empty-text">Link a folder for TV Shows in settings.</div></div>';
 
@@ -912,21 +1086,22 @@ function renderShowsView(){
   const cards=showList.map(s=>{
     const ep=s.items.length;
     const poster=s.poster?`<img src="${s.poster}" loading="lazy">`:`<div class="card-placeholder">&#128250;</div>`;
-    return `<div class="card" onclick="openShow('${escAttr(s.name)}')"><div class="card-poster">${poster}<div class="card-overlay"><div class="play-icon">&#9654;</div></div></div><div class="card-info"><div class="card-title">${esc(s.name)}</div><div class="card-year">${ep} episode${ep>1?'s':''}</div><span class="card-type show">TV Show</span></div></div>`;
+    return `<div class="card" onclick="openShow('${escAttr(s.name)}','show')"><div class="card-poster">${poster}<div class="card-overlay"><div class="play-icon">&#9654;</div></div></div><div class="card-info"><div class="card-title">${esc(s.name)}</div><div class="card-year">${ep} episode${ep>1?'s':''}</div><span class="card-type show">TV Show</span></div></div>`;
   });
 
   return `<div class="section"><div class="section-header"><h2 class="section-title">TV Shows (${showList.length})</h2></div><div class="grid">${cards.join('')}</div></div>`;
 }
 
-function openShow(name){
+function openShow(name,type){
   currentShowName=name;
+  currentShowType=type||'show';
   currentView='showDetail';
   document.getElementById('topBar').style.display='none';
   renderView();
 }
 
 function renderShowDetail(showName){
-  const items=library.filter(m=>m.type==='show'&&(m.showName||m.title)===showName);
+  const items=library.filter(m=>m.type===currentShowType&&(m.showName||m.title)===showName);
   if(!items.length)return '<div class="empty-state"><div class="empty-title">Show not found</div></div>';
 
   items.sort((a,b)=>{
@@ -958,11 +1133,13 @@ function renderShowDetail(showName){
     return `<div class="season-section"><div class="season-title">${sNum==='0'?'Episodes':`Season ${sNum}`} (${eps.length} episodes)</div><div class="episode-list">${epRows}</div></div>`;
   }).join('');
 
-  return `<div class="show-detail"><button class="btn btn-ghost" onclick="nav('shows',document.querySelector('[data-view=shows]'))" style="margin-bottom:16px">← Back to Shows</button><div class="show-detail-header">${poster?`<div class="show-detail-poster"><img src="${poster.posterUrl}"></div>`:''}<div class="show-detail-info"><h1>${esc(showName)}</h1><div class="show-detail-meta">${totalEps} episodes · ${watchedEps} watched</div><div class="show-detail-actions"><button class="btn btn-primary btn-sm" onclick='playMedia("${items[0].id}")'>&#9654; Play First</button><button class="btn btn-secondary btn-sm" onclick="markAllWatched('${escAttr(showName)}',true)">Mark All Watched</button><button class="btn btn-ghost" onclick="markAllWatched('${escAttr(showName)}',false)">Reset</button></div></div></div>${seasonsHtml}</div>`;
+  const backView=currentShowType==='show'?'shows':'custom_'+currentShowType;
+  const backLabel=currentShowType==='show'?'Shows':customTypeLabel(currentShowType);
+  return `<div class="show-detail"><button class="btn btn-ghost" onclick="nav('${backView}',document.querySelector('[data-view=&quot;${backView}&quot;]'))" style="margin-bottom:16px">← Back to ${backLabel}</button><div class="show-detail-header">${poster?`<div class="show-detail-poster"><img src="${poster.posterUrl}"></div>`:''}<div class="show-detail-info"><h1>${esc(showName)}</h1><div class="show-detail-meta">${totalEps} episodes · ${watchedEps} watched</div><div class="show-detail-actions"><button class="btn btn-primary btn-sm" onclick='playMedia("${items[0].id}")'>&#9654; Play First</button><button class="btn btn-secondary btn-sm" onclick="markAllWatched('${escAttr(showName)}',true)">Mark All Watched</button><button class="btn btn-ghost" onclick="markAllWatched('${escAttr(showName)}',false)">Reset</button></div></div></div>${seasonsHtml}</div>`;
 }
 
 async function markAllWatched(showName,watched){
-  const items=library.filter(m=>m.type==='show'&&(m.showName||m.title)===showName);
+  const items=library.filter(m=>(m.showName||m.title)===showName&&(m.type==='show'||m.type===currentShowType));
   for(const item of items){
     await fetch('/api/watched',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:item.id,watched,profile:activeProfile})});
   }
@@ -1032,17 +1209,18 @@ function handleSearch(){
   const r=library.filter(m=>m.title.toLowerCase().includes(q)||(m.year&&m.year.includes(q))||(m.showName&&m.showName.toLowerCase().includes(q)));
   const a=document.getElementById('contentArea');
   if(!r.length){a.innerHTML='<div class="empty-state"><div class="empty-icon">&#128269;</div><div class="empty-title">No Results</div></div>';return;}
-  // Group TV show episodes into single cards
-  const movies=r.filter(m=>m.type!=='show');
+  // Group items with showName into single cards (TV shows + custom series)
+  const standalone=r.filter(m=>!m.showName);
   const showMap={};
-  for(const item of r.filter(m=>m.type==='show')){
-    const name=item.showName||item.title;
-    if(!showMap[name])showMap[name]={name,items:[],poster:null,imdbRating:null,genre:null,year:null};
-    showMap[name].items.push(item);
-    if(!showMap[name].poster)showMap[name].poster=item.omdbPosterUrl||item.posterUrl||null;
-    if(!showMap[name].imdbRating&&item.imdbRating)showMap[name].imdbRating=item.imdbRating;
-    if(!showMap[name].genre&&item.genre)showMap[name].genre=item.genre;
-    if(!showMap[name].year&&item.year)showMap[name].year=item.year;
+  for(const item of r.filter(m=>m.showName)){
+    const key=item.type+'::'+item.showName;
+    const name=item.showName;
+    if(!showMap[key])showMap[key]={name,type:item.type,items:[],poster:null,imdbRating:null,genre:null,year:null};
+    showMap[key].items.push(item);
+    if(!showMap[key].poster)showMap[key].poster=item.omdbPosterUrl||item.posterUrl||null;
+    if(!showMap[key].imdbRating&&item.imdbRating)showMap[key].imdbRating=item.imdbRating;
+    if(!showMap[key].genre&&item.genre)showMap[key].genre=item.genre;
+    if(!showMap[key].year&&item.year)showMap[key].year=item.year;
   }
   const showCards=Object.values(showMap).map(s=>{
     const ep=s.items.length;
@@ -1051,10 +1229,11 @@ function handleSearch(){
     const poster=s.poster?`<img src="${s.poster}" loading="lazy">`:`<div class="card-placeholder">&#128250;</div>`;
     const ratingBadge=s.imdbRating?`<div style="position:absolute;top:6px;right:6px;background:rgba(0,0,0,.75);color:#f5c518;padding:2px 6px;border-radius:4px;font-size:.7rem;font-weight:700">★ ${s.imdbRating}</div>`:'';
     const genres=s.genre?`<div class="card-year" style="color:var(--text-muted);font-size:.7rem">${s.genre}</div>`:'';
-    return `<div class="card" onclick="openShow('${escAttr(s.name)}')"><div class="card-poster">${poster}${ratingBadge}<div class="card-overlay"><div class="play-icon">&#9654;</div></div></div><div class="card-info"><div class="card-title">${esc(s.name)}</div><div class="card-year">${meta}</div>${s.year?`<div class="card-year">${s.year}</div>`:''}<span class="card-type show">TV Show</span>${genres}</div></div>`;
+    const tLabel=s.type==='show'?'TV Show':customTypeLabel(s.type);
+    return `<div class="card" onclick="openShow('${escAttr(s.name)}','${escAttr(s.type)}')"><div class="card-poster">${poster}${ratingBadge}<div class="card-overlay"><div class="play-icon">&#9654;</div></div></div><div class="card-info"><div class="card-title">${esc(s.name)}</div><div class="card-year">${meta}</div>${s.year?`<div class="card-year">${s.year}</div>`:''}<span class="card-type ${s.type}">${tLabel}</span>${genres}</div></div>`;
   });
-  const allCards=movies.map(card).concat(showCards);
-  const total=movies.length+Object.keys(showMap).length;
+  const allCards=standalone.map(card).concat(showCards);
+  const total=standalone.length+Object.keys(showMap).length;
   a.innerHTML=`<div class="section"><div class="section-header"><h2 class="section-title">${total} result${total>1?'s':''}</h2></div><div class="grid">${allCards.join('')}</div></div>`;
 }
 
@@ -1100,8 +1279,10 @@ async function renderSettings(){
     fh='<div class="folder-list">';
     for(const f of folderConfig){
       const ti={movie:'&#127916;',show:'&#128250;',auto:'&#128194;'};
-      const tl={movie:'Movies',show:'TV Shows',auto:'Auto'};
-      fh+=`<div class="folder-card"><div class="folder-card-icon ${f.type}">${ti[f.type]||ti.auto}</div><div class="folder-card-body"><div class="folder-card-label">${esc(f.label)}</div><div class="folder-card-path" title="${esc(f.path)}">${esc(f.path)}</div><div class="folder-card-meta"><span class="folder-meta-tag ${f.type}">${tl[f.type]||'Auto'}</span><span class="folder-meta-count">${f.fileCount||0} videos</span><span class="folder-card-status ${f.exists?'ok':'err'}">${f.exists?'✓ Connected':'✗ Not found'}</span></div></div><button class="btn btn-danger btn-sm" onclick="removeFolder('${escAttr(f.path)}')">Remove</button></div>`;
+      const tl={movie:'Movies',show:'TV Shows',auto:'Auto-detect'};
+      const icon=ti[f.type]||customTypeIcon(f.type);
+      const typeLabel=tl[f.type]||customTypeLabel(f.type);
+      fh+=`<div class="folder-card"><div class="folder-card-icon ${f.type}">${icon}</div><div class="folder-card-body"><div class="folder-card-label">${esc(f.label)}</div><div class="folder-card-path" title="${esc(f.path)}">${esc(f.path)}</div><div class="folder-card-meta"><span class="folder-meta-tag ${f.type}">${typeLabel}</span><span class="folder-meta-count">${f.fileCount||0} videos</span><span class="folder-card-status ${f.exists?'ok':'err'}">${f.exists?'✓ Connected':'✗ Not found'}</span></div></div><button class="btn btn-danger btn-sm" onclick="removeFolder('${escAttr(f.path)}')">Remove</button></div>`;
     }
     fh+='</div>';
   }
@@ -1110,7 +1291,9 @@ async function renderSettings(){
   let sh='';
   if(statsData){
     const sz=formatSize(statsData.totalSize);
-    sh=`<h3 style="font-size:1rem;font-weight:700;margin:20px 0 12px">Library Stats</h3><div class="stats-grid"><div class="stat-card"><div class="stat-value">${statsData.totalFiles}</div><div class="stat-label">Total Files</div></div><div class="stat-card"><div class="stat-value">${statsData.movies}</div><div class="stat-label">Movies</div></div><div class="stat-card"><div class="stat-value">${statsData.shows}</div><div class="stat-label">Shows</div></div><div class="stat-card"><div class="stat-value">${statsData.episodes}</div><div class="stat-label">Episodes</div></div><div class="stat-card"><div class="stat-value">${sz}</div><div class="stat-label">Total Size</div></div></div>`;
+    let customStats='';
+    if(statsData.customTypes){for(const[t,c]of Object.entries(statsData.customTypes)){customStats+=`<div class="stat-card"><div class="stat-value">${c}</div><div class="stat-label">${customTypeLabel(t)}</div></div>`;}}
+    sh=`<h3 style="font-size:1rem;font-weight:700;margin:20px 0 12px">Library Stats</h3><div class="stats-grid"><div class="stat-card"><div class="stat-value">${statsData.totalFiles}</div><div class="stat-label">Total Files</div></div><div class="stat-card"><div class="stat-value">${statsData.movies}</div><div class="stat-label">Movies</div></div><div class="stat-card"><div class="stat-value">${statsData.shows}</div><div class="stat-label">Shows</div></div><div class="stat-card"><div class="stat-value">${statsData.episodes}</div><div class="stat-label">Episodes</div></div>${customStats}<div class="stat-card"><div class="stat-value">${sz}</div><div class="stat-label">Total Size</div></div></div>`;
     if(Object.keys(statsData.byFolder).length){
       sh+='<div style="margin-bottom:20px">';
       for(const[name,info]of Object.entries(statsData.byFolder)){
@@ -1130,7 +1313,27 @@ async function renderSettings(){
 
   const sysh=renderSysStats();
 
-  a.innerHTML=`<div class="settings"><h1 class="settings-title">Media Folders</h1><p class="settings-subtitle">Link folders from anywhere on this computer. Each folder can be Movies, TV Shows, or Auto-detect.</p><div id="settingsAlert" class="alert"></div>${fh}<div class="add-folder-section"><h3>&#10010; Link a New Folder</h3><div class="form-row"><div class="form-group grow"><label class="form-label">Folder path</label><input class="form-input" type="text" id="addFolderPath" placeholder="/path/to/movies" oninput="onPathInput(this.value)"></div><div class="form-group"><label class="form-label">Type</label><select class="form-select" id="addFolderType"><option value="movie">Movies</option><option value="show">TV Shows</option><option value="auto">Auto-detect</option></select></div><div class="form-group"><label class="form-label">Label</label><input class="form-input" type="text" id="addFolderLabel" placeholder="My Movies" style="width:140px"></div></div><div id="folderBrowser"></div><div style="display:flex;gap:8px;margin-top:4px"><button class="btn btn-primary btn-sm" onclick="addFolder()">&#10010; Link Folder</button><button class="btn btn-secondary btn-sm" onclick="toggleBrowser()">&#128194; Browse</button></div></div>${sh}${sph}${sysh}</div>`;
+  // Accounts section (admin only)
+  let acctHtml='';
+  if(currentRole==='admin'){
+    const profiles=await loadProfiles();
+    let rows=profiles.map(p=>{
+      const roleBadge=p.role==='admin'?'<span style="background:var(--accent);color:#fff;padding:2px 8px;border-radius:4px;font-size:.7rem;font-weight:700">ADMIN</span>':'<span style="background:rgba(255,255,255,.1);color:var(--text-secondary);padding:2px 8px;border-radius:4px;font-size:.7rem;font-weight:700">USER</span>';
+      const lockIcon=p.hasPassword?'&#128274;':'<span style="color:var(--text-muted)">None</span>';
+      const isDefault=profiles.length<=1;
+      const deleteBtn=isDefault?'':`<button class="btn btn-danger btn-sm" onclick="deleteAccount('${escAttr(p.id)}','${escAttr(p.name)}')" style="padding:4px 10px;font-size:.75rem">Delete</button>`;
+      return `<div style="display:flex;align-items:center;gap:12px;padding:12px 16px;background:var(--bg-card);border-radius:10px;border:1px solid rgba(255,255,255,.06)"><div style="width:40px;height:40px;border-radius:10px;background:${p.avatar};display:flex;align-items:center;justify-content:center;font-weight:700;font-size:1.1rem;color:#fff;flex-shrink:0">${p.name[0].toUpperCase()}</div><div style="flex:1;min-width:0"><div style="font-weight:600;font-size:.9rem">${esc(p.name)}</div><div style="font-size:.75rem;color:var(--text-muted);margin-top:2px">Password: ${lockIcon}</div></div><div style="display:flex;align-items:center;gap:8px">${roleBadge}<button class="btn btn-secondary btn-sm" onclick="editAccount('${escAttr(p.id)}')" style="padding:4px 10px;font-size:.75rem">Edit</button>${deleteBtn}</div></div>`;
+    }).join('');
+    acctHtml=`<h3 style="font-size:1rem;font-weight:700;margin:28px 0 12px">Accounts</h3><div style="display:flex;flex-direction:column;gap:8px">${rows}<div style="margin-top:8px"><button class="btn btn-primary btn-sm" onclick="createProfile()">&#10010; Add Account</button></div></div>`;
+  }
+
+  // Populate datalist with existing custom types
+  const existingTypes=new Set(folderConfig.map(f=>f.type));
+  getCustomTypes().forEach(t=>existingTypes.add(t));
+  let dtOpts='<option value="movie">Movies</option><option value="show">TV Shows</option><option value="auto">Auto-detect</option>';
+  for(const t of existingTypes){if(t!=='movie'&&t!=='show'&&t!=='auto')dtOpts+=`<option value="${esc(t)}">${customTypeLabel(t)}</option>`;}
+
+  a.innerHTML=`<div class="settings"><h1 class="settings-title">Media Folders</h1><p class="settings-subtitle">Link folders from anywhere on this computer. Use movie, show, auto, or type a custom category (e.g. anime).</p><div id="settingsAlert" class="alert"></div>${fh}<div class="add-folder-section"><h3>&#10010; Link a New Folder</h3><div class="form-row"><div class="form-group grow"><label class="form-label">Folder path</label><input class="form-input" type="text" id="addFolderPath" placeholder="/path/to/movies" oninput="onPathInput(this.value)"></div><div class="form-group"><label class="form-label">Type</label><input class="form-input" type="text" id="addFolderType" list="folderTypeList" value="auto" placeholder="movie, show, anime..." style="width:140px"><datalist id="folderTypeList">${dtOpts}</datalist></div><div class="form-group"><label class="form-label">Label</label><input class="form-input" type="text" id="addFolderLabel" placeholder="My Movies" style="width:140px"></div></div><div id="folderBrowser"></div><div style="display:flex;gap:8px;margin-top:4px"><button class="btn btn-primary btn-sm" onclick="addFolder()">&#10010; Link Folder</button><button class="btn btn-secondary btn-sm" onclick="toggleBrowser()">&#128194; Browse</button></div></div>${sh}${sph}${sysh}${acctHtml}</div>`;
   // Auto-refresh sprite progress + system stats
   startSettingsRefresh();
   if(folderConfig.length===0)toggleBrowser();
@@ -1186,7 +1389,7 @@ async function addFolder(){
   const p=document.getElementById('addFolderPath'),t=document.getElementById('addFolderType'),l=document.getElementById('addFolderLabel');
   if(!p.value.trim()){showSettingsAlert('Enter a folder path.','error');return;}
   try{const r=await adminFetch('/api/config/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:p.value.trim(),type:t.value,label:l.value.trim()})});const d=await r.json();if(!r.ok){showSettingsAlert(d.error||'Error','error');return;}
-  showSettingsAlert('Folder linked!','success');p.value='';l.value='';browserOpen=false;await renderSettings();fetchLib();}catch{showSettingsAlert('Server error.','error');}
+  showSettingsAlert('Folder linked!','success');p.value='';t.value='auto';l.value='';browserOpen=false;await renderSettings();fetchLib();}catch{showSettingsAlert('Server error.','error');}
 }
 async function removeFolder(fp){try{await adminFetch('/api/config/remove',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:fp})});await renderSettings();fetchLib();}catch{}}
 function showSettingsAlert(m,t){const e=document.getElementById('settingsAlert');if(!e)return;e.className=`alert ${t}`;e.textContent=m;setTimeout(()=>{e.className='alert';},3500);}
@@ -1223,9 +1426,9 @@ function restartServer(){
 function getPlaylist(){
   if(!currentMedia)return[];
   let list;
-  if(currentMedia.type==='show'&&currentMedia.showName){
-    // TV show: group by showName, sort by season then episode
-    list=library.filter(m=>m.type==='show'&&m.showName===currentMedia.showName);
+  if(currentMedia.showName){
+    // Show-like content (TV shows or custom types with showName): group by showName and type
+    list=library.filter(m=>m.type===currentMedia.type&&m.showName===currentMedia.showName);
     list.sort((a,b)=>{
       const sa=a.epInfo?a.epInfo.season:0, sb=b.epInfo?b.epInfo.season:0;
       if(sa!==sb)return sa-sb;

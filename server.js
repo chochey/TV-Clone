@@ -15,7 +15,7 @@ const TRANSCODE_DIR = path.join(__dirname, PORT === 3000 ? 'transcode_tmp' : `tr
 const PROBE_CACHE_FILE = path.join(DATA_DIR, 'probe_cache.json');
 const OMDB_CACHE_FILE = path.join(DATA_DIR, 'omdb_cache.json');
 const OMDB_POSTER_DIR = path.join(DATA_DIR, 'posters');
-const OMDB_API_KEY = '4882f1b4';
+const OMDB_API_KEY = process.env.OMDB_API_KEY || '4882f1b4';
 const OMDB_BASE_URL = 'https://www.omdbapi.com/';
 const SUPPORTED_EXT = ['.mp4', '.mkv', '.avi'];
 const SUBTITLE_EXT = ['.srt', '.vtt'];
@@ -56,6 +56,16 @@ app.use((req, res, next) => {
   next();
 });
 
+// ── Security headers ─────────────────────────────────────────────────
+app.use((req, res, next) => {
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=()');
+  next();
+});
+
 // Debug: log HLS requests
 app.use((req, res, next) => {
   if (req.path.startsWith('/hls')) console.log(`[HLS-REQ] ${req.method} ${req.originalUrl}`);
@@ -63,9 +73,9 @@ app.use((req, res, next) => {
 });
 
 // ── Ensure data directory ──────────────────────────────────────────────
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-if (!fs.existsSync(TRANSCODE_DIR)) fs.mkdirSync(TRANSCODE_DIR, { recursive: true });
-if (!fs.existsSync(OMDB_POSTER_DIR)) fs.mkdirSync(OMDB_POSTER_DIR, { recursive: true });
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+if (!fs.existsSync(TRANSCODE_DIR)) fs.mkdirSync(TRANSCODE_DIR, { recursive: true, mode: 0o700 });
+if (!fs.existsSync(OMDB_POSTER_DIR)) fs.mkdirSync(OMDB_POSTER_DIR, { recursive: true, mode: 0o700 });
 
 // ══════════════════════════════════════════════════════════════════════
 // ── Config / Profiles / Data persistence ─────────────────────────────
@@ -97,11 +107,18 @@ if (!config.profiles || config.profiles.length === 0) {
 }
 if (!config.genres) config.genres = {};
 
-// Ensure existing profiles have role and password fields
+// Ensure existing profiles have role and password fields, migrate plaintext PINs
+let configDirty = false;
 for (const p of config.profiles) {
-  if (!p.role) p.role = 'admin'; // existing profiles default to admin
-  if (p.password === undefined) p.password = '';
+  if (!p.role) { p.role = 'admin'; configDirty = true; }
+  if (p.password === undefined) { p.password = ''; configDirty = true; }
+  // Migrate plaintext PINs to hashed format (hashed PINs contain ':')
+  if (p.pin && !p.pin.includes(':')) {
+    p.pin = hashPassword(p.pin);
+    configDirty = true;
+  }
 }
+if (configDirty) saveJSON(CONFIG_FILE, config);
 
 // ── Password hashing (scrypt, no external deps) ─────────────────────────
 function hashPassword(password) {
@@ -120,7 +137,7 @@ function verifyPassword(password, stored) {
 
 // ── Session management ──────────────────────────────────────────────────
 const sessions = new Map(); // token -> { profileId, role, createdAt }
-const SESSION_MAX_AGE = 30 * 24 * 60 * 60 * 1000; // 30 days
+const SESSION_MAX_AGE = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 function createSession(profileId, role) {
   const token = crypto.randomBytes(32).toString('hex');
@@ -221,10 +238,14 @@ function parseShowName(filename) {
 }
 
 function detectType(filename, folderType) {
-  if (folderType === 'movie' || folderType === 'show') return folderType;
+  if (folderType && folderType !== 'auto') return folderType;
   const lower = filename.toLowerCase();
   if (/s\d{1,2}e\d{1,2}/i.test(lower) || /\d{1,2}x\d{2}/i.test(lower)) return 'show';
   return 'movie';
+}
+
+function hasEpisodePattern(filename) {
+  return /s\d{1,2}e\d{1,2}/i.test(filename) || /\d{1,2}x\d{2}/i.test(filename);
 }
 
 function findPosterInDir(dirPath, baseName) {
@@ -265,7 +286,7 @@ function findSubtitles(dirPath, baseName) {
           lang = 'Default';
         }
         const absPath = path.join(dir, f);
-        const subId = Buffer.from(absPath).toString('base64url');
+        const subId = crypto.createHash('sha256').update(absPath).digest('hex').slice(0, 16);
         subs.push({ id: subId, label: lang, filename: f, absPath, format: ext.slice(1) });
       }
     }
@@ -753,6 +774,8 @@ let libraryCache = null;
 
 function invalidateLibrary() {
   libraryCache = null;
+  // Immediately rebuild cache so next request doesn't wait
+  try { scanLibrary(); } catch {}
   // Queue sprite generation for any new items after rescan
   setTimeout(() => { try { queueAllSpriteGen(); } catch {} }, 3000);
 }
@@ -801,12 +824,14 @@ function scanLibrary() {
         return { id: `emb_${id}_${s.index}`, label: `${label} [embedded]`, url: `/subtitle/embedded/${id}/${s.index}`, embedded: true };
       });
 
-      // Episode info for shows
-      const epInfo = type === 'show' ? parseEpisodeInfo(file) : null;
+      // Episode info for shows and custom types with episode patterns
+      const isShowLike = type === 'show' || (type !== 'movie' && hasEpisodePattern(file));
+      const isCustomGroupable = type !== 'movie' && type !== 'show';
+      const epInfo = isShowLike ? parseEpisodeInfo(file) : null;
       // Show name: use the top-level folder name under the library root
       // e.g. /mnt/media/TV/Firefly (2002)/ep.mp4 → "Firefly (2002)"
       let showName = null;
-      if (type === 'show') {
+      if (isShowLike || isCustomGroupable) {
         const relPath = path.relative(dirPath, fullPath);
         const topFolder = relPath.split(path.sep)[0];
         // If the file is directly in the library root, fall back to filename parsing
@@ -887,6 +912,9 @@ app.post('/api/login', (req, res) => {
   if (!profile.password) {
     const token = createSession(profile.id, profile.role || 'user');
     res.cookie('session', token, { httpOnly: true, maxAge: SESSION_MAX_AGE, sameSite: 'lax' });
+    if ((profile.role || 'user') === 'admin') {
+      res.cookie('adminSession', adminToken, { httpOnly: true, maxAge: SESSION_MAX_AGE, sameSite: 'lax' });
+    }
     return res.json({ ok: true, role: profile.role || 'user', profileId: profile.id });
   }
 
@@ -897,6 +925,9 @@ app.post('/api/login', (req, res) => {
 
   const token = createSession(profile.id, profile.role || 'user');
   res.cookie('session', token, { httpOnly: true, maxAge: SESSION_MAX_AGE, sameSite: 'lax' });
+  if ((profile.role || 'user') === 'admin') {
+    res.cookie('adminSession', adminToken, { httpOnly: true, maxAge: SESSION_MAX_AGE, sameSite: 'lax' });
+  }
   res.json({ ok: true, role: profile.role || 'user', profileId: profile.id });
 });
 
@@ -905,6 +936,7 @@ app.post('/api/logout', (_req, res) => {
   const match = cookieHeader.match(/session=([a-f0-9]{64})/);
   if (match) sessions.delete(match[1]);
   res.clearCookie('session');
+  res.clearCookie('adminSession');
   res.json({ ok: true });
 });
 
@@ -919,7 +951,7 @@ app.post('/api/profiles', requireAdminSession, (req, res) => {
   const { name, pin, avatar, password, role } = req.body;
   if (!name) return res.status(400).json({ error: 'Name required' });
   const id = crypto.randomBytes(6).toString('hex');
-  const profile = { id, name, pin: pin || '', avatar: avatar || '#00a4dc', role: role || 'user', password: password ? hashPassword(password) : '' };
+  const profile = { id, name, pin: pin ? hashPassword(pin) : '', avatar: avatar || '#00a4dc', role: role || 'user', password: password ? hashPassword(password) : '' };
   config.profiles.push(profile);
   saveJSON(CONFIG_FILE, config);
   res.json({ ok: true, profile: { id, name, hasPin: !!pin, hasPassword: !!password, avatar, role: profile.role } });
@@ -929,7 +961,7 @@ app.put('/api/profiles/:id', requireAdminSession, (req, res) => {
   const p = config.profiles.find(p => p.id === req.params.id);
   if (!p) return res.status(404).json({ error: 'Profile not found' });
   if (req.body.name) p.name = req.body.name;
-  if (req.body.pin !== undefined) p.pin = req.body.pin;
+  if (req.body.pin !== undefined) p.pin = req.body.pin ? hashPassword(req.body.pin) : '';
   if (req.body.avatar) p.avatar = req.body.avatar;
   if (req.body.role) p.role = req.body.role;
   if (req.body.password !== undefined) p.password = req.body.password ? hashPassword(req.body.password) : '';
@@ -961,7 +993,7 @@ app.post('/api/profiles/:id/verify-pin', (req, res) => {
   if (!p.pin) return res.json({ ok: true });
   pinAttempts[ip].lastAttempt = now;
   const input = String(req.body.pin || '');
-  if (input.length === p.pin.length && crypto.timingSafeEqual(Buffer.from(input), Buffer.from(p.pin))) return res.json({ ok: true });
+  if (verifyPassword(input, p.pin)) return res.json({ ok: true });
   pinAttempts[ip].count++;
   res.status(403).json({ error: 'Incorrect PIN' });
 });
@@ -970,8 +1002,19 @@ app.post('/api/profiles/:id/verify-pin', (req, res) => {
 // ── Library & Progress APIs ──────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════
 
+// Helper: extract profile from request, validating against session if available
+function getRequestProfile(req) {
+  const session = getSession(req);
+  const requested = req.query.profile || req.body?.profile || 'default';
+  // If logged in, enforce that users can only access their own profile data
+  if (session && session.role !== 'admin' && requested !== session.profileId) {
+    return null; // unauthorized
+  }
+  return session ? (requested || session.profileId) : requested;
+}
+
 app.get('/api/library', (req, res) => {
-  const profileId = req.query.profile || 'default';
+  const profileId = getRequestProfile(req) || req.query.profile || 'default';
   const lib = scanLibrary();
   const profileData = loadProfileData(profileId);
 
@@ -1010,12 +1053,12 @@ app.get('/api/library', (req, res) => {
 });
 
 // Full item details (for playback — includes subtitles, audioTracks, videoUrl)
-app.get('/api/item/:id', (req, res) => {
+app.get('/api/item/:id', requireAuth, (req, res) => {
   const lib = scanLibrary();
   const item = lib.find(m => m.id === req.params.id);
   if (!item) return res.status(404).json({ error: 'Not found' });
   const omdb = getOmdbForItem(item);
-  const profileId = req.query.profile || 'default';
+  const profileId = getRequestProfile(req) || 'default';
   const profileData = loadProfileData(profileId);
   res.json({
     ...item,
@@ -1025,10 +1068,11 @@ app.get('/api/item/:id', (req, res) => {
   });
 });
 
-app.post('/api/progress', (req, res) => {
+app.post('/api/progress', requireAuth, (req, res) => {
   const { id, currentTime, duration, profile } = req.body;
   if (!id) return res.status(400).json({ error: 'Missing id' });
-  const profileId = profile || 'default';
+  const profileId = getRequestProfile(req);
+  if (!profileId) return res.status(403).json({ error: 'Cannot modify other profiles' });
   const data = loadProfileData(profileId);
 
   const percent = duration > 0 ? Math.round((currentTime / duration) * 100) : 0;
@@ -1048,10 +1092,11 @@ app.post('/api/progress', (req, res) => {
   res.json({ ok: true });
 });
 
-app.post('/api/watched', (req, res) => {
+app.post('/api/watched', requireAuth, (req, res) => {
   const { id, watched, profile } = req.body;
   if (!id) return res.status(400).json({ error: 'Missing id' });
-  const profileId = profile || 'default';
+  const profileId = getRequestProfile(req);
+  if (!profileId) return res.status(403).json({ error: 'Cannot modify other profiles' });
   const data = loadProfileData(profileId);
   data.watched[id] = !!watched;
   // If marking unwatched, reset progress
@@ -1063,32 +1108,34 @@ app.post('/api/watched', (req, res) => {
 });
 
 // ── History ────────────────────────────────────────────────────────────
-app.get('/api/history', (req, res) => {
-  const profileId = req.query.profile || 'default';
+app.get('/api/history', requireAuth, (req, res) => {
+  const profileId = getRequestProfile(req) || 'default';
   const data = loadProfileData(profileId);
   res.json(data.history || []);
 });
 
 // ── Queue ──────────────────────────────────────────────────────────────
-app.get('/api/queue', (req, res) => {
-  const profileId = req.query.profile || 'default';
+app.get('/api/queue', requireAuth, (req, res) => {
+  const profileId = getRequestProfile(req) || 'default';
   const data = loadProfileData(profileId);
   res.json(data.queue || []);
 });
 
-app.post('/api/queue', (req, res) => {
+app.post('/api/queue', requireAuth, (req, res) => {
   const { queue, profile } = req.body;
-  const profileId = profile || 'default';
+  const profileId = getRequestProfile(req);
+  if (!profileId) return res.status(403).json({ error: 'Cannot modify other profiles' });
   const data = loadProfileData(profileId);
   data.queue = Array.isArray(queue) ? queue : [];
   saveProfileData(profileId, data);
   res.json({ ok: true });
 });
 
-app.post('/api/queue/add', (req, res) => {
+app.post('/api/queue/add', requireAuth, (req, res) => {
   const { id, profile } = req.body;
   if (!id) return res.status(400).json({ error: 'Missing id' });
-  const profileId = profile || 'default';
+  const profileId = getRequestProfile(req);
+  if (!profileId) return res.status(403).json({ error: 'Cannot modify other profiles' });
   const data = loadProfileData(profileId);
   if (!data.queue) data.queue = [];
   if (!data.queue.includes(id)) data.queue.push(id);
@@ -1096,9 +1143,10 @@ app.post('/api/queue/add', (req, res) => {
   res.json({ ok: true, queue: data.queue });
 });
 
-app.post('/api/queue/remove', (req, res) => {
+app.post('/api/queue/remove', requireAuth, (req, res) => {
   const { id, profile } = req.body;
-  const profileId = profile || 'default';
+  const profileId = getRequestProfile(req);
+  if (!profileId) return res.status(403).json({ error: 'Cannot modify other profiles' });
   const data = loadProfileData(profileId);
   data.queue = (data.queue || []).filter(q => q !== id);
   saveProfileData(profileId, data);
@@ -1402,7 +1450,16 @@ app.get('/api/stats', (_req, res) => {
   const episodes = lib.filter(i => i.type === 'show').length;
   const shows = new Set(lib.filter(i => i.type === 'show').map(i => i.showName)).size;
 
-  res.json({ totalFiles: lib.length, totalSize, movies, episodes, shows, byFolder });
+  // Custom type counts
+  const customTypes = {};
+  for (const item of lib) {
+    if (item.type !== 'movie' && item.type !== 'show') {
+      if (!customTypes[item.type]) customTypes[item.type] = 0;
+      customTypes[item.type]++;
+    }
+  }
+
+  res.json({ totalFiles: lib.length, totalSize, movies, episodes, shows, byFolder, customTypes });
 });
 
 // ══════════════════════════════════════════════════════════════════════
@@ -1411,12 +1468,15 @@ app.get('/api/stats', (_req, res) => {
 
 // Admin auth: token is embedded in the page at load time, required for dangerous operations
 function requireAdmin(req, res, next) {
-  const token = req.headers['x-admin-token'] || req.query.token;
+  // Check admin cookie first, then header (no query param to avoid token leakage in logs/history)
+  const cookieHeader = req.headers.cookie || '';
+  const adminMatch = cookieHeader.match(/adminSession=([a-f0-9]{48})/);
+  const token = adminMatch ? adminMatch[1] : req.headers['x-admin-token'];
   if (token !== adminToken) return res.status(403).json({ error: 'Unauthorized' });
   next();
 }
 
-app.get('/api/config', (_req, res) => {
+app.get('/api/config', requireAdmin, (_req, res) => {
   const lib = scanLibrary();
   const result = config.folders.map(f => {
     let exists = false;
@@ -1432,7 +1492,7 @@ app.post('/api/config', requireAdmin, (req, res) => {
   if (!Array.isArray(folders)) return res.status(400).json({ error: 'folders must be an array' });
   config.folders = folders.map(f => ({
     path: String(f.path || '').trim(),
-    type: ['movie', 'show', 'auto'].includes(f.type) ? f.type : 'auto',
+    type: String(f.type || 'auto').trim().toLowerCase() || 'auto',
     label: String(f.label || '').trim() || path.basename(String(f.path || '')),
     genres: Array.isArray(f.genres) ? f.genres : [],
   })).filter(f => f.path.length > 0);
@@ -1452,7 +1512,7 @@ app.post('/api/config/add', requireAdmin, (req, res) => {
 
   const entry = {
     path: cleanPath,
-    type: ['movie', 'show', 'auto'].includes(type) ? type : 'auto',
+    type: String(type || 'auto').trim().toLowerCase() || 'auto',
     label: String(label || '').trim() || path.basename(cleanPath),
     genres: Array.isArray(genres) ? genres : [],
   };
@@ -1476,6 +1536,11 @@ app.get('/api/browse', requireAdmin, (req, res) => {
   let dirPath = req.query.path || os.homedir();
   if (dirPath.startsWith('~')) dirPath = path.join(os.homedir(), dirPath.slice(1));
   const resolved = path.resolve(dirPath);
+  // Block access to sensitive system directories
+  const blocked = ['/etc', '/proc', '/sys', '/dev', '/boot', '/root', '/var/log', '/var/run'];
+  if (blocked.some(b => resolved === b || resolved.startsWith(b + '/'))) {
+    return res.status(403).json({ error: 'Access to system directories is not allowed' });
+  }
   try {
     if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) {
       return res.status(404).json({ error: 'Not a valid directory' });
@@ -2226,13 +2291,8 @@ function setupWatchers() {
 }
 
 // ── Serve frontend ─────────────────────────────────────────────────────
-app.get('/', (req, res) => {
-  let html = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf-8');
-  // Inject admin token (for legacy admin endpoints) and session info
-  const session = getSession(req);
-  const sessionJson = session ? JSON.stringify({ profileId: session.profileId, role: session.role }) : 'null';
-  html = html.replace('</head>', `<script>window.__ADMIN_TOKEN="${adminToken}";window.__SESSION=${sessionJson};</script></head>`);
-  res.type('html').send(html);
+app.get('/', (_req, res) => {
+  res.sendFile(path.join(__dirname, 'index.html'));
 });
 app.get('/hls.min.js', (_req, res) => res.sendFile(path.join(__dirname, 'hls.min.js')));
 
