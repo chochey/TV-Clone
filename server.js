@@ -774,31 +774,38 @@ function walkDir(dir, collected) {
 }
 
 let libraryCache = null;
-let startupTasksDone = false;
+const LIBRARY_CACHE_FILE = path.join(DATA_DIR, 'library_cache.json');
 
-function runStartupTasks() {
-  if (startupTasksDone) return;
-  startupTasksDone = true;
-  console.log('[Startup] First login — scanning library...');
-  const library = scanLibrary();
-  const probed = library.filter(i => i.codec).length;
-  console.log(`  Total media: ${library.length} file(s) (${probed} probed)`);
-  setTimeout(() => {
-    console.log('[Probe] Starting background audio tracks probe...');
-    backgroundProbe().then(() => {
-      invalidateLibrary();
-      console.log('[Probe] Background probe complete');
-    });
-  }, 3000);
-  setTimeout(() => queueAllSpriteGen(), 5000);
-  setTimeout(() => {
-    console.log('[OMDB] Starting background poster fetch...');
-    backgroundOmdbFetch().then(() => {
-      invalidateLibrary();
-      scanLibrary();
-      console.log('[OMDB] Background fetch complete, library refreshed');
-    });
-  }, 8000);
+function saveLibraryCache() {
+  if (!libraryCache) return;
+  try { fs.writeFileSync(LIBRARY_CACHE_FILE, JSON.stringify(libraryCache)); } catch {}
+}
+
+function loadLibraryCache() {
+  try {
+    if (fs.existsSync(LIBRARY_CACHE_FILE)) {
+      libraryCache = JSON.parse(fs.readFileSync(LIBRARY_CACHE_FILE, 'utf8'));
+      // Rebuild fileIndex and subtitleIndex from cache
+      fileIndex = {};
+      subtitleIndex = {};
+      for (const item of libraryCache) {
+        const fullPath = Buffer.from(item.id, 'base64url').toString();
+        fileIndex[item.id] = fullPath;
+        if (item.posterUrl) fileIndex[`poster_${item.id}`] = findPosterInDir(path.dirname(fullPath), path.parse(path.basename(fullPath)).name) || '';
+        if (item.subtitles) {
+          for (const s of item.subtitles) {
+            if (!s.embedded && s.id) {
+              const subPath = path.join(path.dirname(fullPath), s.id.replace(/^sub_/, ''));
+              subtitleIndex[s.id] = { absPath: subPath, format: s.url?.endsWith('.vtt') ? 'vtt' : 'srt' };
+            }
+          }
+        }
+      }
+      console.log(`  [Cache] Loaded ${libraryCache.length} items from disk cache`);
+      return true;
+    }
+  } catch (e) { console.log(`  [Cache] Failed to load: ${e.message}`); }
+  return false;
 }
 
 function invalidateLibrary() {
@@ -909,6 +916,7 @@ function scanLibrary() {
   }
 
   libraryCache = library.sort((a, b) => a.title.localeCompare(b.title, undefined, { numeric: true }));
+  saveLibraryCache();
   return libraryCache;
 }
 
@@ -944,7 +952,6 @@ app.post('/api/login', (req, res) => {
     if ((profile.role || 'user') === 'admin') {
       res.cookie('adminSession', adminToken, { httpOnly: true, maxAge: SESSION_MAX_AGE, sameSite: 'lax' });
     }
-    runStartupTasks();
     return res.json({ ok: true, role: profile.role || 'user', profileId: profile.id });
   }
 
@@ -958,7 +965,6 @@ app.post('/api/login', (req, res) => {
   if ((profile.role || 'user') === 'admin') {
     res.cookie('adminSession', adminToken, { httpOnly: true, maxAge: SESSION_MAX_AGE, sameSite: 'lax' });
   }
-  runStartupTasks();
   res.json({ ok: true, role: profile.role || 'user', profileId: profile.id });
 });
 
@@ -2553,6 +2559,41 @@ app.listen(PORT, '0.0.0.0', () => {
     });
   } catch {}
 
-  console.log('  Waiting for first login to scan library...');
+  // Load cached library from disk for instant startup
+  const hadCache = loadLibraryCache();
+  if (hadCache) {
+    console.log(`  Total media: ${libraryCache.length} file(s) (from cache)`);
+  }
   console.log('');
+
+  // Setup watchers immediately
+  setupWatchers();
+
+  // Background rescan after a delay to avoid blocking early requests
+  setTimeout(() => {
+    console.log('[Startup] Background library rescan...');
+    libraryCache = null;
+    const library = scanLibrary();
+    const probed = library.filter(i => i.codec).length;
+    console.log(`  [Startup] Rescan complete: ${library.length} file(s) (${probed} probed)`);
+    notifyClients('library-updated');
+
+    // Chain background tasks after rescan
+    setTimeout(() => {
+      console.log('[Probe] Starting background audio tracks probe...');
+      backgroundProbe().then(() => {
+        invalidateLibrary();
+        console.log('[Probe] Background probe complete');
+      });
+    }, 5000);
+    setTimeout(() => queueAllSpriteGen(), 10000);
+    setTimeout(() => {
+      console.log('[OMDB] Starting background poster fetch...');
+      backgroundOmdbFetch().then(() => {
+        invalidateLibrary();
+        scanLibrary();
+        console.log('[OMDB] Background fetch complete, library refreshed');
+      });
+    }, 15000);
+  }, 30000);
 });

@@ -432,6 +432,9 @@ select,input{font-family:inherit}
 </head>
 <body>
 
+<!-- Startup screen -->
+<div class="profile-screen" id="startupScreen" style="display:none"><div class="dl-spinner" style="width:40px;height:40px;border-width:3px;margin-bottom:20px"></div><h1 style="font-size:1.4rem">Starting up...</h1><p id="startupMsg" style="color:var(--text-muted);font-size:.85rem">Connecting to server, please wait</p></div>
+
 <!-- Profile screen -->
 <div class="profile-screen" id="profileScreen"><h1>Who's watching?</h1><p>Select your profile</p><div class="profiles-grid" id="profilesGrid"></div></div>
 
@@ -607,6 +610,7 @@ async function showProfileScreen(skipSessionCheck){
     document.getElementById('profileScreen').style.display='none';
     document.getElementById('appContainer').style.display='';
     updateSystemVisibility();
+    nav('home',document.querySelector('[data-view="home"]'));
     const profiles=await loadProfiles();
     const p=profiles.find(x=>x.id===activeProfile);
     if(p){
@@ -615,8 +619,10 @@ async function showProfileScreen(skipSessionCheck){
       document.getElementById('sidebarName').textContent=p.name;
     }
     await fetchLib();
+    renderView();
     await fetchQueue();
     setupSSE();
+    if(currentRole==='admin')dlFetchPlugins();
     return;
   }
 
@@ -674,11 +680,9 @@ async function doLogin(profileId,password){
     }
     activeProfile=profileId;
     currentRole=data.role||'user';
-    // Admin auth is now handled via HttpOnly cookie set by server
     document.getElementById('profileScreen').style.display='none';
     document.getElementById('appContainer').style.display='';
     updateSystemVisibility();
-    // Always reset to home view on login
     nav('home',document.querySelector('[data-view="home"]'));
     const profiles=await loadProfiles();
     const p=profiles.find(x=>x.id===profileId);
@@ -688,8 +692,10 @@ async function doLogin(profileId,password){
       document.getElementById('sidebarName').textContent=p.name;
     }
     await fetchLib();
+    renderView();
     await fetchQueue();
     setupSSE();
+    if(currentRole==='admin')dlFetchPlugins();
   }catch(e){
     const err=document.getElementById('loginError');
     if(err)err.textContent='Connection error';
@@ -2049,14 +2055,19 @@ function dlStatusLabel(state){
 function dlFormatSpeed(bps){if(bps<=0)return '';if(bps<1024)return bps+' B/s';if(bps<1048576)return(bps/1024).toFixed(1)+' KB/s';return(bps/1048576).toFixed(1)+' MB/s';}
 function dlFormatEta(s){if(s<=0||s>=8640000)return '';const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sec=s%60;return(h?h+'h ':'')+(m?m+'m ':'')+(sec&&!h?sec+'s':'');}
 
-async function renderDownloads(){
+function renderDownloads(){
   const a=document.getElementById('contentArea');
-  await dlFetchPlugins();
-  const tabs=`<div class="dl-tabs"><button class="filter-btn ${dlActiveTab==='search'?'active':''}" onclick="dlSwitchTab('search')">Search</button><button class="filter-btn ${dlActiveTab==='active'?'active':''}" onclick="dlSwitchTab('active')">Active Downloads <span id="dlCount"></span></button></div>`;
-  a.innerHTML=`<div class="dl-page"><h2 style="font-size:1.3rem;font-weight:700;margin-bottom:4px">Downloads</h2><p style="color:var(--text-muted);font-size:.82rem;margin-bottom:12px">Search and download torrents via qBittorrent</p>${tabs}<div id="dlContent"></div></div>`;
-  if(dlActiveTab==='search')renderDlSearch();
-  else{await dlRefreshTorrents();renderDlActive();}
-  startDlRefresh();
+  a.innerHTML=`<div class="dl-page"><h2 style="font-size:1.3rem;font-weight:700;margin-bottom:4px">Downloads</h2><p style="color:var(--text-muted);font-size:.82rem;margin-bottom:12px">Search and download torrents via qBittorrent</p><div id="dlContent"><div style="text-align:center;padding:60px"><span class="dl-spinner" style="width:32px;height:32px;border-width:3px"></span><p style="color:var(--text-muted);margin-top:16px;font-size:.85rem">Connecting to qBittorrent...</p></div></div></div>`;
+  Promise.all([dlFetchPlugins(),dlRefreshTorrents()]).then(()=>{
+    if(currentView!=='downloads')return;
+    const a2=document.getElementById('dlContent');
+    if(!a2)return;
+    const tabs=`<div class="dl-tabs"><button class="filter-btn ${dlActiveTab==='search'?'active':''}" onclick="dlSwitchTab('search')">Search</button><button class="filter-btn ${dlActiveTab==='active'?'active':''}" onclick="dlSwitchTab('active')">Active Downloads <span id="dlCount">(${dlTorrents.length})</span></button></div>`;
+    a2.innerHTML=tabs+'<div id="dlTabContent"></div>';
+    if(dlActiveTab==='search')renderDlSearch();
+    else renderDlActive();
+    startDlRefresh();
+  });
 }
 
 function dlSortArrow(field){
@@ -2080,13 +2091,18 @@ async function dlFetchPlugins(){
   try{const r=await fetch('/api/qbt/search/plugins');dlPlugins=await r.json();}catch{dlPlugins=[];}
 }
 function renderDlSearch(){
-  const c=document.getElementById('dlContent');
+  const c=document.getElementById('dlTabContent')||document.getElementById('dlContent');
   if(!c)return;
   // Only build search bar if it doesn't exist yet (prevents dropdown reset during polling)
-  if(!document.getElementById('dlSearchInput')){
+  if(!document.getElementById('dlSearchInput')||!document.getElementById('dlResultsArea')){
     const pluginOpts=dlPlugins.map(p=>`<option value="${esc(p.name)}">${esc(p.fullName)}</option>`).join('');
     const searchHtml=`<div class="dl-search-bar"><input type="text" id="dlSearchInput" placeholder="Search torrents..." onkeydown="if(event.key==='Enter')dlStartSearch()"><select id="dlCategorySelect"><option value="all">All</option><option value="movies">Movies</option><option value="tv">TV Shows</option><option value="music">Music</option><option value="anime">Anime</option><option value="software">Software</option><option value="games">Games</option></select><select id="dlPluginSelect"><option value="all">All Plugins</option>${pluginOpts}</select><button class="btn btn-primary" id="dlSearchBtn" onclick="dlStartSearch()">Search</button><button class="btn btn-sm" onclick="dlClearSearch()" style="font-size:.78rem;padding:7px 10px">Clear</button></div><div id="dlResultsArea"></div>`;
     c.innerHTML=searchHtml;
+  }
+  // Update plugin dropdown if plugins loaded after initial render
+  const ps=document.getElementById('dlPluginSelect');
+  if(ps&&ps.options.length<=1&&dlPlugins.length>0){
+    ps.innerHTML='<option value="all">All Plugins</option>'+dlPlugins.map(p=>`<option value="${esc(p.name)}">${esc(p.fullName)}</option>`).join('');
   }
   // Update search button state
   const btn=document.getElementById('dlSearchBtn');
@@ -2150,7 +2166,7 @@ async function dlAddTorrent(url,btn){
 }
 
 function renderDlActive(){
-  const c=document.getElementById('dlContent');
+  const c=document.getElementById('dlTabContent')||document.getElementById('dlContent');
   if(!c)return;
   const countEl=document.getElementById('dlCount');
   if(countEl)countEl.textContent=dlTorrents.length?`(${dlTorrents.length})`:'';
@@ -2208,7 +2224,28 @@ async function dlDeleteTorrent(hash,name){
 // ══════════════════════════════════════════════════════════════════════
 setSkip(10);
 setFilter('all');
-fetchConfig().then(()=>showProfileScreen());
+async function initApp(){
+  const startup=document.getElementById('startupScreen');
+  const profile=document.getElementById('profileScreen');
+  let attempt=0;
+  while(true){
+    try{
+      const r=await fetch('/api/me');
+      if(r.ok){
+        await fetchConfig();
+        startup.style.display='none';
+        await showProfileScreen();
+        return;
+      }
+    }catch{}
+    attempt++;
+    startup.style.display='';
+    profile.style.display='none';
+    document.getElementById('startupMsg').textContent=`Connecting to server... attempt ${attempt}`;
+    await new Promise(r=>setTimeout(r,3000));
+  }
+}
+initApp();
 </script>
 </body>
 </html>
