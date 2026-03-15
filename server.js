@@ -353,9 +353,9 @@ function getStreamMode(filePath) {
   if (!codec) {
     return 'unknown';
   }
-  // Always transcode audio to normalize timestamps for HLS compatibility
-  if (codec === 'h264') return 'remux';   // copy video, transcode audio
-  return 'transcode';                      // full transcode
+  // Remux h264 (copy video, transcode audio) — much faster than full transcode
+  if (codec === 'h264') return 'remux';
+  return 'transcode';
 }
 
 function probeFileAsync(filePath) {
@@ -1695,31 +1695,26 @@ function spriteFilePath(thumbId, sheetNum) {
   return path.join(THUMB_DIR, `${thumbId}_sprite_${sheetNum}.jpg`);
 }
 
-// Extract all frames using parallel -ss seeking (fast input seeking, no full decode)
+// Extract all frames sequentially with low priority to avoid impacting playback
 function extractAllFrames(filePath, tmpDir, totalFrames) {
   return new Promise(async (resolve) => {
-    const BATCH = 4; // concurrent seeks (low to minimize resource pressure)
     let allOk = true;
-    for (let i = 0; i < totalFrames; i += BATCH) {
+    for (let i = 0; i < totalFrames; i++) {
       await waitForTranscodeIdle();
-      const promises = [];
-      for (let j = i; j < Math.min(i + BATCH, totalFrames); j++) {
-        const ts = j * SPRITE_INTERVAL;
-        const outFile = path.join(tmpDir, `frame_${String(j + 1).padStart(5, '0')}.jpg`);
-        if (fs.existsSync(outFile)) continue;
-        promises.push(new Promise((res) => {
-          const proc = spawn('ionice', ['-c', '3', 'nice', '-n', '19', 'ffmpeg',
-            '-hide_banner', '-loglevel', 'error',
-            '-ss', String(ts), '-i', filePath,
-            '-vframes', '1', '-vf', `scale=${SPRITE_W}:${SPRITE_H}:force_original_aspect_ratio=decrease,pad=${SPRITE_W}:${SPRITE_H}:(ow-iw)/2:(oh-ih)/2`,
-            '-q:v', '5', '-y', outFile,
-          ]);
-          proc.on('close', (code) => res(code === 0));
-          proc.on('error', () => res(false));
-        }));
-      }
-      const results = await Promise.all(promises);
-      if (results.some(r => !r)) allOk = false;
+      const ts = i * SPRITE_INTERVAL;
+      const outFile = path.join(tmpDir, `frame_${String(i + 1).padStart(5, '0')}.jpg`);
+      if (fs.existsSync(outFile)) continue;
+      const ok = await new Promise((res) => {
+        const proc = spawn('ionice', ['-c', '3', 'nice', '-n', '19', 'ffmpeg',
+          '-hide_banner', '-loglevel', 'error',
+          '-ss', String(ts), '-i', filePath,
+          '-vframes', '1', '-vf', `scale=${SPRITE_W}:${SPRITE_H}:force_original_aspect_ratio=decrease,pad=${SPRITE_W}:${SPRITE_H}:(ow-iw)/2:(oh-ih)/2`,
+          '-q:v', '5', '-y', outFile,
+        ]);
+        proc.on('close', (code) => res(code === 0));
+        proc.on('error', () => res(false));
+      });
+      if (!ok) allOk = false;
     }
     resolve(allOk);
   });
@@ -1838,30 +1833,14 @@ function queueAllSpriteGen() {
     return;
   }
   spriteQueue.running = true;
-
-  // Group pending items by physical drive for parallel I/O
-  const driveIds = getDriveIds(pending.map(p => p.filePath));
-  const driveMap = {};
-  for (const item of pending) {
-    const drive = driveIds[item.filePath] || 'default';
-    if (!driveMap[drive]) driveMap[drive] = [];
-    driveMap[drive].push(item);
-  }
-  const drives = Object.keys(driveMap);
-  console.log(`[SPRITE] Queuing ${pending.length} movies (${alreadyDone} already done) across ${drives.length} drive(s)`);
-  for (const d of drives) console.log(`  [SPRITE] ${d}: ${driveMap[d].length} files`);
+  console.log(`[SPRITE] Queuing ${pending.length} movies (${alreadyDone} already done), processing sequentially`);
 
   (async () => {
-    // Process one video per drive concurrently
-    const driveQueues = drives.map(d => driveMap[d]);
-    const maxLen = Math.max(...driveQueues.map(q => q.length));
-    for (let i = 0; i < maxLen; i++) {
-      const batch = driveQueues.map(q => q[i]).filter(Boolean);
-      spriteQueue.current = batch.map(b => b.title).join(', ');
-      await Promise.all(batch.map(({ id, filePath, title }) => {
-        console.log(`[SPRITE] Processing: ${title}`);
-        return startSpriteGen(id, filePath).then(() => { spriteQueue.completed++; });
-      }));
+    for (const { id, filePath, title } of pending) {
+      spriteQueue.current = title;
+      console.log(`[SPRITE] Processing: ${title}`);
+      await startSpriteGen(id, filePath);
+      spriteQueue.completed++;
     }
     spriteQueue.running = false;
     spriteQueue.current = '';
@@ -2099,19 +2078,15 @@ function startFfmpeg(id, filePath, sessionDir, seekTime, startSegNum, audioStrea
   const mode = getStreamMode(filePath);
   const ffmpegArgs = ['-hide_banner', '-loglevel', 'error', '-threads', '0'];
   if (seekTime > 0) ffmpegArgs.push('-ss', String(seekTime));
-  ffmpegArgs.push('-i', filePath, '-muxdelay', '0', '-muxpreload', '0');
+  ffmpegArgs.push('-i', filePath);
 
   // Map specific video and audio streams
-  ffmpegArgs.push('-map', '0:v:0');
   if (audioStreamIndex !== undefined && audioStreamIndex !== null) {
-    ffmpegArgs.push('-map', `0:${audioStreamIndex}`);
-  } else {
-    ffmpegArgs.push('-map', '0:a:0');
+    ffmpegArgs.push('-map', '0:v:0', '-map', `0:${audioStreamIndex}`);
   }
 
   if (mode === 'remux' || mode === 'remux-audio') {
-    ffmpegArgs.push('-c:v', 'copy', '-c:a', 'aac', '-ac', '2', '-b:a', '192k',
-      '-af', 'aresample=async=1:first_pts=0');
+    ffmpegArgs.push('-c:v', 'copy', '-c:a', 'aac', '-ac', '2', '-b:a', '192k');
   } else if (VAAPI_AVAILABLE) {
     ffmpegArgs.push(
       '-vaapi_device', '/dev/dri/renderD128',
@@ -2131,8 +2106,7 @@ function startFfmpeg(id, filePath, sessionDir, seekTime, startSegNum, audioStrea
   }
 
   ffmpegArgs.push(
-    '-f', 'hls', '-hls_time', String(HLS_SEG_DURATION), '-hls_init_time', '1',
-    '-hls_list_size', '0',
+    '-f', 'hls', '-hls_time', String(HLS_SEG_DURATION), '-hls_list_size', '0',
     '-hls_flags', 'temp_file', '-hls_playlist_type', 'event',
     '-hls_segment_filename', path.join(sessionDir, 'seg_%04d.ts'),
     '-start_number', String(startSegNum),

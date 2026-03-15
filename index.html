@@ -1719,11 +1719,30 @@ async function playMedia(id){
   if(hlsInstance){hlsInstance.destroy();hlsInstance=null;}
   V.removeAttribute('src');
   V.load();
+  _hasPlayedBefore=false;_lastStallRecovery=0;
 
-  // All playback via HLS for reliable cross-browser support
   const startTime=item.progress.currentTime>5?item.progress.currentTime:0;
-  const hlsUrl='/hls/'+item.id+'/master.m3u8'+(startTime?'?start='+startTime:'');
   modal.classList.add('active');
+
+  // Direct streaming for h264 mp4 files — browser plays natively with range requests
+  const ext=(item.filename||'').split('.').pop().toLowerCase();
+  if(item.codec==='h264'&&(ext==='mp4'||ext==='m4v')){
+    window._hlsSeekOffset=0;
+    window._hlsTotalDur=0;
+    window._hlsLoad=null;
+    V.src='/stream/'+item.id;
+    V.currentTime=startTime;
+    V.playbackRate=playbackSpeed;
+    V.play().catch(()=>{});
+    startProgressSync();showControls();resetUpNext();
+    modal.addEventListener('mousemove',showControls);
+    updateEpBtns();buildSubMenu();buildAudioMenu();
+    loadSkipSegments(item.id);
+    if(profileQueue.includes(item.id))removeFromQueue(item.id);
+    return;
+  }
+
+  const hlsUrl='/hls/'+item.id+'/master.m3u8'+(startTime?'?start='+startTime:'');
 
   if(typeof Hls!=='undefined'&&Hls.isSupported()){
     window._hlsSeekOffset=startTime;
@@ -1976,23 +1995,27 @@ V.addEventListener('pause',()=>{document.getElementById('playPauseBtn').innerHTM
 
 // Stall recovery: if paused too long, the backend session times out and buffer runs dry
 let _stallTimer=null;
+let _lastStallRecovery=0;
+let _hasPlayedBefore=false;
 V.addEventListener('waiting',()=>{
   if(!currentMedia||V.paused)return;
-  // Give it 3 seconds to recover naturally before forcing a reload
+  // Don't trigger stall recovery during initial load — only after playback has started
+  if(!_hasPlayedBefore)return;
   clearTimeout(_stallTimer);
   _stallTimer=setTimeout(()=>{
     if(V.paused||!currentMedia)return;
-    // Check if we're truly stalled (readyState < HAVE_FUTURE_DATA)
+    if(Date.now()-_lastStallRecovery<30000)return;
     if(V.readyState<3&&typeof window._hlsLoad==='function'){
       console.log('[Stall Recovery] Buffer exhausted, reloading HLS from current position');
+      _lastStallRecovery=Date.now();
       const currentTime=Math.round(V.currentTime+(window._hlsSeekOffset||0));
       const audioParam=_currentAudioTrack!=null?'&audio='+_currentAudioTrack:'';
       window._hlsSeekOffset=currentTime;
       window._hlsLoad('/hls/'+currentMedia.id+'/master.m3u8?start='+currentTime+audioParam);
     }
-  },3000);
+  },10000);
 });
-V.addEventListener('playing',()=>{clearTimeout(_stallTimer);});
+V.addEventListener('playing',()=>{clearTimeout(_stallTimer);_hasPlayedBefore=true;});
 V.addEventListener('ended',()=>{
   const next=getNextEp();
   if(next&&!_upNextCancelled){saveProg();playMedia(next.id);}
