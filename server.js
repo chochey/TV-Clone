@@ -1645,7 +1645,7 @@ if (!fs.existsSync(THUMB_DIR)) fs.mkdirSync(THUMB_DIR, { recursive: true });
 const SPRITE_COLS = 5, SPRITE_ROWS = 5, SPRITE_INTERVAL = 10;
 const SPRITE_W = 160, SPRITE_H = 90;
 const FRAMES_PER_SPRITE = SPRITE_COLS * SPRITE_ROWS; // 25
-const PARALLEL_EXTRACTS = 4; // concurrent ffmpeg frame extractions
+const PARALLEL_SPRITES = 1; // sequential to avoid disk thrashing on NTFS
 
 // Pause sprite generation when transcoding is active to prioritize playback
 function waitForTranscodeIdle() {
@@ -1669,17 +1669,32 @@ function spriteFilePath(thumbId, sheetNum) {
   return path.join(THUMB_DIR, `${thumbId}_sprite_${sheetNum}.jpg`);
 }
 
-// Extract a single frame at timestamp using fast -ss input seeking (low priority)
-function extractFrame(filePath, timestamp, outFile) {
-  return new Promise((resolve) => {
-    const proc = spawn('nice', ['-n', '15', 'ffmpeg',
-      '-hide_banner', '-loglevel', 'error',
-      '-ss', String(timestamp), '-i', filePath,
-      '-vframes', '1', '-vf', `scale=${SPRITE_W}:${SPRITE_H}:force_original_aspect_ratio=decrease,pad=${SPRITE_W}:${SPRITE_H}:(ow-iw)/2:(oh-ih)/2`,
-      '-q:v', '5', '-y', outFile,
-    ]);
-    proc.on('close', (code) => resolve(code === 0));
-    proc.on('error', () => resolve(false));
+// Extract all frames using parallel -ss seeking (fast input seeking, no full decode)
+function extractAllFrames(filePath, tmpDir, totalFrames) {
+  return new Promise(async (resolve) => {
+    const BATCH = 8; // concurrent seeks
+    let allOk = true;
+    for (let i = 0; i < totalFrames; i += BATCH) {
+      const promises = [];
+      for (let j = i; j < Math.min(i + BATCH, totalFrames); j++) {
+        const ts = j * SPRITE_INTERVAL;
+        const outFile = path.join(tmpDir, `frame_${String(j + 1).padStart(5, '0')}.jpg`);
+        if (fs.existsSync(outFile)) continue;
+        promises.push(new Promise((res) => {
+          const proc = spawn('nice', ['-n', '15', 'ffmpeg',
+            '-hide_banner', '-loglevel', 'error',
+            '-ss', String(ts), '-i', filePath,
+            '-vframes', '1', '-vf', `scale=${SPRITE_W}:${SPRITE_H}:force_original_aspect_ratio=decrease,pad=${SPRITE_W}:${SPRITE_H}:(ow-iw)/2:(oh-ih)/2`,
+            '-q:v', '5', '-y', outFile,
+          ]);
+          proc.on('close', (code) => res(code === 0));
+          proc.on('error', () => res(false));
+        }));
+      }
+      const results = await Promise.all(promises);
+      if (results.some(r => !r)) allOk = false;
+    }
+    resolve(allOk);
   });
 }
 
@@ -1737,53 +1752,29 @@ async function startSpriteGen(id, filePath) {
   const tmpDir = path.join(THUMB_DIR, `_tmp_${thumbId}`);
   if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
 
-  // Extract all frames in parallel batches
-  const allTimestamps = [];
-  for (let i = 0; i < totalFrames; i++) allTimestamps.push(i * SPRITE_INTERVAL);
+  // Pause if someone is actively watching
+  await waitForTranscodeIdle();
 
-  for (let batch = 0; batch < allTimestamps.length; batch += PARALLEL_EXTRACTS) {
-    // Pause if someone is actively watching — don't steal CPU from transcoding
-    await waitForTranscodeIdle();
-
-    const chunk = allTimestamps.slice(batch, batch + PARALLEL_EXTRACTS);
-    await Promise.all(chunk.map((t, idx) => {
-      const frameIdx = batch + idx;
-      const frameFile = path.join(tmpDir, `frame_${String(frameIdx).padStart(5, '0')}.jpg`);
-      if (fs.existsSync(frameFile)) return Promise.resolve(true); // skip existing
-      return extractFrame(filePath, t, frameFile);
-    }));
-
-    // Check if we completed a sprite sheet worth of frames — stitch it
-    const currentFrameCount = batch + chunk.length;
-    const completedSheets = Math.floor(currentFrameCount / FRAMES_PER_SPRITE);
-    for (let s = 0; s < completedSheets; s++) {
-      const spriteOut = spriteFilePath(thumbId, s);
-      if (fs.existsSync(spriteOut)) continue;
-      const startFrame = s * FRAMES_PER_SPRITE;
-      const frameFiles = [];
-      for (let f = startFrame; f < startFrame + FRAMES_PER_SPRITE && f < totalFrames; f++) {
-        frameFiles.push(path.join(tmpDir, `frame_${String(f).padStart(5, '0')}.jpg`));
-      }
-      if (frameFiles.every(f => fs.existsSync(f))) {
-        await stitchSprite(frameFiles, spriteOut, SPRITE_COLS, SPRITE_ROWS);
-        console.log(`[SPRITE] Sheet ${s}/${totalSheets - 1} done for ${path.basename(filePath)}`);
-      }
-    }
+  // Single-pass: extract all frames at once (much faster than per-frame seeking)
+  const ok = await extractAllFrames(filePath, tmpDir, totalFrames);
+  if (!ok) {
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+    if (spriteJobs[id]) spriteJobs[id].done = true;
+    return spriteJobs[id];
   }
 
-  // Stitch any remaining (last partial sheet)
+  // Stitch frames into sprite sheets (ffmpeg outputs frame_00001.jpg, 1-indexed)
   for (let s = 0; s < totalSheets; s++) {
     const spriteOut = spriteFilePath(thumbId, s);
     if (fs.existsSync(spriteOut)) continue;
     const startFrame = s * FRAMES_PER_SPRITE;
     const frameFiles = [];
     for (let f = startFrame; f < startFrame + FRAMES_PER_SPRITE && f < totalFrames; f++) {
-      const ff = path.join(tmpDir, `frame_${String(f).padStart(5, '0')}.jpg`);
+      const ff = path.join(tmpDir, `frame_${String(f + 1).padStart(5, '0')}.jpg`);
       if (fs.existsSync(ff)) frameFiles.push(ff);
     }
     if (frameFiles.length > 0) {
       await stitchSprite(frameFiles, spriteOut, SPRITE_COLS, SPRITE_ROWS);
-      console.log(`[SPRITE] Sheet ${s}/${totalSheets - 1} done for ${path.basename(filePath)}`);
     }
   }
 
@@ -1817,11 +1808,14 @@ function queueAllSpriteGen() {
   spriteQueue.running = true;
   console.log(`[SPRITE] Queuing ${pending.length} movies (${alreadyDone} already done)`);
   (async () => {
-    for (const { id, filePath, title } of pending) {
-      spriteQueue.current = title;
-      console.log(`[SPRITE] Processing: ${title}`);
-      await startSpriteGen(id, filePath);
-      spriteQueue.completed++;
+    // Process multiple videos concurrently
+    for (let i = 0; i < pending.length; i += PARALLEL_SPRITES) {
+      const batch = pending.slice(i, i + PARALLEL_SPRITES);
+      spriteQueue.current = batch.map(b => b.title).join(', ');
+      await Promise.all(batch.map(({ id, filePath, title }) => {
+        console.log(`[SPRITE] Processing: ${title}`);
+        return startSpriteGen(id, filePath).then(() => { spriteQueue.completed++; });
+      }));
     }
     spriteQueue.running = false;
     spriteQueue.current = '';
