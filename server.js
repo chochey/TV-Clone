@@ -1645,7 +1645,33 @@ if (!fs.existsSync(THUMB_DIR)) fs.mkdirSync(THUMB_DIR, { recursive: true });
 const SPRITE_COLS = 5, SPRITE_ROWS = 5, SPRITE_INTERVAL = 10;
 const SPRITE_W = 160, SPRITE_H = 90;
 const FRAMES_PER_SPRITE = SPRITE_COLS * SPRITE_ROWS; // 25
-const PARALLEL_SPRITES = 1; // sequential to avoid disk thrashing on NTFS
+// Detect which physical drive files are on (for mergerfs setups) — batch version
+function getDriveIds(filePaths) {
+  const result = {};
+  try {
+    const script = `
+import os, sys, json
+paths = json.loads(sys.stdin.read())
+out = {}
+for p in paths:
+    try:
+        real = os.getxattr(p, b"user.mergerfs.allpaths").decode()
+        parts = real.split("/")
+        out[p] = "/".join(parts[:4])
+    except:
+        out[p] = "default"
+print(json.dumps(out))
+`;
+    const json_out = execFileSync('python3', ['-c', script],
+      { encoding: 'utf8', timeout: 120000, maxBuffer: 50 * 1024 * 1024,
+        input: JSON.stringify(filePaths) }).trim();
+    return JSON.parse(json_out);
+  } catch (e) {
+    console.log(`[SPRITE] Drive detection failed: ${e.message.slice(0, 100)}`);
+    for (const p of filePaths) result[p] = 'default';
+    return result;
+  }
+}
 
 // Pause sprite generation when transcoding is active to prioritize playback
 function waitForTranscodeIdle() {
@@ -1806,11 +1832,25 @@ function queueAllSpriteGen() {
     return;
   }
   spriteQueue.running = true;
-  console.log(`[SPRITE] Queuing ${pending.length} movies (${alreadyDone} already done)`);
+
+  // Group pending items by physical drive for parallel I/O
+  const driveIds = getDriveIds(pending.map(p => p.filePath));
+  const driveMap = {};
+  for (const item of pending) {
+    const drive = driveIds[item.filePath] || 'default';
+    if (!driveMap[drive]) driveMap[drive] = [];
+    driveMap[drive].push(item);
+  }
+  const drives = Object.keys(driveMap);
+  console.log(`[SPRITE] Queuing ${pending.length} movies (${alreadyDone} already done) across ${drives.length} drive(s)`);
+  for (const d of drives) console.log(`  [SPRITE] ${d}: ${driveMap[d].length} files`);
+
   (async () => {
-    // Process multiple videos concurrently
-    for (let i = 0; i < pending.length; i += PARALLEL_SPRITES) {
-      const batch = pending.slice(i, i + PARALLEL_SPRITES);
+    // Process one video per drive concurrently
+    const driveQueues = drives.map(d => driveMap[d]);
+    const maxLen = Math.max(...driveQueues.map(q => q.length));
+    for (let i = 0; i < maxLen; i++) {
+      const batch = driveQueues.map(q => q[i]).filter(Boolean);
       spriteQueue.current = batch.map(b => b.title).join(', ');
       await Promise.all(batch.map(({ id, filePath, title }) => {
         console.log(`[SPRITE] Processing: ${title}`);
