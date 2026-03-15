@@ -17,6 +17,9 @@ const OMDB_CACHE_FILE = path.join(DATA_DIR, 'omdb_cache.json');
 const OMDB_POSTER_DIR = path.join(DATA_DIR, 'posters');
 const OMDB_API_KEY = process.env.OMDB_API_KEY || '4882f1b4';
 const OMDB_BASE_URL = 'https://www.omdbapi.com/';
+const QBT_BASE = process.env.QBT_URL || 'http://localhost:8080';
+const QBT_USERNAME = process.env.QBT_USER || 'admin';
+const QBT_PASSWORD = process.env.QBT_PASS || '123123';
 const SUPPORTED_EXT = ['.mp4', '.mkv', '.avi'];
 const SUBTITLE_EXT = ['.srt', '.vtt'];
 const POSTER_EXT = ['.jpg', '.jpeg', '.png', '.webp'];
@@ -2293,6 +2296,141 @@ function notifyClients(event, data) {
   const msg = `event: ${event}\ndata: ${JSON.stringify(data || {})}\n\n`;
   sseClients.forEach(c => { try { c.write(msg); } catch {} });
 }
+
+// ══════════════════════════════════════════════════════════════════════
+// ── qBittorrent Proxy ─────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════
+let qbtCookie = '';
+
+function qbtRequest(method, apiPath, body) {
+  return new Promise((resolve, reject) => {
+    const url = new URL(QBT_BASE + apiPath);
+    const opts = {
+      hostname: url.hostname, port: url.port, path: url.pathname + url.search,
+      method, headers: { Cookie: `SID=${qbtCookie}` },
+    };
+    if (body) {
+      opts.headers['Content-Type'] = 'application/x-www-form-urlencoded';
+      opts.headers['Content-Length'] = Buffer.byteLength(body);
+    }
+    const req = http.request(opts, res => {
+      let data = '';
+      res.on('data', c => data += c);
+      res.on('end', () => resolve({ status: res.statusCode, data, headers: res.headers }));
+    });
+    req.on('error', reject);
+    if (body) req.write(body);
+    req.end();
+  });
+}
+
+async function qbtAuth() {
+  const body = `username=${encodeURIComponent(QBT_USERNAME)}&password=${encodeURIComponent(QBT_PASSWORD)}`;
+  const r = await qbtRequest('POST', '/api/v2/auth/login', body);
+  if (r.headers['set-cookie']) {
+    const m = r.headers['set-cookie'].toString().match(/SID=([^;]+)/);
+    if (m) qbtCookie = m[1];
+  }
+  return r.data === 'Ok.';
+}
+
+async function qbt(method, apiPath, body) {
+  let r = await qbtRequest(method, apiPath, body);
+  if (r.status === 403) {
+    await qbtAuth();
+    r = await qbtRequest(method, apiPath, body);
+  }
+  return r;
+}
+
+function qbtJson(r) { try { return JSON.parse(r.data); } catch { return r.data; } }
+
+// qBittorrent status
+app.get('/api/qbt/status', requireAdminSession, async (_req, res) => {
+  try {
+    const ok = await qbtAuth();
+    res.json({ connected: ok });
+  } catch { res.json({ connected: false }); }
+});
+
+// Search plugins
+app.get('/api/qbt/search/plugins', requireAdminSession, async (_req, res) => {
+  try {
+    const r = await qbt('GET', '/api/v2/search/plugins');
+    res.json(qbtJson(r));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Start search
+app.post('/api/qbt/search/start', requireAdminSession, async (req, res) => {
+  try {
+    const { pattern, category, plugins } = req.body;
+    const body = `pattern=${encodeURIComponent(pattern)}&category=${encodeURIComponent(category || 'all')}&plugins=${encodeURIComponent(plugins || 'all')}`;
+    const r = await qbt('POST', '/api/v2/search/start', body);
+    res.json(qbtJson(r));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Get search results
+app.get('/api/qbt/search/results', requireAdminSession, async (req, res) => {
+  try {
+    const { id, offset, limit } = req.query;
+    const r = await qbt('GET', `/api/v2/search/results?id=${id}&offset=${offset || 0}&limit=${limit || 50}`);
+    res.json(qbtJson(r));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Stop search
+app.post('/api/qbt/search/stop', requireAdminSession, async (req, res) => {
+  try {
+    await qbt('POST', '/api/v2/search/stop', `id=${req.body.id}`);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// List torrents
+app.get('/api/qbt/torrents', requireAdminSession, async (_req, res) => {
+  try {
+    const r = await qbt('GET', '/api/v2/torrents/info');
+    res.json(qbtJson(r));
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Add torrent
+app.post('/api/qbt/torrents/add', requireAdminSession, async (req, res) => {
+  try {
+    const { urls, savepath } = req.body;
+    let body = `urls=${encodeURIComponent(urls)}`;
+    if (savepath) body += `&savepath=${encodeURIComponent(savepath)}`;
+    const r = await qbt('POST', '/api/v2/torrents/add', body);
+    res.json({ ok: r.data === 'Ok.' });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Pause torrent
+app.post('/api/qbt/torrents/pause', requireAdminSession, async (req, res) => {
+  try {
+    await qbt('POST', '/api/v2/torrents/stop', `hashes=${req.body.hashes}`);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Resume torrent
+app.post('/api/qbt/torrents/resume', requireAdminSession, async (req, res) => {
+  try {
+    await qbt('POST', '/api/v2/torrents/start', `hashes=${req.body.hashes}`);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// Delete torrent
+app.post('/api/qbt/torrents/delete', requireAdminSession, async (req, res) => {
+  try {
+    const { hashes, deleteFiles } = req.body;
+    await qbt('POST', '/api/v2/torrents/delete', `hashes=${hashes}&deleteFiles=${deleteFiles ? 'true' : 'false'}`);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
 
 // ── File watchers ──────────────────────────────────────────────────────
 let watchers = [];

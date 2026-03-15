@@ -388,6 +388,46 @@ select,input{font-family:inherit}
   .form-row{flex-direction:column}
 }
 @media(max-width:480px){.card{width:115px}.grid{grid-template-columns:repeat(auto-fill,minmax(105px,1fr))}.hero{min-height:240px}.hero-title{font-size:1.2rem}}
+/* Downloads page */
+.dl-page{padding:32px 40px;max-width:1200px}
+.dl-tabs{display:flex;gap:8px;margin:16px 0}
+.dl-search-bar{display:flex;gap:8px;margin:16px 0;flex-wrap:wrap}
+.dl-search-bar input{flex:1;min-width:200px;padding:9px 14px;border-radius:8px;background:var(--bg-card);border:1px solid rgba(255,255,255,.1);color:var(--text-primary);font-size:.88rem;outline:none}
+.dl-search-bar input:focus{border-color:var(--accent)}
+.dl-search-bar select{padding:8px 12px;border-radius:8px;background:var(--bg-card);border:1px solid rgba(255,255,255,.1);color:var(--text-secondary);font-size:.82rem}
+.dl-result-row{display:flex;align-items:center;gap:12px;padding:10px 14px;background:var(--bg-card);border:1px solid rgba(255,255,255,.06);border-radius:8px;margin-bottom:6px;transition:background var(--transition)}
+.dl-result-row:hover{background:rgba(255,255,255,.06)}
+.dl-result-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.85rem;color:var(--text-primary)}
+.dl-result-site{color:var(--text-muted);font-size:.72rem;min-width:70px;text-align:center}
+.dl-result-size{color:var(--text-secondary);font-size:.78rem;min-width:70px;text-align:right}
+.dl-result-seeds{color:#4caf50;font-size:.78rem;min-width:40px;text-align:center;font-weight:600}
+.dl-result-leeches{color:#ff9800;font-size:.78rem;min-width:40px;text-align:center}
+.dl-seed-zero{color:#f44336}
+.dl-torrent{display:flex;flex-direction:column;gap:6px;padding:14px 16px;background:var(--bg-card);border:1px solid rgba(255,255,255,.06);border-radius:10px;margin-bottom:8px}
+.dl-torrent-top{display:flex;align-items:center;gap:12px}
+.dl-torrent-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.85rem;color:var(--text-primary);font-weight:500}
+.dl-torrent-status{font-size:.72rem;padding:3px 8px;border-radius:4px;font-weight:600;text-transform:uppercase}
+.dl-status-downloading{background:rgba(0,164,220,.15);color:var(--accent)}
+.dl-status-paused{background:rgba(255,152,0,.15);color:#ff9800}
+.dl-status-seeding{background:rgba(76,175,80,.15);color:#4caf50}
+.dl-status-completed{background:rgba(76,175,80,.15);color:#4caf50}
+.dl-status-stalled{background:rgba(255,255,255,.08);color:var(--text-muted)}
+.dl-status-error{background:rgba(244,67,54,.15);color:#f44336}
+.dl-progress{width:100%;height:6px;background:rgba(255,255,255,.08);border-radius:3px;overflow:hidden}
+.dl-progress-fill{height:100%;background:var(--accent);border-radius:3px;transition:width .5s}
+.dl-progress-fill.complete{background:#4caf50}
+.dl-torrent-meta{display:flex;gap:16px;font-size:.75rem;color:var(--text-muted);flex-wrap:wrap}
+.dl-torrent-actions{display:flex;gap:6px}
+.dl-section{margin:20px 0}
+.dl-section-title{font-size:.95rem;font-weight:700;color:var(--text-primary);margin-bottom:10px}
+.dl-empty{text-align:center;padding:40px;color:var(--text-muted);font-size:.9rem}
+.dl-spinner{display:inline-block;width:16px;height:16px;border:2px solid rgba(255,255,255,.2);border-top-color:var(--accent);border-radius:50%;animation:spin .6s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.dl-header-row{display:flex;align-items:center;gap:12px;padding:6px 14px;margin-bottom:4px;font-size:.72rem;color:var(--text-muted);text-transform:uppercase;font-weight:600;letter-spacing:.5px}
+.dl-sortable{cursor:pointer;user-select:none;display:flex;align-items:center;gap:3px;transition:color .2s}
+.dl-sortable:hover{color:var(--accent)}
+.dl-sortable.active{color:var(--accent)}
+.dl-sort-arrow{font-size:.6rem}
 </style>
 </head>
 <body>
@@ -415,6 +455,7 @@ select,input{font-family:inherit}
       <div id="customNavItems"></div>
       <div id="systemSection" class="system-section">
       <div class="nav-label">System</div>
+      <button class="nav-item" data-view="downloads" onclick="nav('downloads',this)"><span class="nav-icon">&#11015;</span> Downloads</button>
       <button class="nav-item" data-view="settings" onclick="nav('settings',this)"><span class="nav-icon">&#9881;&#65039;</span> Media Folders</button>
       <button class="nav-item" onclick="scanLibrary()"><span class="nav-icon">&#128269;</span> Scan Library</button>
       <button class="nav-item" onclick="restartServer()"><span class="nav-icon">&#128260;</span> Restart Server</button>
@@ -868,7 +909,7 @@ function nav(view,btn){
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
   if(btn)btn.classList.add('active');
   document.getElementById('searchInput').value='';
-  document.getElementById('topBar').style.display=(view==='settings'||view==='showDetail')?'none':'';
+  document.getElementById('topBar').style.display=(view==='settings'||view==='showDetail'||view==='downloads')?'none':'';
   renderView();
   document.getElementById('sidebar').classList.remove('open');
   document.getElementById('sidebarOverlay').classList.remove('open');
@@ -886,6 +927,7 @@ function renderView(){
     case 'queue':a.innerHTML=renderQueue();break;
     case 'history':renderHistory();return;
     case 'settings':if(currentRole!=='admin'){nav('home',document.querySelector('[data-view="home"]'));return;}renderSettings();return;
+    case 'downloads':if(currentRole!=='admin'){nav('home',document.querySelector('[data-view="home"]'));return;}renderDownloads();return;
     case 'showDetail':a.innerHTML=renderShowDetail(currentShowName);break;
     default:
       if(currentView.startsWith('custom_')){
@@ -1984,6 +2026,182 @@ function fmt(s){if(!s||isNaN(s))return '0:00';const h=Math.floor(s/3600),m=Math.
 function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML;}
 function escAttr(s){return s.replace(/&/g,'&amp;').replace(/'/g,'&#39;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\\/g,'\\\\');}
 function formatSize(b){if(b<1024)return b+' B';if(b<1048576)return(b/1024).toFixed(1)+' KB';if(b<1073741824)return(b/1048576).toFixed(1)+' MB';return(b/1073741824).toFixed(1)+' GB';}
+
+// ══════════════════════════════════════════════════════════════════════
+// Downloads (qBittorrent)
+// ══════════════════════════════════════════════════════════════════════
+let dlSearchId=null,dlSearchResults=[],dlSearching=false,dlTorrents=[],dlRefreshInterval=null,dlActiveTab='search';
+let dlSortField='nbSeeders',dlSortAsc=false,dlPlugins=[];
+
+function dlStatusClass(state){
+  if(state==='downloading'||state==='metaDL'||state==='forcedDL')return 'downloading';
+  if(state==='pausedDL'||state==='pausedUP'||state==='stoppedDL'||state==='stoppedUP')return 'paused';
+  if(state==='uploading'||state==='forcedUP')return 'seeding';
+  if(state==='stalledDL'||state==='stalledUP')return 'stalled';
+  if(state==='error'||state==='missingFiles')return 'error';
+  if(state==='checkingDL'||state==='checkingUP'||state==='checkingResumeData')return 'stalled';
+  return 'completed';
+}
+function dlStatusLabel(state){
+  const map={downloading:'Downloading',metaDL:'Getting metadata',forcedDL:'Downloading',pausedDL:'Paused',pausedUP:'Paused',stoppedDL:'Stopped',stoppedUP:'Stopped',uploading:'Seeding',forcedUP:'Seeding',stalledDL:'Stalled',stalledUP:'Seeding',error:'Error',missingFiles:'Missing files',checkingDL:'Checking',checkingUP:'Checking',checkingResumeData:'Checking'};
+  return map[state]||'Complete';
+}
+function dlFormatSpeed(bps){if(bps<=0)return '';if(bps<1024)return bps+' B/s';if(bps<1048576)return(bps/1024).toFixed(1)+' KB/s';return(bps/1048576).toFixed(1)+' MB/s';}
+function dlFormatEta(s){if(s<=0||s>=8640000)return '';const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sec=s%60;return(h?h+'h ':'')+(m?m+'m ':'')+(sec&&!h?sec+'s':'');}
+
+async function renderDownloads(){
+  const a=document.getElementById('contentArea');
+  await dlFetchPlugins();
+  const tabs=`<div class="dl-tabs"><button class="filter-btn ${dlActiveTab==='search'?'active':''}" onclick="dlSwitchTab('search')">Search</button><button class="filter-btn ${dlActiveTab==='active'?'active':''}" onclick="dlSwitchTab('active')">Active Downloads <span id="dlCount"></span></button></div>`;
+  a.innerHTML=`<div class="dl-page"><h2 style="font-size:1.3rem;font-weight:700;margin-bottom:4px">Downloads</h2><p style="color:var(--text-muted);font-size:.82rem;margin-bottom:12px">Search and download torrents via qBittorrent</p>${tabs}<div id="dlContent"></div></div>`;
+  if(dlActiveTab==='search')renderDlSearch();
+  else{await dlRefreshTorrents();renderDlActive();}
+  startDlRefresh();
+}
+
+function dlSortArrow(field){
+  if(dlSortField!==field)return '';
+  return `<span class="dl-sort-arrow">${dlSortAsc?'&#9650;':'&#9660;'}</span>`;
+}
+function dlSetSort(field){
+  if(dlSortField===field)dlSortAsc=!dlSortAsc;
+  else{dlSortField=field;dlSortAsc=false;}
+  renderDlSearch();
+}
+function dlSortedResults(){
+  return[...dlSearchResults].sort((a,b)=>{
+    const va=a[dlSortField]||0,vb=b[dlSortField]||0;
+    if(typeof va==='string')return dlSortAsc?va.localeCompare(vb):vb.localeCompare(va);
+    return dlSortAsc?va-vb:vb-va;
+  });
+}
+async function dlFetchPlugins(){
+  if(dlPlugins.length>0)return;
+  try{const r=await fetch('/api/qbt/search/plugins');dlPlugins=await r.json();}catch{dlPlugins=[];}
+}
+function renderDlSearch(){
+  const c=document.getElementById('dlContent');
+  if(!c)return;
+  // Only build search bar if it doesn't exist yet (prevents dropdown reset during polling)
+  if(!document.getElementById('dlSearchInput')){
+    const pluginOpts=dlPlugins.map(p=>`<option value="${esc(p.name)}">${esc(p.fullName)}</option>`).join('');
+    const searchHtml=`<div class="dl-search-bar"><input type="text" id="dlSearchInput" placeholder="Search torrents..." onkeydown="if(event.key==='Enter')dlStartSearch()"><select id="dlCategorySelect"><option value="all">All</option><option value="movies">Movies</option><option value="tv">TV Shows</option><option value="music">Music</option><option value="anime">Anime</option><option value="software">Software</option><option value="games">Games</option></select><select id="dlPluginSelect"><option value="all">All Plugins</option>${pluginOpts}</select><button class="btn btn-primary" id="dlSearchBtn" onclick="dlStartSearch()">Search</button><button class="btn btn-sm" onclick="dlClearSearch()" style="font-size:.78rem;padding:7px 10px">Clear</button></div><div id="dlResultsArea"></div>`;
+    c.innerHTML=searchHtml;
+  }
+  // Update search button state
+  const btn=document.getElementById('dlSearchBtn');
+  if(btn){btn.disabled=dlSearching;btn.innerHTML=dlSearching?'<span class="dl-spinner"></span> Searching...':'Search';}
+  // Update results area only
+  const ra=document.getElementById('dlResultsArea');
+  if(!ra)return;
+  let resultsHtml='';
+  if(dlSearchResults.length>0){
+    const sorted=dlSortedResults();
+    const header=`<div class="dl-header-row"><div class="dl-result-name dl-sortable ${dlSortField==='fileName'?'active':''}" onclick="dlSetSort('fileName')">Name ${dlSortArrow('fileName')}</div><div class="dl-result-site">Source</div><div class="dl-result-size dl-sortable ${dlSortField==='fileSize'?'active':''}" onclick="dlSetSort('fileSize')">Size ${dlSortArrow('fileSize')}</div><div class="dl-result-seeds dl-sortable ${dlSortField==='nbSeeders'?'active':''}" onclick="dlSetSort('nbSeeders')">Seeds ${dlSortArrow('nbSeeders')}</div><div class="dl-result-leeches dl-sortable ${dlSortField==='nbLeechers'?'active':''}" onclick="dlSetSort('nbLeechers')">Leeches ${dlSortArrow('nbLeechers')}</div><div style="min-width:52px"></div></div>`;
+    resultsHtml=`<div class="dl-section"><div class="dl-section-title">${dlSearchResults.length} Results</div>${header}`;
+    resultsHtml+=sorted.map(r=>{
+      const seeds=r.nbSeeders||0,leeches=r.nbLeechers||0;
+      return `<div class="dl-result-row"><div class="dl-result-name" title="${esc(r.fileName)}">${esc(r.fileName)}</div><div class="dl-result-site">${esc(r.siteUrl||'')}</div><div class="dl-result-size">${formatSize(r.fileSize||0)}</div><div class="dl-result-seeds ${seeds===0?'dl-seed-zero':''}">${seeds} S</div><div class="dl-result-leeches">${leeches} L</div><button class="btn btn-primary btn-sm" onclick="dlAddTorrent('${escAttr(r.fileUrl)}',this)" style="font-size:.72rem;padding:4px 10px">Add</button></div>`;
+    }).join('');
+    resultsHtml+='</div>';
+  }else if(!dlSearching&&dlSearchId!==null){
+    resultsHtml='<div class="dl-empty">No results found</div>';
+  }
+  ra.innerHTML=resultsHtml;
+}
+
+async function dlStartSearch(){
+  const input=document.getElementById('dlSearchInput');
+  const q=input?input.value.trim():'';
+  if(!q)return;
+  const cat=document.getElementById('dlCategorySelect').value;
+  const plugin=document.getElementById('dlPluginSelect').value;
+  dlSearching=true;dlSearchResults=[];dlSearchId=null;
+  renderDlSearch();
+  try{
+    const r=await fetch('/api/qbt/search/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({pattern:q,category:cat,plugins:plugin})});
+    const j=await r.json();
+    dlSearchId=j.id;
+    let polls=0;
+    const poll=async()=>{
+      if(polls++>20||!dlSearching){try{await fetch('/api/qbt/search/stop',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:dlSearchId})});}catch{}dlSearching=false;renderDlSearch();return;}
+      try{
+        const rr=await fetch(`/api/qbt/search/results?id=${dlSearchId}&limit=100`);
+        const data=await rr.json();
+        dlSearchResults=data.results||[];
+        renderDlSearch();
+        if(data.status==='Stopped'){dlSearching=false;renderDlSearch();return;}
+      }catch{}
+      setTimeout(poll,1500);
+    };
+    setTimeout(poll,2000);
+  }catch(e){dlSearching=false;renderDlSearch();}
+  // Restore search value
+  const newInput=document.getElementById('dlSearchInput');
+  if(newInput)newInput.value=q;
+}
+
+async function dlAddTorrent(url,btn){
+  if(btn){btn.textContent='Adding...';btn.disabled=true;}
+  try{
+    await fetch('/api/qbt/torrents/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({urls:url})});
+    if(btn){btn.textContent='Added';btn.style.background='#4caf50';}
+  }catch{if(btn){btn.textContent='Error';btn.style.background='#f44336';}}
+}
+
+function renderDlActive(){
+  const c=document.getElementById('dlContent');
+  if(!c)return;
+  const countEl=document.getElementById('dlCount');
+  if(countEl)countEl.textContent=dlTorrents.length?`(${dlTorrents.length})`:'';
+  if(dlTorrents.length===0){c.innerHTML='<div class="dl-empty">No active downloads</div>';return;}
+  c.innerHTML=`<div class="dl-section">${dlTorrents.map(t=>{
+    const pct=Math.round(t.progress*100);
+    const sc=dlStatusClass(t.state);
+    const isPaused=sc==='paused';
+    const dl=dlFormatSpeed(t.dlspeed);
+    const ul=dlFormatSpeed(t.upspeed);
+    const eta=dlFormatEta(t.eta);
+    return `<div class="dl-torrent"><div class="dl-torrent-top"><div class="dl-torrent-name" title="${esc(t.name)}">${esc(t.name)}</div><span class="dl-torrent-status dl-status-${sc}">${dlStatusLabel(t.state)}</span><div class="dl-torrent-actions"><button class="btn btn-sm" onclick="dl${isPaused?'Resume':'Pause'}Torrent('${t.hash}')" style="font-size:.7rem;padding:3px 8px">${isPaused?'&#9654; Resume':'&#10074;&#10074; Pause'}</button><button class="btn btn-sm btn-danger" onclick="dlDeleteTorrent('${t.hash}','${escAttr(t.name)}')" style="font-size:.7rem;padding:3px 8px">&#128465; Delete</button></div></div><div class="dl-progress"><div class="dl-progress-fill ${pct>=100?'complete':''}" style="width:${pct}%"></div></div><div class="dl-torrent-meta"><span>${pct}%</span>${dl?`<span>&#8595; ${dl}</span>`:''}${ul?`<span>&#8593; ${ul}</span>`:''}${eta?`<span>ETA: ${eta}</span>`:''}${t.size?`<span>${formatSize(t.size)}</span>`:''}</div></div>`;
+  }).join('')}</div>`;
+}
+
+async function dlRefreshTorrents(){
+  try{const r=await fetch('/api/qbt/torrents');dlTorrents=await r.json();}catch{dlTorrents=[];}
+}
+
+function startDlRefresh(){
+  if(dlRefreshInterval)clearInterval(dlRefreshInterval);
+  dlRefreshInterval=setInterval(async()=>{
+    if(currentView!=='downloads'){clearInterval(dlRefreshInterval);dlRefreshInterval=null;return;}
+    if(dlActiveTab==='active'){await dlRefreshTorrents();renderDlActive();}
+  },3000);
+}
+
+function dlClearSearch(){
+  dlSearchResults=[];dlSearchId=null;dlSearching=false;
+  const input=document.getElementById('dlSearchInput');
+  if(input)input.value='';
+  const ra=document.getElementById('dlResultsArea');
+  if(ra)ra.innerHTML='';
+  const btn=document.getElementById('dlSearchBtn');
+  if(btn){btn.disabled=false;btn.textContent='Search';}
+}
+function dlSwitchTab(tab){dlActiveTab=tab;renderDownloads();}
+
+async function dlPauseTorrent(hash){
+  await fetch('/api/qbt/torrents/pause',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({hashes:hash})});
+  setTimeout(async()=>{await dlRefreshTorrents();renderDlActive();},500);
+}
+async function dlResumeTorrent(hash){
+  await fetch('/api/qbt/torrents/resume',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({hashes:hash})});
+  setTimeout(async()=>{await dlRefreshTorrents();renderDlActive();},500);
+}
+async function dlDeleteTorrent(hash,name){
+  if(!confirm('Delete "'+name+'"? This will also delete downloaded files.'))return;
+  await fetch('/api/qbt/torrents/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({hashes:hash,deleteFiles:true})});
+  setTimeout(async()=>{await dlRefreshTorrents();renderDlActive();},500);
+}
 
 // ══════════════════════════════════════════════════════════════════════
 // Init
