@@ -771,6 +771,32 @@ function walkDir(dir, collected) {
 }
 
 let libraryCache = null;
+let startupTasksDone = false;
+
+function runStartupTasks() {
+  if (startupTasksDone) return;
+  startupTasksDone = true;
+  console.log('[Startup] First login — scanning library...');
+  const library = scanLibrary();
+  const probed = library.filter(i => i.codec).length;
+  console.log(`  Total media: ${library.length} file(s) (${probed} probed)`);
+  setTimeout(() => {
+    console.log('[Probe] Starting background audio tracks probe...');
+    backgroundProbe().then(() => {
+      invalidateLibrary();
+      console.log('[Probe] Background probe complete');
+    });
+  }, 3000);
+  setTimeout(() => queueAllSpriteGen(), 5000);
+  setTimeout(() => {
+    console.log('[OMDB] Starting background poster fetch...');
+    backgroundOmdbFetch().then(() => {
+      invalidateLibrary();
+      scanLibrary();
+      console.log('[OMDB] Background fetch complete, library refreshed');
+    });
+  }, 8000);
+}
 
 function invalidateLibrary() {
   libraryCache = null;
@@ -838,9 +864,9 @@ function scanLibrary() {
         showName = (topFolder !== file) ? topFolder : (parseShowName(file) || title);
       }
 
-      // File size
-      let fileSize = 0;
-      try { fileSize = fs.statSync(fullPath).size; } catch {}
+      // File size & modification time
+      let fileSize = 0, addedAt = 0;
+      try { const st = fs.statSync(fullPath); fileSize = st.size; addedAt = st.mtimeMs; } catch {}
 
       // Genres from config
       const genres = config.genres[id] || folder.genres || [];
@@ -873,7 +899,7 @@ function scanLibrary() {
           ...embeddedSubs,
         ],
         audioTracks,
-        showName, epInfo, fileSize, genres,
+        showName, epInfo, fileSize, addedAt, genres,
         streamMode, codec,
       });
     }
@@ -915,6 +941,7 @@ app.post('/api/login', (req, res) => {
     if ((profile.role || 'user') === 'admin') {
       res.cookie('adminSession', adminToken, { httpOnly: true, maxAge: SESSION_MAX_AGE, sameSite: 'lax' });
     }
+    runStartupTasks();
     return res.json({ ok: true, role: profile.role || 'user', profileId: profile.id });
   }
 
@@ -928,6 +955,7 @@ app.post('/api/login', (req, res) => {
   if ((profile.role || 'user') === 'admin') {
     res.cookie('adminSession', adminToken, { httpOnly: true, maxAge: SESSION_MAX_AGE, sameSite: 'lax' });
   }
+  runStartupTasks();
   res.json({ ok: true, role: profile.role || 'user', profileId: profile.id });
 });
 
@@ -1029,6 +1057,7 @@ app.get('/api/library', (req, res) => {
       showName: item.showName,
       epInfo: item.epInfo,
       fileSize: item.fileSize,
+      addedAt: item.addedAt,
       streamMode: item.streamMode,
       codec: item.codec,
       posterUrl: item.posterUrl,
@@ -2386,30 +2415,6 @@ app.listen(PORT, '0.0.0.0', () => {
     });
   } catch {}
 
-  const library = scanLibrary();
-  const probed = library.filter(i => i.codec).length;
-  console.log(`  Total media: ${library.length} file(s) (${probed} probed)`);
+  console.log('  Waiting for first login to scan library...');
   console.log('');
-
-  // Start background probe for audio tracks (and any missing codec data)
-  setTimeout(() => {
-    console.log('[Probe] Starting background audio tracks probe...');
-    backgroundProbe().then(() => {
-      invalidateLibrary();
-      console.log('[Probe] Background probe complete');
-    });
-  }, 3000);
-
-  // Start background sprite generation for all movies
-  setTimeout(() => queueAllSpriteGen(), 5000);
-
-  // Start background OMDB poster fetch for all media
-  setTimeout(() => {
-    console.log('[OMDB] Starting background poster fetch...');
-    backgroundOmdbFetch().then(() => {
-      invalidateLibrary();
-      scanLibrary();
-      console.log('[OMDB] Background fetch complete, library refreshed');
-    });
-  }, 8000);
 });

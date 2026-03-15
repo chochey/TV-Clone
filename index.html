@@ -956,7 +956,7 @@ function sortItems(items){
     case 'title-desc':return copy.sort((a,b)=>b.title.localeCompare(a.title));
     case 'year-desc':return copy.sort((a,b)=>(b.year||0)-(a.year||0));
     case 'year-asc':return copy.sort((a,b)=>(a.year||9999)-(b.year||9999));
-    case 'recent':return copy.reverse();
+    case 'recent':return copy.sort((a,b)=>(b.addedAt||0)-(a.addedAt||0));
   }
   return copy;
 }
@@ -980,7 +980,7 @@ function renderHome(){
   const hero=cw.length>0?cw[0]:library[Math.floor(Math.random()*library.length)];
   let h=renderHero(hero);
   if(cw.length>0)h+=carousel('Continue Watching',cw);
-  if(library.length>0)h+=carousel('Recently Added',[...library].reverse().slice(0,18));
+  if(library.length>0)h+=carousel('Recently Added',[...library].sort((a,b)=>(b.addedAt||0)-(a.addedAt||0)).slice(0,18));
   if(movies.length>0)h+=carousel('Movies',movies.slice(0,18));
   if(shows.length>0)h+=carousel('TV Shows',shows.slice(0,18));
   for(const t of getCustomTypes()){
