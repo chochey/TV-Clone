@@ -1698,16 +1698,17 @@ function spriteFilePath(thumbId, sheetNum) {
 // Extract all frames using parallel -ss seeking (fast input seeking, no full decode)
 function extractAllFrames(filePath, tmpDir, totalFrames) {
   return new Promise(async (resolve) => {
-    const BATCH = 8; // concurrent seeks
+    const BATCH = 4; // concurrent seeks (low to minimize resource pressure)
     let allOk = true;
     for (let i = 0; i < totalFrames; i += BATCH) {
+      await waitForTranscodeIdle();
       const promises = [];
       for (let j = i; j < Math.min(i + BATCH, totalFrames); j++) {
         const ts = j * SPRITE_INTERVAL;
         const outFile = path.join(tmpDir, `frame_${String(j + 1).padStart(5, '0')}.jpg`);
         if (fs.existsSync(outFile)) continue;
         promises.push(new Promise((res) => {
-          const proc = spawn('nice', ['-n', '15', 'ffmpeg',
+          const proc = spawn('ionice', ['-c', '3', 'nice', '-n', '19', 'ffmpeg',
             '-hide_banner', '-loglevel', 'error',
             '-ss', String(ts), '-i', filePath,
             '-vframes', '1', '-vf', `scale=${SPRITE_W}:${SPRITE_H}:force_original_aspect_ratio=decrease,pad=${SPRITE_W}:${SPRITE_H}:(ow-iw)/2:(oh-ih)/2`,
@@ -1791,6 +1792,7 @@ async function startSpriteGen(id, filePath) {
 
   // Stitch frames into sprite sheets (ffmpeg outputs frame_00001.jpg, 1-indexed)
   for (let s = 0; s < totalSheets; s++) {
+    await waitForTranscodeIdle();
     const spriteOut = spriteFilePath(thumbId, s);
     if (fs.existsSync(spriteOut)) continue;
     const startFrame = s * FRAMES_PER_SPRITE;
@@ -1813,6 +1815,10 @@ async function startSpriteGen(id, filePath) {
 
 // Background: generate sprites for all movies in library
 function queueAllSpriteGen() {
+  if (process.env.SKIP_SPRITES === '1') {
+    console.log('[SPRITE] Skipped — SKIP_SPRITES=1');
+    return;
+  }
   const lib = scanLibrary();
   const pending = [];
   let alreadyDone = 0;
