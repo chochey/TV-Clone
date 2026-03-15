@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
 <title>Local Stream</title>
-<script>if(location.port!=='3000'&&location.port!=='80'&&location.port!=='')document.title='Local Stream [DEV:'+location.port+']';</script>
+<script>if(location.port!=='4800'&&location.port!=='80'&&location.port!=='')document.title='Local Stream [DEV:'+location.port+']';</script>
 <script src="/hls.min.js"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -1206,7 +1206,11 @@ function playRandom(){
 function handleSearch(){
   const q=document.getElementById('searchInput').value.toLowerCase().trim();
   if(!q){renderView();return;}
-  const r=library.filter(m=>m.title.toLowerCase().includes(q)||(m.year&&m.year.includes(q))||(m.showName&&m.showName.toLowerCase().includes(q)));
+  let pool=library;
+  if(currentView==='movies')pool=library.filter(m=>m.type==='movie');
+  else if(currentView==='shows')pool=library.filter(m=>m.type==='show');
+  else if(currentView.startsWith('custom_'))pool=library.filter(m=>m.type===currentView.slice(7));
+  const r=pool.filter(m=>m.title.toLowerCase().includes(q)||(m.year&&m.year.includes(q))||(m.showName&&m.showName.toLowerCase().includes(q)));
   const a=document.getElementById('contentArea');
   if(!r.length){a.innerHTML='<div class="empty-state"><div class="empty-icon">&#128269;</div><div class="empty-title">No Results</div></div>';return;}
   // Group items with showName into single cards (TV shows + custom series)

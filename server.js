@@ -8,10 +8,10 @@ const https = require('https');
 const { spawn, execFileSync } = require('child_process');
 
 const app = express();
-const PORT = parseInt(process.env.PORT, 10) || 3000;
+const PORT = parseInt(process.env.PORT, 10) || 4800;
 const CONFIG_FILE = path.join(__dirname, 'config.json');
 const DATA_DIR = path.join(__dirname, 'data');
-const TRANSCODE_DIR = path.join(__dirname, PORT === 3000 ? 'transcode_tmp' : `transcode_tmp_${PORT}`);
+const TRANSCODE_DIR = path.join(__dirname, PORT === 4800 ? 'transcode_tmp' : `transcode_tmp_${PORT}`);
 const PROBE_CACHE_FILE = path.join(DATA_DIR, 'probe_cache.json');
 const OMDB_CACHE_FILE = path.join(DATA_DIR, 'omdb_cache.json');
 const OMDB_POSTER_DIR = path.join(DATA_DIR, 'posters');
