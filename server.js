@@ -1656,6 +1656,14 @@ app.get('/poster/:id', requireAuth, (req, res) => {
 // ── Thumbnail preview for seek bar ───────────────────────────────────
 const THUMB_DIR = path.join(DATA_DIR, 'thumbnails');
 if (!fs.existsSync(THUMB_DIR)) fs.mkdirSync(THUMB_DIR, { recursive: true });
+// Clean up orphaned temp directories from interrupted sprite generation
+try {
+  for (const entry of fs.readdirSync(THUMB_DIR)) {
+    if (entry.startsWith('_tmp_')) {
+      try { fs.rmSync(path.join(THUMB_DIR, entry), { recursive: true, force: true }); } catch {}
+    }
+  }
+} catch {}
 
 // YouTube-style sprite sheet thumbnails
 // Each sprite = 5x5 grid of 160x90 thumbnails, one frame every 10s = 250s per sheet
@@ -1712,28 +1720,47 @@ function spriteFilePath(thumbId, sheetNum) {
   return path.join(THUMB_DIR, `${thumbId}_sprite_${sheetNum}.jpg`);
 }
 
-// Extract all frames sequentially with low priority to avoid impacting playback
+// Extract all frames in a single ffmpeg pass (one process instead of hundreds)
 function extractAllFrames(filePath, tmpDir, totalFrames) {
-  return new Promise(async (resolve) => {
-    let allOk = true;
+  return new Promise((resolve) => {
+    // Check if all frames already exist (resume support)
+    let allExist = true;
     for (let i = 0; i < totalFrames; i++) {
-      await waitForTranscodeIdle();
-      const ts = i * SPRITE_INTERVAL;
-      const outFile = path.join(tmpDir, `frame_${String(i + 1).padStart(5, '0')}.jpg`);
-      if (fs.existsSync(outFile)) continue;
-      const ok = await new Promise((res) => {
-        const proc = spawn('ionice', ['-c', '3', 'nice', '-n', '19', 'ffmpeg',
-          '-hide_banner', '-loglevel', 'error',
-          '-ss', String(ts), '-i', filePath,
-          '-vframes', '1', '-vf', `scale=${SPRITE_W}:${SPRITE_H}:force_original_aspect_ratio=decrease,pad=${SPRITE_W}:${SPRITE_H}:(ow-iw)/2:(oh-ih)/2`,
-          '-q:v', '5', '-y', outFile,
-        ]);
-        proc.on('close', (code) => res(code === 0));
-        proc.on('error', () => res(false));
-      });
-      if (!ok) allOk = false;
+      if (!fs.existsSync(path.join(tmpDir, `frame_${String(i + 1).padStart(5, '0')}.jpg`))) {
+        allExist = false;
+        break;
+      }
     }
-    resolve(allOk);
+    if (allExist) return resolve(true);
+
+    // Single ffmpeg process: output one frame every SPRITE_INTERVAL seconds
+    const proc = spawn('ionice', ['-c', '3', 'nice', '-n', '19', 'ffmpeg',
+      '-hide_banner', '-loglevel', 'error',
+      '-i', filePath,
+      '-vf', `fps=1/${SPRITE_INTERVAL},scale=${SPRITE_W}:${SPRITE_H}:force_original_aspect_ratio=decrease,pad=${SPRITE_W}:${SPRITE_H}:(ow-iw)/2:(oh-ih)/2`,
+      '-q:v', '5', '-y',
+      path.join(tmpDir, 'frame_%05d.jpg'),
+    ]);
+
+    // Kill ffmpeg if a transcode session starts (prioritize playback)
+    let killed = false;
+    const watchdog = setInterval(() => {
+      if (Object.keys(transcodeSessions).length > 0 && !killed) {
+        killed = true;
+        proc.kill('SIGTERM');
+      }
+    }, 2000);
+
+    proc.on('close', (code) => {
+      clearInterval(watchdog);
+      if (killed) {
+        // Was interrupted by transcoding — don't delete partial frames, will resume later
+        resolve(false);
+      } else {
+        resolve(code === 0);
+      }
+    });
+    proc.on('error', () => { clearInterval(watchdog); resolve(false); });
   });
 }
 
@@ -1791,11 +1818,16 @@ async function startSpriteGen(id, filePath) {
   const tmpDir = path.join(THUMB_DIR, `_tmp_${thumbId}`);
   if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
 
-  // Pause if someone is actively watching
+  // Wait for any active transcoding to finish before starting
   await waitForTranscodeIdle();
 
   // Single-pass: extract all frames at once (much faster than per-frame seeking)
-  const ok = await extractAllFrames(filePath, tmpDir, totalFrames);
+  let ok = await extractAllFrames(filePath, tmpDir, totalFrames);
+  if (!ok) {
+    // If interrupted by transcoding, wait and retry (partial frames are preserved)
+    await waitForTranscodeIdle();
+    ok = await extractAllFrames(filePath, tmpDir, totalFrames);
+  }
   if (!ok) {
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
     if (spriteJobs[id]) spriteJobs[id].done = true;
@@ -1831,6 +1863,10 @@ function queueAllSpriteGen() {
     console.log('[SPRITE] Skipped — SKIP_SPRITES=1');
     return;
   }
+  if (spriteQueue.running) {
+    console.log('[SPRITE] Already running, skipping re-queue');
+    return;
+  }
   const lib = scanLibrary();
   const pending = [];
   let alreadyDone = 0;
@@ -1850,18 +1886,34 @@ function queueAllSpriteGen() {
     return;
   }
   spriteQueue.running = true;
-  console.log(`[SPRITE] Queuing ${pending.length} movies (${alreadyDone} already done), processing sequentially`);
+
+  // Group pending items by physical drive for parallel I/O
+  const driveIds = getDriveIds(pending.map(p => p.filePath));
+  const driveMap = {};
+  for (const item of pending) {
+    const drive = driveIds[item.filePath] || 'default';
+    if (!driveMap[drive]) driveMap[drive] = [];
+    driveMap[drive].push(item);
+  }
+  const drives = Object.keys(driveMap);
+  console.log(`[SPRITE] Queuing ${pending.length} items (${alreadyDone} already done) across ${drives.length} drive(s)`);
+  for (const d of drives) console.log(`  [SPRITE] ${d}: ${driveMap[d].length} files`);
 
   (async () => {
-    for (const { id, filePath, title } of pending) {
-      spriteQueue.current = title;
-      console.log(`[SPRITE] Processing: ${title}`);
-      await startSpriteGen(id, filePath);
-      spriteQueue.completed++;
+    // Process one video per drive concurrently (parallel across drives)
+    const driveQueues = drives.map(d => driveMap[d]);
+    const maxLen = Math.max(...driveQueues.map(q => q.length));
+    for (let i = 0; i < maxLen; i++) {
+      const batch = driveQueues.map(q => q[i]).filter(Boolean);
+      spriteQueue.current = batch.map(b => b.title).join(', ');
+      await Promise.all(batch.map(({ id, filePath, title }) => {
+        console.log(`[SPRITE] Processing: ${title}`);
+        return startSpriteGen(id, filePath).then(() => { spriteQueue.completed++; });
+      }));
     }
     spriteQueue.running = false;
     spriteQueue.current = '';
-    console.log('[SPRITE] All queued movies processed');
+    console.log('[SPRITE] All queued items processed');
   })();
 }
 
@@ -2397,7 +2449,7 @@ app.get('/api/qbt/status', requireAdminSession, requireQbt, async (_req, res) =>
 });
 
 // Search plugins
-app.get('/api/qbt/search/plugins', requireAdminSession, async (_req, res) => {
+app.get('/api/qbt/search/plugins', requireAdminSession, requireQbt, async (_req, res) => {
   try {
     const r = await qbt('GET', '/api/v2/search/plugins');
     res.json(qbtJson(r));
@@ -2405,7 +2457,7 @@ app.get('/api/qbt/search/plugins', requireAdminSession, async (_req, res) => {
 });
 
 // Start search
-app.post('/api/qbt/search/start', requireAdminSession, async (req, res) => {
+app.post('/api/qbt/search/start', requireAdminSession, requireQbt, async (req, res) => {
   try {
     const { pattern, category, plugins } = req.body;
     const body = `pattern=${encodeURIComponent(pattern)}&category=${encodeURIComponent(category || 'all')}&plugins=${encodeURIComponent(plugins || 'all')}`;
@@ -2415,7 +2467,7 @@ app.post('/api/qbt/search/start', requireAdminSession, async (req, res) => {
 });
 
 // Get search results
-app.get('/api/qbt/search/results', requireAdminSession, async (req, res) => {
+app.get('/api/qbt/search/results', requireAdminSession, requireQbt, async (req, res) => {
   try {
     const { id, offset, limit } = req.query;
     const r = await qbt('GET', `/api/v2/search/results?id=${id}&offset=${offset || 0}&limit=${limit || 50}`);
@@ -2424,7 +2476,7 @@ app.get('/api/qbt/search/results', requireAdminSession, async (req, res) => {
 });
 
 // Stop search
-app.post('/api/qbt/search/stop', requireAdminSession, async (req, res) => {
+app.post('/api/qbt/search/stop', requireAdminSession, requireQbt, async (req, res) => {
   try {
     await qbt('POST', '/api/v2/search/stop', `id=${req.body.id}`);
     res.json({ ok: true });
@@ -2432,7 +2484,7 @@ app.post('/api/qbt/search/stop', requireAdminSession, async (req, res) => {
 });
 
 // List torrents
-app.get('/api/qbt/torrents', requireAdminSession, async (_req, res) => {
+app.get('/api/qbt/torrents', requireAdminSession, requireQbt, async (_req, res) => {
   try {
     const r = await qbt('GET', '/api/v2/torrents/info');
     res.json(qbtJson(r));
@@ -2440,7 +2492,7 @@ app.get('/api/qbt/torrents', requireAdminSession, async (_req, res) => {
 });
 
 // Add torrent
-app.post('/api/qbt/torrents/add', requireAdminSession, async (req, res) => {
+app.post('/api/qbt/torrents/add', requireAdminSession, requireQbt, async (req, res) => {
   try {
     const { urls, savepath } = req.body;
     let body = `urls=${encodeURIComponent(urls)}`;
@@ -2451,7 +2503,7 @@ app.post('/api/qbt/torrents/add', requireAdminSession, async (req, res) => {
 });
 
 // Pause torrent
-app.post('/api/qbt/torrents/pause', requireAdminSession, async (req, res) => {
+app.post('/api/qbt/torrents/pause', requireAdminSession, requireQbt, async (req, res) => {
   try {
     await qbt('POST', '/api/v2/torrents/stop', `hashes=${req.body.hashes}`);
     res.json({ ok: true });
@@ -2459,7 +2511,7 @@ app.post('/api/qbt/torrents/pause', requireAdminSession, async (req, res) => {
 });
 
 // Resume torrent
-app.post('/api/qbt/torrents/resume', requireAdminSession, async (req, res) => {
+app.post('/api/qbt/torrents/resume', requireAdminSession, requireQbt, async (req, res) => {
   try {
     await qbt('POST', '/api/v2/torrents/start', `hashes=${req.body.hashes}`);
     res.json({ ok: true });
@@ -2467,7 +2519,7 @@ app.post('/api/qbt/torrents/resume', requireAdminSession, async (req, res) => {
 });
 
 // Delete torrent
-app.post('/api/qbt/torrents/delete', requireAdminSession, async (req, res) => {
+app.post('/api/qbt/torrents/delete', requireAdminSession, requireQbt, async (req, res) => {
   try {
     const { hashes, deleteFiles } = req.body;
     await qbt('POST', '/api/v2/torrents/delete', `hashes=${hashes}&deleteFiles=${deleteFiles ? 'true' : 'false'}`);
