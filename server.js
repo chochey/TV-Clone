@@ -8,6 +8,8 @@ const https = require('https');
 const { spawn, execFileSync } = require('child_process');
 
 const app = express();
+// Trust reverse proxy headers (X-Forwarded-For) for accurate req.ip in rate limiting
+if (process.env.TRUST_PROXY) app.set('trust proxy', process.env.TRUST_PROXY === 'true' ? true : process.env.TRUST_PROXY);
 const PORT = parseInt(process.env.PORT, 10) || 4800;
 const CONFIG_FILE = path.join(__dirname, 'config.json');
 const DATA_DIR = path.join(__dirname, 'data');
@@ -15,14 +17,26 @@ const TRANSCODE_DIR = path.join(__dirname, PORT === 4800 ? 'transcode_tmp' : `tr
 const PROBE_CACHE_FILE = path.join(DATA_DIR, 'probe_cache.json');
 const OMDB_CACHE_FILE = path.join(DATA_DIR, 'omdb_cache.json');
 const OMDB_POSTER_DIR = path.join(DATA_DIR, 'posters');
-const OMDB_API_KEY = process.env.OMDB_API_KEY || '4882f1b4';
+const OMDB_API_KEY = process.env.OMDB_API_KEY || '';
 const OMDB_BASE_URL = 'https://www.omdbapi.com/';
 const QBT_BASE = process.env.QBT_URL || 'http://localhost:8080';
-const QBT_USERNAME = process.env.QBT_USER || 'admin';
-const QBT_PASSWORD = process.env.QBT_PASS || '123123';
+const QBT_USERNAME = process.env.QBT_USER || '';
+const QBT_PASSWORD = process.env.QBT_PASS || '';
 const SUPPORTED_EXT = ['.mp4', '.mkv', '.avi'];
 const SUBTITLE_EXT = ['.srt', '.vtt'];
 const POSTER_EXT = ['.jpg', '.jpeg', '.png', '.webp'];
+const LANG_CODES = {
+  eng: 'English', spa: 'Spanish', fre: 'French', ger: 'German', ita: 'Italian',
+  por: 'Portuguese', jpn: 'Japanese', kor: 'Korean', chi: 'Chinese', zho: 'Chinese',
+  rus: 'Russian', ara: 'Arabic', hin: 'Hindi', dut: 'Dutch', nld: 'Dutch', swe: 'Swedish',
+  nor: 'Norwegian', dan: 'Danish', fin: 'Finnish', pol: 'Polish', tur: 'Turkish',
+  gre: 'Greek', ell: 'Greek', heb: 'Hebrew', tha: 'Thai', und: 'Unknown',
+};
+
+// Generate opaque file IDs from paths (deterministic but not reversible)
+function hashId(filePath) {
+  return crypto.createHash('sha256').update(filePath).digest('hex').slice(0, 16);
+}
 
 // Detect VAAPI hardware encoding support
 let VAAPI_AVAILABLE = false;
@@ -179,6 +193,8 @@ function requireAdminSession(req, res, next) {
 }
 
 // Per-profile data: progress, history, queue, watched
+const profileDataCache = new Map(); // profileId -> { data, dirty }
+
 function sanitizeProfileId(profileId) {
   return String(profileId).replace(/[^a-zA-Z0-9_-]/g, '');
 }
@@ -188,15 +204,20 @@ function profileDataPath(profileId) {
 }
 
 function loadProfileData(profileId) {
-  return loadJSON(profileDataPath(profileId), {
+  const cached = profileDataCache.get(profileId);
+  if (cached) return cached.data;
+  const data = loadJSON(profileDataPath(profileId), {
     progress: {},    // id -> { currentTime, duration, percent }
     history: [],     // [{ id, timestamp, title }] most recent first
     queue: [],       // [id, id, ...]
     watched: {},     // id -> true/false
   });
+  profileDataCache.set(profileId, { data, dirty: false });
+  return data;
 }
 
 function saveProfileData(profileId, data) {
+  profileDataCache.set(profileId, { data, dirty: true });
   saveJSON(profileDataPath(profileId), data);
 }
 
@@ -353,8 +374,11 @@ function getStreamMode(filePath) {
   if (!codec) {
     return 'unknown';
   }
-  // Remux h264 (copy video, transcode audio) — much faster than full transcode
+  // H.264 + AAC in .mp4 → direct play (browser-native)
+  if (codec === 'h264' && ext === '.mp4' && (!audioCodec || audioCodec === 'aac')) return 'direct';
+  // H.264 with incompatible container or audio → remux (copy video, transcode audio)
   if (codec === 'h264') return 'remux';
+  // Everything else (HEVC, etc.) → full transcode
   return 'transcode';
 }
 
@@ -576,6 +600,7 @@ function apostropheVariations(title) {
 async function fetchOmdbData(title, year, type) {
   const key = omdbCacheKey(title, year);
   if (omdbCache[key]) return omdbCache[key];
+  if (!OMDB_API_KEY) return null;
 
   // Normalize title for search
   title = normalizeTitle(title);
@@ -789,7 +814,8 @@ function loadLibraryCache() {
       fileIndex = {};
       subtitleIndex = {};
       for (const item of libraryCache) {
-        const fullPath = Buffer.from(item.id, 'base64url').toString();
+        const fullPath = item._filePath;
+        if (!fullPath) continue;
         fileIndex[item.id] = fullPath;
         if (item.posterUrl) fileIndex[`poster_${item.id}`] = findPosterInDir(path.dirname(fullPath), path.parse(path.basename(fullPath)).name) || '';
         if (item.subtitles) {
@@ -835,7 +861,7 @@ function scanLibrary() {
       const baseName = path.parse(file).name;
       const { title, year } = parseTitle(file);
       const type = detectType(file, folder.type);
-      const id = Buffer.from(fullPath).toString('base64url');
+      const id = hashId(fullPath);
 
       fileIndex[id] = fullPath;
 
@@ -851,12 +877,7 @@ function scanLibrary() {
 
       // Embedded subtitles (from probe cache)
       const embeddedSubs = (subProbeCache[fullPath] || []).filter(s => s.extractable).map(s => {
-        const langCodes = { eng: 'English', spa: 'Spanish', fre: 'French', ger: 'German', ita: 'Italian',
-          por: 'Portuguese', jpn: 'Japanese', kor: 'Korean', chi: 'Chinese', zho: 'Chinese',
-          rus: 'Russian', ara: 'Arabic', hin: 'Hindi', dut: 'Dutch', nld: 'Dutch', swe: 'Swedish',
-          nor: 'Norwegian', dan: 'Danish', fin: 'Finnish', pol: 'Polish', tur: 'Turkish',
-          gre: 'Greek', ell: 'Greek', heb: 'Hebrew', tha: 'Thai', und: 'Unknown' };
-        const label = s.title || langCodes[s.lang] || (s.lang ? s.lang.toUpperCase() : 'Track ' + s.index);
+        const label = s.title || LANG_CODES[s.lang] || (s.lang ? s.lang.toUpperCase() : 'Track ' + s.index);
         return { id: `emb_${id}_${s.index}`, label: `${label} [embedded]`, url: `/subtitle/embedded/${id}/${s.index}`, embedded: true };
       });
 
@@ -885,21 +906,16 @@ function scanLibrary() {
       const codec = probeCache[fullPath] || null;
 
       // Audio tracks from probe cache
-      const langCodes = { eng: 'English', spa: 'Spanish', fre: 'French', ger: 'German', ita: 'Italian',
-        por: 'Portuguese', jpn: 'Japanese', kor: 'Korean', chi: 'Chinese', zho: 'Chinese',
-        rus: 'Russian', ara: 'Arabic', hin: 'Hindi', dut: 'Dutch', nld: 'Dutch', swe: 'Swedish',
-        nor: 'Norwegian', dan: 'Danish', fin: 'Finnish', pol: 'Polish', tur: 'Turkish',
-        gre: 'Greek', ell: 'Greek', heb: 'Hebrew', tha: 'Thai', und: 'Unknown' };
       const rawAudioTracks = audioTracksCache[fullPath] || [];
       const audioTracks = rawAudioTracks.map((t, i) => {
-        const langName = langCodes[t.lang] || (t.lang ? t.lang.toUpperCase() : '');
+        const langName = LANG_CODES[t.lang] || (t.lang ? t.lang.toUpperCase() : '');
         const chLabel = t.channels === 6 ? '5.1' : t.channels === 8 ? '7.1' : t.channels === 2 ? 'Stereo' : t.channels === 1 ? 'Mono' : (t.channels ? t.channels + 'ch' : '');
         const parts = [t.title || langName || `Track ${i + 1}`, chLabel, t.codec ? t.codec.toUpperCase() : ''].filter(Boolean);
         return { index: t.index, label: parts.join(' · '), lang: t.lang, channels: t.channels, codec: t.codec };
       });
 
       library.push({
-        id, title, year, type, filename: file,
+        id, _filePath: fullPath, title, year, type, filename: file,
         folder: folder.label || path.basename(dirPath),
         folderPath: folder.path,
         posterUrl: posterAbsPath ? `/poster/${id}` : null,
@@ -1098,8 +1114,9 @@ app.get('/api/item/:id', requireAuth, (req, res) => {
   const omdb = getOmdbForItem(item);
   const profileId = getRequestProfile(req) || 'default';
   const profileData = loadProfileData(profileId);
+  const { _filePath, ...safeItem } = item;
   res.json({
-    ...item,
+    ...safeItem,
     progress: profileData.progress[item.id] || { currentTime: 0, duration: 0, percent: 0 },
     watched: !!profileData.watched[item.id],
     ...(omdb || {}),
@@ -1250,7 +1267,7 @@ app.get('/api/skip-segments/:id', async (req, res) => {
   res.json({});
 });
 
-app.post('/api/skip-segments/:id', (req, res) => {
+app.post('/api/skip-segments/:id', requireAuth, (req, res) => {
   const id = req.params.id;
   const { intro, outro, applyToShow } = req.body;
   const data = {};
@@ -1271,7 +1288,7 @@ app.post('/api/skip-segments/:id', (req, res) => {
   res.json({ ok: true });
 });
 
-app.delete('/api/skip-segments/:id', (req, res) => {
+app.delete('/api/skip-segments/:id', requireAuth, (req, res) => {
   delete skipSegments[req.params.id];
   saveJSON(SKIP_SEGMENTS_FILE, skipSegments);
   res.json({ ok: true });
@@ -1407,7 +1424,7 @@ app.post('/api/detect-intro/:id', async (req, res) => {
 });
 
 // ── Genres ──────────────────────────────────────────────────────────────
-app.post('/api/genres', (req, res) => {
+app.post('/api/genres', requireAuth, (req, res) => {
   const { id, genres } = req.body;
   if (!id) return res.status(400).json({ error: 'Missing id' });
   config.genres[id] = Array.isArray(genres) ? genres : [];
@@ -1600,7 +1617,7 @@ app.get('/api/browse', requireAdmin, (req, res) => {
 // ── Streaming & File serving ─────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════
 
-app.get('/stream/:id', (req, res) => {
+app.get('/stream/:id', requireAuth, (req, res) => {
   if (Object.keys(fileIndex).length === 0) scanLibrary();
   const filePath = fileIndex[req.params.id];
   if (!filePath || !fs.existsSync(filePath)) return res.status(404).send('File not found');
@@ -1629,7 +1646,7 @@ app.get('/stream/:id', (req, res) => {
   }
 });
 
-app.get('/poster/:id', (req, res) => {
+app.get('/poster/:id', requireAuth, (req, res) => {
   if (Object.keys(fileIndex).length === 0) scanLibrary();
   const p = fileIndex[`poster_${req.params.id}`];
   if (!p || !fs.existsSync(p)) return res.status(404).send('Not found');
@@ -1998,7 +2015,7 @@ app.get('/api/sprites/:id/:sheet', (req, res) => {
   res.status(202).send('Generating');
 });
 
-app.get('/subtitle/:id', (req, res) => {
+app.get('/subtitle/:id', requireAuth, (req, res) => {
   if (Object.keys(subtitleIndex).length === 0) scanLibrary();
   const sub = subtitleIndex[req.params.id];
   if (!sub || !fs.existsSync(sub.absPath)) return res.status(404).send('Not found');
@@ -2018,7 +2035,7 @@ app.get('/subtitle/:id', (req, res) => {
 });
 
 // ── Embedded subtitle extraction ─────────────────────────────────────
-app.get('/subtitle/embedded/:fileId/:streamIndex', (req, res) => {
+app.get('/subtitle/embedded/:fileId/:streamIndex', requireAuth, (req, res) => {
   if (Object.keys(fileIndex).length === 0) scanLibrary();
   const filePath = fileIndex[req.params.fileId];
   if (!filePath || !fs.existsSync(filePath)) return res.status(404).send('File not found');
@@ -2128,7 +2145,7 @@ function startFfmpeg(id, filePath, sessionDir, seekTime, startSegNum, audioStrea
   };
 }
 
-app.get('/hls/:id/master.m3u8', async (req, res) => {
+app.get('/hls/:id/master.m3u8', requireAuth, async (req, res) => {
   if (Object.keys(fileIndex).length === 0) scanLibrary();
   const id = req.params.id;
   const filePath = fileIndex[id];
@@ -2229,7 +2246,7 @@ app.get('/hls/:id/master.m3u8', async (req, res) => {
   }, 100);
 });
 
-app.get('/hls/:id/:segment', (req, res) => {
+app.get('/hls/:id/:segment', requireAuth, (req, res) => {
   const id = req.params.id;
   const segName = req.params.segment;
 
@@ -2365,8 +2382,14 @@ async function qbt(method, apiPath, body) {
 
 function qbtJson(r) { try { return JSON.parse(r.data); } catch { return r.data; } }
 
+// Guard: reject qBT requests if credentials not configured
+function requireQbt(req, res, next) {
+  if (!QBT_USERNAME || !QBT_PASSWORD) return res.status(503).json({ error: 'qBittorrent not configured. Set QBT_USER and QBT_PASS env vars.' });
+  next();
+}
+
 // qBittorrent status
-app.get('/api/qbt/status', requireAdminSession, async (_req, res) => {
+app.get('/api/qbt/status', requireAdminSession, requireQbt, async (_req, res) => {
   try {
     const ok = await qbtAuth();
     res.json({ connected: ok });
@@ -2528,13 +2551,20 @@ app.post('/api/restart', requireAdmin, (_req, res) => {
   res.json({ ok: true });
   setTimeout(() => {
     Object.keys(transcodeSessions).forEach(cleanupSession);
-    const child = spawn(process.argv[0], process.argv.slice(1), {
-      cwd: __dirname,
-      detached: true,
-      stdio: 'ignore'
-    });
-    child.unref();
-    process.exit(0);
+    // Exit with code 1 so systemd Restart=on-failure will restart the service.
+    // When not running under systemd, spawn a replacement process first.
+    if (process.env.INVOCATION_ID) {
+      // Running under systemd — just exit, systemd handles restart
+      process.exit(1);
+    } else {
+      const child = spawn(process.argv[0], process.argv.slice(1), {
+        cwd: __dirname,
+        detached: true,
+        stdio: 'ignore'
+      });
+      child.unref();
+      process.exit(0);
+    }
   }, 500);
 });
 
@@ -2556,6 +2586,8 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`  ║  Network: http://${ip}:${PORT}        ║`);
   console.log('  ╚══════════════════════════════════════════════╝');
   console.log('');
+  if (!OMDB_API_KEY) console.log('  [WARN] OMDB_API_KEY not set — metadata fetching disabled');
+  if (!QBT_USERNAME) console.log('  [WARN] QBT_USER/QBT_PASS not set — torrent features disabled');
   console.log(`  Profiles: ${config.profiles.map(p => p.name).join(', ')}`);
   console.log(`  Linked folders: ${config.folders.length}`);
   config.folders.forEach(f => {

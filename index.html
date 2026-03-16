@@ -2043,7 +2043,7 @@ async function saveProg(){
   if(!currentMedia||!V.duration)return;
   const offset=window._hlsSeekOffset||0;
   const cur=offset+V.currentTime;
-  const total=offset+V.duration;
+  const total=_hlsTotalDuration();
   try{await fetch('/api/progress',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:currentMedia.id,currentTime:cur,duration:total,profile:activeProfile})});
   currentMedia.progress={currentTime:cur,duration:total,percent:Math.round((cur/total)*100),updatedAt:Date.now()};}catch{}
 }
