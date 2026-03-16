@@ -294,8 +294,10 @@ select,input{font-family:inherit}
 .player-close{width:34px;height:34px;border-radius:50%;background:rgba(255,255,255,.12);display:flex;align-items:center;justify-content:center;font-size:1rem;transition:background var(--transition)}
 .player-close:hover{background:rgba(255,255,255,.25)}
 .player-now-playing{font-size:.92rem;font-weight:600;text-shadow:0 1px 4px rgba(0,0,0,.6)}
-.player-video-wrapper{flex:1;display:flex;align-items:center;justify-content:center;position:relative}
+.player-video-wrapper{flex:1;display:flex;align-items:center;justify-content:center;position:relative;overflow:hidden}
 .player-video-wrapper video{width:100%;height:100%;object-fit:contain;background:#000}
+.player-video-wrapper.subs-active video{height:calc(100% - 60px);margin-bottom:60px}
+video::cue{background:rgba(0,0,0,.8);color:#fff;font-size:clamp(1.6rem, 3.5vw, 2.8rem);line-height:1.4;padding:4px 10px;border-radius:4px}
 .player-controls{position:absolute;bottom:0;left:0;right:0;z-index:10;padding:0 18px 14px;background:linear-gradient(transparent,rgba(0,0,0,.85));opacity:0;transition:opacity .3s}
 .player-modal:hover .player-controls,.player-modal.controls-visible .player-controls{opacity:1}
 .progress-container{width:100%;height:20px;display:flex;align-items:center;cursor:pointer;margin-bottom:6px}
@@ -319,6 +321,10 @@ select,input{font-family:inherit}
 .ep-info{font-size:.7rem;color:var(--text-muted);margin-left:4px;white-space:nowrap}
 .speed-menu,.skip-menu,.sub-menu,.audio-menu{position:absolute;bottom:100%;right:0;background:var(--bg-secondary);border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:6px 0;min-width:120px;box-shadow:0 8px 32px rgba(0,0,0,.5);display:none;z-index:20}
 .speed-menu.open,.skip-menu.open,.sub-menu.open,.audio-menu.open{display:block}
+.sub-menu{min-width:200px;max-height:60vh;overflow-y:auto}
+.sub-menu::-webkit-scrollbar{width:6px}
+.sub-menu::-webkit-scrollbar-track{background:transparent}
+.sub-menu::-webkit-scrollbar-thumb{background:rgba(255,255,255,.2);border-radius:3px}
 .audio-menu{min-width:180px;max-height:300px;overflow-y:auto}
 .menu-option{display:flex;align-items:center;justify-content:space-between;padding:7px 14px;font-size:.82rem;cursor:pointer;transition:background var(--transition)}
 .menu-option:hover{background:var(--bg-hover)}
@@ -1486,11 +1492,11 @@ function getPlaylist(){
       if(sa!==sb)return sa-sb;
       const ea=a.epInfo?a.epInfo.episode:0, eb=b.epInfo?b.epInfo.episode:0;
       if(ea!==eb)return ea-eb;
-      return a.filename.localeCompare(b.filename,undefined,{numeric:true});
+      return (a.filename||a.title||'').localeCompare(b.filename||b.title||'',undefined,{numeric:true});
     });
   } else {
     list=library.filter(m=>m.folder===currentMedia.folder&&m.type===currentMedia.type);
-    list.sort((a,b)=>a.filename.localeCompare(b.filename,undefined,{numeric:true}));
+    list.sort((a,b)=>(a.filename||a.title||'').localeCompare(b.filename||b.title||'',undefined,{numeric:true}));
   }
   return list;
 }
@@ -1542,6 +1548,9 @@ function setSub(idx){
     V.appendChild(track);
     // Enable the track
     setTimeout(()=>{if(V.textTracks[0])V.textTracks[0].mode='showing';},200);
+    document.getElementById('videoWrapper').classList.add('subs-active');
+  } else {
+    document.getElementById('videoWrapper').classList.remove('subs-active');
   }
   closeMenus();
 }
@@ -1705,10 +1714,10 @@ async function playMedia(id){
   const item=library.find(m=>m.id===id);if(!item)return;
   // Fetch full item details (subtitles, audioTracks, etc.)
   try{
-    const res=await fetch(`/api/item/${id}?profile=${activeProfile}`);
+    const res=await fetch(`/api/item/${id}`);
     const full=await res.json();
-    Object.assign(item,full);
-  }catch{}
+    if(res.ok) Object.assign(item,full);
+  }catch(e){console.error('[playMedia] item fetch error:', e.message);}
   currentMedia=item;
   document.getElementById('playerTitle').textContent=item.title;
   if(typeof _clearThumbCache==='function')_clearThumbCache();
