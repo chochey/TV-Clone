@@ -1997,9 +1997,29 @@ V.addEventListener('timeupdate',()=>{
 V.addEventListener('play',()=>{document.getElementById('playPauseBtn').innerHTML='&#10074;&#10074;';});
 V.addEventListener('pause',()=>{document.getElementById('playPauseBtn').innerHTML='&#9654;&#65039;';});
 
-// Stall recovery disabled for debugging
+// Stall recovery: if paused too long, the backend session times out and buffer runs dry
 let _stallTimer=null;
-V.addEventListener('playing',()=>{clearTimeout(_stallTimer);});
+let _lastStallRecovery=0;
+let _hasPlayedBefore=false;
+V.addEventListener('waiting',()=>{
+  if(!currentMedia||V.paused)return;
+  // Don't trigger stall recovery during initial load — only after playback has started
+  if(!_hasPlayedBefore)return;
+  clearTimeout(_stallTimer);
+  _stallTimer=setTimeout(()=>{
+    if(V.paused||!currentMedia)return;
+    if(Date.now()-_lastStallRecovery<30000)return;
+    if(V.readyState<3&&typeof window._hlsLoad==='function'){
+      console.log('[Stall Recovery] Buffer exhausted, reloading HLS from current position');
+      _lastStallRecovery=Date.now();
+      const currentTime=Math.round(V.currentTime+(window._hlsSeekOffset||0));
+      const audioParam=_currentAudioTrack!=null?'&audio='+_currentAudioTrack:'';
+      window._hlsSeekOffset=currentTime;
+      window._hlsLoad('/hls/'+currentMedia.id+'/master.m3u8?start='+currentTime+audioParam);
+    }
+  },10000);
+});
+V.addEventListener('playing',()=>{clearTimeout(_stallTimer);_hasPlayedBefore=true;});
 V.addEventListener('ended',()=>{
   const next=getNextEp();
   if(next&&!_upNextCancelled){saveProg();playMedia(next.id);}
@@ -2027,7 +2047,7 @@ async function saveProg(){
   if(!currentMedia||!V.duration)return;
   const offset=window._hlsSeekOffset||0;
   const cur=offset+V.currentTime;
-  const total=offset+V.duration;
+  const total=_hlsTotalDuration();
   try{await fetch('/api/progress',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:currentMedia.id,currentTime:cur,duration:total,profile:activeProfile})});
   currentMedia.progress={currentTime:cur,duration:total,percent:Math.round((cur/total)*100),updatedAt:Date.now()};}catch{}
 }
