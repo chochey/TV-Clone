@@ -1796,7 +1796,7 @@ function extractFrame(filePath, timestamp, outFile) {
 }
 
 // Extract all frames using parallel fast-seeking (multiple concurrent ffmpeg processes)
-const SPRITE_PARALLEL = 8; // concurrent frame extractions per file
+const SPRITE_PARALLEL = parseInt(process.env.SPRITE_PARALLEL, 10) || 2; // concurrent frame extractions per file
 function extractAllFrames(filePath, tmpDir, totalFrames) {
   return new Promise(async (resolve) => {
     // Collect frames that still need extracting
@@ -1957,16 +1957,18 @@ function queueAllSpriteGen() {
   for (const d of drives) console.log(`  [SPRITE] ${d}: ${driveMap[d].length} files`);
 
   (async () => {
-    // Process one video per drive concurrently (parallel across drives)
+    // Process one file at a time, round-robin across drives (low memory usage)
     const driveQueues = drives.map(d => driveMap[d]);
     const maxLen = Math.max(...driveQueues.map(q => q.length));
     for (let i = 0; i < maxLen; i++) {
-      const batch = driveQueues.map(q => q[i]).filter(Boolean);
-      spriteQueue.current = batch.map(b => b.title).join(', ');
-      await Promise.all(batch.map(({ id, filePath, title }) => {
-        console.log(`[SPRITE] Processing: ${title}`);
-        return startSpriteGen(id, filePath).then(() => { spriteQueue.completed++; });
-      }));
+      for (const q of driveQueues) {
+        const item = q[i];
+        if (!item) continue;
+        spriteQueue.current = item.title;
+        console.log(`[SPRITE] Processing: ${item.title}`);
+        await startSpriteGen(item.id, item.filePath);
+        spriteQueue.completed++;
+      }
     }
     spriteQueue.running = false;
     spriteQueue.current = '';
