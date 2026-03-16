@@ -284,9 +284,73 @@ function findPosterInDir(dirPath, baseName) {
   return null;
 }
 
+// 2-letter ISO 639-1 code mapping (supplements the 3-letter LANG_CODES)
+const LANG_CODES_2 = {
+  en: 'English', es: 'Spanish', fr: 'French', de: 'German', it: 'Italian',
+  pt: 'Portuguese', ja: 'Japanese', ko: 'Korean', zh: 'Chinese', ru: 'Russian',
+  ar: 'Arabic', hi: 'Hindi', nl: 'Dutch', sv: 'Swedish', no: 'Norwegian', da: 'Danish',
+  fi: 'Finnish', pl: 'Polish', tr: 'Turkish', el: 'Greek', he: 'Hebrew', th: 'Thai',
+  cs: 'Czech', hr: 'Croatian', hu: 'Hungarian', ro: 'Romanian', uk: 'Ukrainian',
+  vi: 'Vietnamese', id: 'Indonesian', ms: 'Malay', tl: 'Tagalog', ca: 'Catalan',
+  eu: 'Basque', bg: 'Bulgarian', sk: 'Slovak', sl: 'Slovenian', sr: 'Serbian',
+  lt: 'Lithuanian', lv: 'Latvian', et: 'Estonian', ta: 'Tamil', te: 'Telugu',
+};
+
+// Full-word language names that appear in subtitle filenames
+const LANG_WORDS = {
+  english: 'English', spanish: 'Spanish', french: 'French', german: 'German', italian: 'Italian',
+  portuguese: 'Portuguese', japanese: 'Japanese', korean: 'Korean', chinese: 'Chinese', russian: 'Russian',
+  arabic: 'Arabic', hindi: 'Hindi', dutch: 'Dutch', swedish: 'Swedish', norwegian: 'Norwegian',
+  danish: 'Danish', finnish: 'Finnish', polish: 'Polish', turkish: 'Turkish', greek: 'Greek',
+  hebrew: 'Hebrew', thai: 'Thai', czech: 'Czech', croatian: 'Croatian', hungarian: 'Hungarian',
+  romanian: 'Romanian', ukrainian: 'Ukrainian', vietnamese: 'Vietnamese', indonesian: 'Indonesian',
+  catalan: 'Catalan', basque: 'Basque', bulgarian: 'Bulgarian', slovak: 'Slovak', slovenian: 'Slovenian',
+  serbian: 'Serbian', brazilian: 'Portuguese (BR)', european: 'European', forced: 'Forced',
+};
+
+function detectSubLanguage(filename, videoBaseName) {
+  const name = path.parse(filename).name;
+  // Strip the video basename prefix if present to get the language/tag portion
+  let tagPart = name;
+  if (videoBaseName && name.toLowerCase().startsWith(videoBaseName.toLowerCase())) {
+    tagPart = name.slice(videoBaseName.length).replace(/^[\.\-_ ]+/, '');
+  }
+  if (!tagPart) return 'Default';
+
+  const parts = tagPart.toLowerCase().split(/[\.\-_ ]+/).filter(Boolean);
+  const labels = [];
+
+  for (const part of parts) {
+    const resolved = LANG_WORDS[part] || LANG_CODES_2[part] || LANG_CODES[part];
+    if (resolved) {
+      // Don't add duplicate language names (e.g. "english" + "eng" both resolve to "English")
+      if (!labels.includes(resolved)) labels.push(resolved);
+      continue;
+    }
+    // SDH, CC, forced, etc. — keep as-is
+    if (/^(sdh|cc|hi|forced|full|default|signs|songs)$/i.test(part)) { labels.push(part.toUpperCase()); continue; }
+    // Qualifiers like "simplified", "traditional", "canadian" — keep readable
+    if (part.length > 3) { labels.push(part.charAt(0).toUpperCase() + part.slice(1)); continue; }
+    // Unknown short code — show uppercase
+    labels.push(part.toUpperCase());
+  }
+
+  return labels.length > 0 ? labels.join(' · ') : 'Unknown';
+}
+
 function findSubtitles(dirPath, baseName) {
   const subs = [];
-  const searchDirs = [dirPath, path.join(dirPath, 'subs'), path.join(dirPath, 'subtitles')];
+  // Search: video directory, plus common subtitle subdirectories
+  const searchDirs = [dirPath];
+  try {
+    for (const entry of fs.readdirSync(dirPath, { withFileTypes: true })) {
+      if (entry.isDirectory() && /^(subs?|subtitles?)$/i.test(entry.name)) {
+        searchDirs.push(path.join(dirPath, entry.name));
+      }
+    }
+  } catch {}
+
+  const baseNameLower = baseName.toLowerCase();
   for (const dir of searchDirs) {
     if (!fs.existsSync(dir)) continue;
     let files;
@@ -295,23 +359,16 @@ function findSubtitles(dirPath, baseName) {
       const ext = path.extname(f).toLowerCase();
       if (!SUBTITLE_EXT.includes(ext)) continue;
       const subBase = path.parse(f).name.toLowerCase();
-      // Match: exact name, or name.lang (e.g. movie.en.srt)
-      if (subBase === baseName.toLowerCase() || subBase.startsWith(baseName.toLowerCase() + '.')) {
-        // Try to detect language from filename
-        let lang = 'Unknown';
-        const langMatch = subBase.match(/\.([a-z]{2,3})$/);
-        if (langMatch) {
-          const codes = { en: 'English', es: 'Spanish', fr: 'French', de: 'German', it: 'Italian',
-            pt: 'Portuguese', ja: 'Japanese', ko: 'Korean', zh: 'Chinese', ru: 'Russian',
-            ar: 'Arabic', hi: 'Hindi', nl: 'Dutch', sv: 'Swedish', no: 'Norwegian', da: 'Danish',
-            fi: 'Finnish', pl: 'Polish', tr: 'Turkish', el: 'Greek', he: 'Hebrew', th: 'Thai' };
-          lang = codes[langMatch[1]] || langMatch[1].toUpperCase();
-        } else if (subBase === baseName.toLowerCase()) {
-          lang = 'Default';
-        }
+
+      // Match: exact name, name.lang, OR if only one video in dir pick up all subs
+      const nameMatch = subBase === baseNameLower || subBase.startsWith(baseNameLower + '.');
+      const isSubDir = dir !== dirPath; // subs in a subdirectory likely belong to the video
+
+      if (nameMatch || isSubDir) {
+        const label = detectSubLanguage(f, baseName);
         const absPath = path.join(dir, f);
         const subId = crypto.createHash('sha256').update(absPath).digest('hex').slice(0, 16);
-        subs.push({ id: subId, label: lang, filename: f, absPath, format: ext.slice(1) });
+        subs.push({ id: subId, label, filename: f, absPath, format: ext.slice(1) });
       }
     }
   }
@@ -820,9 +877,8 @@ function loadLibraryCache() {
         if (item.posterUrl) fileIndex[`poster_${item.id}`] = findPosterInDir(path.dirname(fullPath), path.parse(path.basename(fullPath)).name) || '';
         if (item.subtitles) {
           for (const s of item.subtitles) {
-            if (!s.embedded && s.id) {
-              const subPath = path.join(path.dirname(fullPath), s.id.replace(/^sub_/, ''));
-              subtitleIndex[s.id] = { absPath: subPath, format: s.url?.endsWith('.vtt') ? 'vtt' : 'srt' };
+            if (!s.embedded && s.id && s._absPath) {
+              subtitleIndex[s.id] = { absPath: s._absPath, format: s._format || 'srt' };
             }
           }
         }
@@ -921,7 +977,7 @@ function scanLibrary() {
         posterUrl: posterAbsPath ? `/poster/${id}` : null,
         videoUrl: `/stream/${id}`,
         subtitles: [
-          ...subs.map(s => ({ id: s.id, label: s.label, url: `/subtitle/${s.id}` })),
+          ...subs.map(s => ({ id: s.id, label: s.label, url: `/subtitle/${s.id}`, _absPath: s.absPath, _format: s.format })),
           ...embeddedSubs,
         ],
         audioTracks,
@@ -1081,6 +1137,7 @@ app.get('/api/library', (req, res) => {
       type: item.type,
       showName: item.showName,
       epInfo: item.epInfo,
+      filename: item.filename,
       fileSize: item.fileSize,
       addedAt: item.addedAt,
       streamMode: item.streamMode,
@@ -1115,6 +1172,10 @@ app.get('/api/item/:id', requireAuth, (req, res) => {
   const profileId = getRequestProfile(req) || 'default';
   const profileData = loadProfileData(profileId);
   const { _filePath, ...safeItem } = item;
+  // Strip internal fields from subtitles
+  if (safeItem.subtitles) {
+    safeItem.subtitles = safeItem.subtitles.map(({ _absPath, _format, ...s }) => s);
+  }
   res.json({
     ...safeItem,
     progress: profileData.progress[item.id] || { currentTime: 0, duration: 0, percent: 0 },
@@ -1855,8 +1916,8 @@ async function startSpriteGen(id, filePath) {
 
 // Background: generate sprites for all movies in library
 function queueAllSpriteGen() {
-  if (process.env.SKIP_SPRITES === '1') {
-    console.log('[SPRITE] Skipped — SKIP_SPRITES=1');
+  if (process.env.ENABLE_SPRITES !== '1') {
+    console.log('[SPRITE] Skipped — set ENABLE_SPRITES=1 to enable');
     return;
   }
   if (spriteQueue.running) {
@@ -2073,7 +2134,9 @@ app.get('/subtitle/:id', requireAuth, (req, res) => {
     const content = fs.readFileSync(sub.absPath, 'utf-8');
     const vtt = 'WEBVTT\n\n' + content
       .replace(/\r\n/g, '\n')
-      .replace(/(\d{2}):(\d{2}):(\d{2}),(\d{3})/g, '$1:$2:$3.$4');
+      .replace(/(\d{2}):(\d{2}):(\d{2}),(\d{3})/g, '$1:$2:$3.$4')
+      .replace(/\{\\[^}]*\}/g, '')          // Strip SSA/ASS style tags like {\an8}, {\i1}, {\b1}
+      .replace(/<font[^>]*>|<\/font>/gi, ''); // Strip HTML font tags
     res.set('Content-Type', 'text/vtt; charset=utf-8');
     res.send(vtt);
   } else {
