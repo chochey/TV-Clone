@@ -2078,9 +2078,25 @@ function dlStatusLabel(state){
 function dlFormatSpeed(bps){if(bps<=0)return '';if(bps<1024)return bps+' B/s';if(bps<1048576)return(bps/1024).toFixed(1)+' KB/s';return(bps/1048576).toFixed(1)+' MB/s';}
 function dlFormatEta(s){if(s<=0||s>=8640000)return '';const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sec=s%60;return(h?h+'h ':'')+(m?m+'m ':'')+(sec&&!h?sec+'s':'');}
 
-function renderDownloads(){
+async function renderDownloads(){
   const a=document.getElementById('contentArea');
   a.innerHTML=`<div class="dl-page"><h2 style="font-size:1.3rem;font-weight:700;margin-bottom:4px">Downloads</h2><p style="color:var(--text-muted);font-size:.82rem;margin-bottom:12px">Search and download torrents via qBittorrent</p><div id="dlContent"><div style="text-align:center;padding:60px"><span class="dl-spinner" style="width:32px;height:32px;border-width:3px"></span><p style="color:var(--text-muted);margin-top:16px;font-size:.85rem">Connecting to qBittorrent...</p></div></div></div>`;
+  // Check if qBT is configured and reachable
+  try{
+    const r=await fetch('/api/qbt/status');
+    const d=await r.json();
+    if(r.status===503){
+      document.getElementById('dlContent').innerHTML=`<div style="text-align:center;padding:60px"><p style="color:var(--text-muted);font-size:.95rem">${d.error||'qBittorrent not configured.'}</p><p style="color:var(--text-muted);font-size:.82rem;margin-top:8px">Set QBT_USER, QBT_PASS, and QBT_URL environment variables to enable downloads.</p></div>`;
+      return;
+    }
+    if(!d.connected){
+      document.getElementById('dlContent').innerHTML=`<div style="text-align:center;padding:60px"><p style="color:var(--text-muted);font-size:.95rem">Could not connect to qBittorrent.</p><p style="color:var(--text-muted);font-size:.82rem;margin-top:8px">Make sure qBittorrent is running and the Web UI is enabled.</p></div>`;
+      return;
+    }
+  }catch{
+    document.getElementById('dlContent').innerHTML=`<div style="text-align:center;padding:60px"><p style="color:var(--text-muted);font-size:.95rem">Could not reach the server.</p></div>`;
+    return;
+  }
   Promise.all([dlFetchPlugins(),dlRefreshTorrents()]).then(()=>{
     if(currentView!=='downloads')return;
     const a2=document.getElementById('dlContent');

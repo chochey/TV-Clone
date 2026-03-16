@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html><head><title>HLS Test</title>
+<script src="/hls.min.js"></script>
+</head><body style="background:#000;color:#fff;font-family:monospace">
+<h2>HLS Test Player</h2>
+<video id="v" controls width="640" height="360" style="background:#222"></video>
+<pre id="log" style="max-height:400px;overflow:auto;font-size:12px"></pre>
+<script>
+const log = document.getElementById('log');
+function addLog(msg) {
+  log.textContent += new Date().toISOString().substr(11,12) + ' ' + msg + '\n';
+  log.scrollTop = log.scrollHeight;
+  console.log(msg);
+}
+
+const video = document.getElementById('v');
+const hlsUrl = '/hls/L21udC9tZWRpYS9Nb3ZpZXMvMTMgSG91cnMgVGhlIFNlY3JldCBTb2xkaWVycyBvZiBCZW5naGF6aSAoMjAxNikvMTMgSG91cnMgVGhlIFNlY3JldCBTb2xkaWVycyBvZiBCZW5naGF6aSAoMjAxNikubWt2/master.m3u8';
+
+addLog('Hls supported: ' + Hls.isSupported());
+addLog('Loading: ' + hlsUrl);
+
+if (Hls.isSupported()) {
+  const hls = new Hls({debug: false, enableWorker: true});
+  hls.loadSource(hlsUrl);
+  hls.attachMedia(video);
+
+  hls.on(Hls.Events.MANIFEST_PARSED, (e, data) => {
+    addLog('MANIFEST_PARSED: levels=' + data.levels.length);
+    video.play().catch(e => addLog('play() error: ' + e.message));
+  });
+
+  hls.on(Hls.Events.MANIFEST_LOADED, (e, data) => {
+    addLog('MANIFEST_LOADED: ' + data.levels.length + ' levels');
+  });
+
+  hls.on(Hls.Events.LEVEL_LOADED, (e, data) => {
+    addLog('LEVEL_LOADED: frags=' + data.details.fragments.length + ' live=' + data.details.live);
+  });
+
+  hls.on(Hls.Events.FRAG_LOADING, (e, data) => {
+    addLog('FRAG_LOADING: sn=' + data.frag.sn + ' url=' + data.frag.url.split('/').pop());
+  });
+
+  hls.on(Hls.Events.FRAG_LOADED, (e, data) => {
+    addLog('FRAG_LOADED: sn=' + data.frag.sn + ' bytes=' + (data.payload ? data.payload.byteLength : 'N/A'));
+  });
+
+  hls.on(Hls.Events.FRAG_BUFFERED, (e, data) => {
+    addLog('FRAG_BUFFERED: sn=' + data.frag.sn);
+  });
+
+  hls.on(Hls.Events.FRAG_PARSING_INIT_SEGMENT, (e, data) => {
+    addLog('FRAG_PARSING_INIT_SEGMENT: tracks=' + JSON.stringify(Object.keys(data.tracks || {})));
+  });
+
+  hls.on(Hls.Events.ERROR, (e, data) => {
+    addLog('ERROR: type=' + data.type + ' details=' + data.details + ' fatal=' + data.fatal);
+    if (data.reason) addLog('  reason: ' + data.reason);
+    if (data.error) addLog('  error: ' + data.error.message);
+    if (data.response) addLog('  response: status=' + data.response.code);
+  });
+
+  video.addEventListener('error', () => {
+    const e = video.error;
+    addLog('VIDEO ERROR: code=' + e.code + ' message=' + e.message);
+  });
+} else {
+  addLog('HLS not supported, trying native');
+  video.src = hlsUrl;
+}
+</script></body></html>
