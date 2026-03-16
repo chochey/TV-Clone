@@ -306,7 +306,7 @@ video::cue{background:rgba(0,0,0,.8);color:#fff;font-size:clamp(1.6rem, 3.5vw, 2
 .progress-filled{height:100%;background:var(--accent);border-radius:2px;position:relative}
 .progress-thumb{position:absolute;right:-6px;top:50%;transform:translateY(-50%);width:12px;height:12px;border-radius:50%;background:var(--accent);opacity:0;transition:opacity .15s;box-shadow:0 0 6px rgba(0,164,220,.5)}
 .progress-container:hover .progress-thumb{opacity:1}
-.seek-preview{position:absolute;bottom:24px;transform:translateX(-50%);pointer-events:none;opacity:0;transition:opacity .15s;z-index:10}
+.seek-preview{position:absolute;bottom:60px;transform:translateX(-50%);pointer-events:none;opacity:0;transition:opacity .15s;z-index:10}
 .seek-preview.visible{opacity:1}
 .seek-preview-thumb{width:160px;height:90px;border-radius:6px;border:2px solid rgba(255,255,255,.3);box-shadow:0 4px 20px rgba(0,0,0,.7);background-size:cover;background-color:#000;overflow:hidden}
 .seek-preview-time{text-align:center;font-size:.75rem;color:#fff;margin-top:4px;text-shadow:0 1px 3px rgba(0,0,0,.8)}
@@ -1733,9 +1733,8 @@ async function playMedia(id){
   const startTime=item.progress.currentTime>5?item.progress.currentTime:0;
   modal.classList.add('active');
 
-  // Direct streaming for h264 mp4 files — browser plays natively with range requests
-  const ext=(item.filename||'').split('.').pop().toLowerCase();
-  if(item.codec==='h264'&&(ext==='mp4'||ext==='m4v')){
+  // Direct streaming — only when server confirms direct play is safe (h264+aac in mp4)
+  if(item.streamMode==='direct'){
     window._hlsSeekOffset=0;
     window._hlsTotalDur=0;
     window._hlsLoad=null;
