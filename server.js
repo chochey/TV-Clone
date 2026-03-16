@@ -1720,47 +1720,43 @@ function spriteFilePath(thumbId, sheetNum) {
   return path.join(THUMB_DIR, `${thumbId}_sprite_${sheetNum}.jpg`);
 }
 
-// Extract all frames in a single ffmpeg pass (one process instead of hundreds)
-function extractAllFrames(filePath, tmpDir, totalFrames) {
+// Extract a single frame via fast input seeking
+function extractFrame(filePath, timestamp, outFile) {
   return new Promise((resolve) => {
-    // Check if all frames already exist (resume support)
-    let allExist = true;
-    for (let i = 0; i < totalFrames; i++) {
-      if (!fs.existsSync(path.join(tmpDir, `frame_${String(i + 1).padStart(5, '0')}.jpg`))) {
-        allExist = false;
-        break;
-      }
-    }
-    if (allExist) return resolve(true);
-
-    // Single ffmpeg process: output one frame every SPRITE_INTERVAL seconds
     const proc = spawn('ionice', ['-c', '3', 'nice', '-n', '19', 'ffmpeg',
       '-hide_banner', '-loglevel', 'error',
-      '-i', filePath,
-      '-vf', `fps=1/${SPRITE_INTERVAL},scale=${SPRITE_W}:${SPRITE_H}:force_original_aspect_ratio=decrease,pad=${SPRITE_W}:${SPRITE_H}:(ow-iw)/2:(oh-ih)/2`,
-      '-q:v', '5', '-y',
-      path.join(tmpDir, 'frame_%05d.jpg'),
+      '-ss', String(timestamp), '-i', filePath,
+      '-vframes', '1', '-vf', `scale=${SPRITE_W}:${SPRITE_H}:force_original_aspect_ratio=decrease,pad=${SPRITE_W}:${SPRITE_H}:(ow-iw)/2:(oh-ih)/2`,
+      '-q:v', '5', '-y', outFile,
     ]);
+    proc.on('close', (code) => resolve(code === 0));
+    proc.on('error', () => resolve(false));
+  });
+}
 
-    // Kill ffmpeg if a transcode session starts (prioritize playback)
-    let killed = false;
-    const watchdog = setInterval(() => {
-      if (Object.keys(transcodeSessions).length > 0 && !killed) {
-        killed = true;
-        proc.kill('SIGTERM');
-      }
-    }, 2000);
+// Extract all frames using parallel fast-seeking (multiple concurrent ffmpeg processes)
+const SPRITE_PARALLEL = 8; // concurrent frame extractions per file
+function extractAllFrames(filePath, tmpDir, totalFrames) {
+  return new Promise(async (resolve) => {
+    // Collect frames that still need extracting
+    const pending = [];
+    for (let i = 0; i < totalFrames; i++) {
+      const outFile = path.join(tmpDir, `frame_${String(i + 1).padStart(5, '0')}.jpg`);
+      if (!fs.existsSync(outFile)) pending.push({ ts: i * SPRITE_INTERVAL, outFile });
+    }
+    if (pending.length === 0) return resolve(true);
 
-    proc.on('close', (code) => {
-      clearInterval(watchdog);
-      if (killed) {
-        // Was interrupted by transcoding — don't delete partial frames, will resume later
-        resolve(false);
-      } else {
-        resolve(code === 0);
+    let allOk = true;
+    for (let i = 0; i < pending.length; i += SPRITE_PARALLEL) {
+      // Pause if someone is watching
+      if (Object.keys(transcodeSessions).length > 0) {
+        await waitForTranscodeIdle();
       }
-    });
-    proc.on('error', () => { clearInterval(watchdog); resolve(false); });
+      const batch = pending.slice(i, i + SPRITE_PARALLEL);
+      const results = await Promise.all(batch.map(f => extractFrame(filePath, f.ts, f.outFile)));
+      if (results.some(r => !r)) allOk = false;
+    }
+    resolve(allOk);
   });
 }
 
