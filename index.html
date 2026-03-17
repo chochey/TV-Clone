@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<title>Local Stream</title>
-<script>if(location.port!=='4800'&&location.port!=='80'&&location.port!=='')document.title='Local Stream [DEV:'+location.port+']';</script>
+<title>Chochey's Media Server</title>
+<script>if(location.port!=='4800'&&location.port!=='80'&&location.port!=='')document.title="Chochey's Media Server [DEV:"+location.port+']';</script>
 <script src="/hls.min.js"></script>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -290,7 +290,7 @@ select,input{font-family:inherit}
 .player-modal{display:none;position:fixed;inset:0;z-index:1000;background:#000;flex-direction:column}
 .player-modal.active{display:flex}
 .player-top-bar{position:absolute;top:0;left:0;right:0;z-index:10;padding:14px 18px;background:linear-gradient(rgba(0,0,0,.8),transparent);display:flex;align-items:center;gap:12px;opacity:0;transition:opacity .3s}
-.player-modal:hover .player-top-bar,.player-modal.controls-visible .player-top-bar{opacity:1}
+.player-modal.controls-visible .player-top-bar{opacity:1}
 .player-close{width:34px;height:34px;border-radius:50%;background:rgba(255,255,255,.12);display:flex;align-items:center;justify-content:center;font-size:1rem;transition:background var(--transition)}
 .player-close:hover{background:rgba(255,255,255,.25)}
 .player-now-playing{font-size:.92rem;font-weight:600;text-shadow:0 1px 4px rgba(0,0,0,.6)}
@@ -299,7 +299,7 @@ select,input{font-family:inherit}
 .player-video-wrapper.subs-active video{height:calc(100% - 60px);margin-bottom:60px}
 video::cue{background:rgba(0,0,0,.8);color:#fff;font-size:clamp(1.6rem, 3.5vw, 2.8rem);line-height:1.4;padding:4px 10px;border-radius:4px}
 .player-controls{position:absolute;bottom:0;left:0;right:0;z-index:10;padding:0 18px 14px;background:linear-gradient(transparent,rgba(0,0,0,.85));opacity:0;transition:opacity .3s}
-.player-modal:hover .player-controls,.player-modal.controls-visible .player-controls{opacity:1}
+.player-modal.controls-visible .player-controls{opacity:1}
 .progress-container{width:100%;height:20px;display:flex;align-items:center;cursor:pointer;margin-bottom:6px}
 .progress-track{width:100%;height:4px;background:rgba(255,255,255,.2);border-radius:2px;position:relative;transition:height .15s}
 .progress-container:hover .progress-track{height:6px}
@@ -439,10 +439,30 @@ video::cue{background:rgba(0,0,0,.8);color:#fff;font-size:clamp(1.6rem, 3.5vw, 2
 <body>
 
 <!-- Startup screen -->
-<div class="profile-screen" id="startupScreen" style="display:none"><div class="dl-spinner" style="width:40px;height:40px;border-width:3px;margin-bottom:20px"></div><h1 style="font-size:1.4rem">Starting up...</h1><p id="startupMsg" style="color:var(--text-muted);font-size:.85rem">Connecting to server, please wait</p></div>
+<div class="profile-screen" id="startupScreen" style="display:none">
+  <div style="text-align:center">
+    <div style="font-size:3rem;margin-bottom:12px">&#9654;</div>
+    <h1 style="font-size:1.6rem;margin-bottom:4px">Chochey's Media Server</h1>
+    <div class="dl-spinner" style="width:36px;height:36px;border-width:3px;margin:20px auto"></div>
+    <p id="startupMsg" style="color:var(--text-muted);font-size:.85rem">Loading...</p>
+    <p id="startupDetail" style="color:var(--text-muted);font-size:.75rem;margin-top:6px;opacity:.6"></p>
+  </div>
+</div>
 
-<!-- Profile screen -->
-<div class="profile-screen" id="profileScreen"><h1>Who's watching?</h1><p>Select your profile</p><div class="profiles-grid" id="profilesGrid"></div></div>
+<!-- Login screen -->
+<div class="profile-screen" id="profileScreen">
+  <div style="text-align:center">
+    <div style="font-size:2.5rem;margin-bottom:8px">&#9654;</div>
+    <h1 style="font-size:1.6rem;margin-bottom:4px">Chochey's Media Server</h1>
+    <p style="color:var(--text-muted);font-size:.85rem;margin-bottom:24px">Sign in to continue</p>
+  </div>
+  <div class="login-form" id="loginForm">
+    <input type="text" id="loginUsername" placeholder="Username" autocomplete="username" autofocus>
+    <input type="password" id="loginPassword" placeholder="Password" autocomplete="current-password">
+    <div class="login-error" id="loginError"></div>
+    <button onclick="doLogin()">Sign In</button>
+  </div>
+</div>
 
 <!-- Reusable modal -->
 <div class="modal-overlay" id="modalOverlay" onclick="if(event.target===this)closeModal()"></div>
@@ -452,7 +472,7 @@ video::cue{background:rgba(0,0,0,.8);color:#fff;font-size:clamp(1.6rem, 3.5vw, 2
 
 <div class="app" id="appContainer" style="display:none">
   <aside class="sidebar" id="sidebar">
-    <div class="sidebar-header"><div class="sidebar-logo">&#9654;</div><span class="sidebar-brand">Local Stream</span></div>
+    <div class="sidebar-header"><div class="sidebar-logo">&#9654;</div><span class="sidebar-brand">Chochey's Media</span></div>
     <nav class="sidebar-nav">
       <div class="nav-label">Browse</div>
       <button class="nav-item active" data-view="home" onclick="nav('home',this)"><span class="nav-icon">&#127968;</span> Home</button>
@@ -473,7 +493,7 @@ video::cue{background:rgba(0,0,0,.8);color:#fff;font-size:clamp(1.6rem, 3.5vw, 2
     <div class="sidebar-profile" onclick="switchProfile()">
       <div class="sidebar-profile-avatar" id="sidebarAvatar"></div>
       <span class="sidebar-profile-name" id="sidebarName"></span>
-      <span class="sidebar-profile-switch">Switch</span>
+      <span class="sidebar-profile-switch">Sign Out</span>
     </div>
     <div class="sidebar-footer"><div id="libraryStats">Loading...</div></div>
   </aside>
@@ -632,66 +652,44 @@ async function showProfileScreen(skipSessionCheck){
     return;
   }
 
-  const profiles=await loadProfiles();
-  window._profilesCache=profiles;
+  // Show login form
   document.getElementById('profileScreen').style.display='';
   document.getElementById('appContainer').style.display='none';
-  const grid=document.getElementById('profilesGrid');
-  // Only show Add button if there's an active admin session, or no profiles have passwords yet
-  const anyPasswordSet=profiles.some(p=>p.hasPassword);
-  const showAdd=!anyPasswordSet||currentRole==='admin';
-  const addBtn=showAdd?`
-    <div class="profile-item" onclick="createProfile()">
-      <div class="profile-avatar profile-add">+</div>
-      <div class="profile-name" style="color:var(--text-muted)">Add</div>
-    </div>`:'';
-  grid.innerHTML=profiles.map(p=>`
-    <div class="profile-item" onclick="${p.hasPassword?`showLogin('${escAttr(p.id)}')`:`doLogin('${escAttr(p.id)}','')`}">
-      <div class="profile-avatar" style="background:${p.avatar}">${p.name[0].toUpperCase()}</div>
-      <div class="profile-name">${esc(p.name)}${p.hasPassword?' &#128274;':''}</div>
-    </div>`).join('')+addBtn;
-
-  // If only 1 profile without password, auto-login on initial page load only
-  if(!skipSessionCheck&&profiles.length===1&&!profiles[0].hasPassword){doLogin(profiles[0].id,'');}
+  const u=document.getElementById('loginUsername');
+  const p=document.getElementById('loginPassword');
+  if(u)u.value='';
+  if(p)p.value='';
+  document.getElementById('loginError').textContent='';
+  setTimeout(()=>{if(u)u.focus();},100);
 }
 
-function showLogin(profileId){
-  const profiles=window._profilesCache||[];
-  const p=profiles.find(x=>x.id===profileId);
-  if(p&&!p.hasPassword){doLogin(profileId,'');return;}
+// Handle Enter key in login form
+document.getElementById('loginUsername').addEventListener('keydown',e=>{if(e.key==='Enter'){document.getElementById('loginPassword').focus();}});
+document.getElementById('loginPassword').addEventListener('keydown',e=>{if(e.key==='Enter')doLogin();});
 
-  const grid=document.getElementById('profilesGrid');
-  grid.innerHTML=`
-    <div style="display:flex;flex-direction:column;align-items:center">
-      <div class="profile-avatar" style="background:${p?p.avatar:'#00a4dc'}">${p?p.name[0].toUpperCase():'?'}</div>
-      <div class="profile-name" style="margin-top:8px;font-size:1rem">${p?esc(p.name):''}</div>
-      <div class="login-form">
-        <input type="password" id="loginPassword" placeholder="Password" onkeydown="if(event.key==='Enter')doLogin('${escAttr(profileId)}',this.value)" autofocus>
-        <div class="login-error" id="loginError"></div>
-        <button onclick="doLogin('${escAttr(profileId)}',document.getElementById('loginPassword').value)">Sign In</button>
-        <div class="login-back" onclick="showProfileScreen()">&#8592; Back</div>
-      </div>
-    </div>`;
-  setTimeout(()=>{const el=document.getElementById('loginPassword');if(el)el.focus();},100);
-}
-
-async function doLogin(profileId,password){
+async function doLogin(){
+  const username=document.getElementById('loginUsername').value.trim();
+  const password=document.getElementById('loginPassword').value;
+  const err=document.getElementById('loginError');
+  if(!username){err.textContent='Enter your username';return;}
+  if(!password){err.textContent='Enter your password';return;}
   try{
-    const res=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({profileId,password})});
+    const res=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username,password})});
     const data=await res.json();
     if(!res.ok){
-      const err=document.getElementById('loginError');
-      if(err)err.textContent=data.error||'Login failed';
+      err.textContent=data.error||'Login failed';
+      document.getElementById('loginPassword').value='';
+      document.getElementById('loginPassword').focus();
       return;
     }
-    activeProfile=profileId;
+    activeProfile=data.profileId;
     currentRole=data.role||'user';
     document.getElementById('profileScreen').style.display='none';
     document.getElementById('appContainer').style.display='';
     updateSystemVisibility();
     nav('home',document.querySelector('[data-view="home"]'));
     const profiles=await loadProfiles();
-    const p=profiles.find(x=>x.id===profileId);
+    const p=profiles.find(x=>x.id===data.profileId);
     if(p){
       document.getElementById('sidebarAvatar').style.background=p.avatar;
       document.getElementById('sidebarAvatar').textContent=p.name[0].toUpperCase();
@@ -703,8 +701,7 @@ async function doLogin(profileId,password){
     setupSSE();
     if(currentRole==='admin')dlFetchPlugins();
   }catch(e){
-    const err=document.getElementById('loginError');
-    if(err)err.textContent='Connection error';
+    err.textContent='Connection error';
   }
 }
 
@@ -728,13 +725,17 @@ function createProfile(){
   openModal(`
     <h2>Create Profile</h2>
     <div class="modal-field">
-      <label>Name</label>
+      <label>Display Name</label>
       <input type="text" id="modalName" placeholder="Enter name" autofocus>
     </div>
     <div class="modal-field">
+      <label>Username</label>
+      <input type="text" id="modalUsername" placeholder="Login username" autocomplete="off">
+      <div class="field-hint">Used to sign in (auto-generated from name if empty)</div>
+    </div>
+    <div class="modal-field">
       <label>Password</label>
-      <input type="password" id="modalPassword" placeholder="Optional">
-      <div class="field-hint">Leave empty for no password</div>
+      <input type="password" id="modalPassword" placeholder="Required">
     </div>
     <div class="modal-field">
       <label>Role</label>
@@ -766,10 +767,12 @@ function pickAvatar(color,el){
 async function submitCreateProfile(){
   const name=document.getElementById('modalName').value.trim();
   if(!name){document.getElementById('modalName').style.borderColor='#e5484d';return;}
+  const username=document.getElementById('modalUsername').value.trim();
   const password=document.getElementById('modalPassword').value;
   const role=document.getElementById('modalRole').value;
+  if(!password){document.getElementById('modalPassword').style.borderColor='#e5484d';return;}
   closeModal();
-  await adminFetch('/api/profiles',{method:'POST',headers:adminHeaders(),body:JSON.stringify({name,password:password||'',role,avatar:_selectedAvatar})});
+  await adminFetch('/api/profiles',{method:'POST',headers:adminHeaders(),body:JSON.stringify({name,username:username||'',password,role,avatar:_selectedAvatar})});
   if(currentView==='settings')renderSettings();
   else showProfileScreen(true);
 }
@@ -782,8 +785,12 @@ async function editAccount(profileId){
   openModal(`
     <h2>Edit Account</h2>
     <div class="modal-field">
-      <label>Name</label>
+      <label>Display Name</label>
       <input type="text" id="modalName" value="${esc(p.name)}" autofocus>
+    </div>
+    <div class="modal-field">
+      <label>Username</label>
+      <input type="text" id="modalUsername" value="${esc(p.username||'')}" autocomplete="off">
     </div>
     <div class="modal-field">
       <label>New Password</label>
@@ -814,9 +821,10 @@ async function editAccount(profileId){
 async function submitEditAccount(profileId){
   const name=document.getElementById('modalName').value.trim();
   if(!name){document.getElementById('modalName').style.borderColor='#e5484d';return;}
+  const username=document.getElementById('modalUsername').value.trim();
   const password=document.getElementById('modalPassword').value;
   const role=document.getElementById('modalRole').value;
-  const body={name,role,avatar:_selectedAvatar};
+  const body={name,username,role,avatar:_selectedAvatar};
   if(password) body.password=password; // only update password if provided
   closeModal();
   await adminFetch('/api/profiles/'+profileId,{method:'PUT',headers:adminHeaders(),body:JSON.stringify(body)});
@@ -1026,7 +1034,7 @@ function setFilter(f){
 function renderHome(){
   if(library.length===0){
     const hf=folderConfig.length>0;
-    return `<div class="empty-state"><div class="empty-icon">&#127916;</div><div class="empty-title">${hf?'No Media Found':'Welcome to Local Stream'}</div><div class="empty-text">${hf?'No video files found in your linked folders.':'Get started by linking your media folders.'}</div><div style="margin-top:18px"><button class="btn btn-primary" onclick="nav('settings',document.querySelector('[data-view=settings]'))">&#9881;&#65039; ${hf?'Manage':'Add'} Folders</button></div></div>`;
+    return `<div class="empty-state"><div class="empty-icon">&#127916;</div><div class="empty-title">${hf?'No Media Found':"Welcome to Chochey's Media Server"}</div><div class="empty-text">${hf?'No video files found in your linked folders.':'Get started by linking your media folders.'}</div><div style="margin-top:18px"><button class="btn btn-primary" onclick="nav('settings',document.querySelector('[data-view=settings]'))">&#9881;&#65039; ${hf?'Manage':'Add'} Folders</button></div></div>`;
   }
   const cw=getContinueWatching();
   const movies=library.filter(m=>m.type==='movie');
@@ -1380,7 +1388,7 @@ async function renderSettings(){
       const lockIcon=p.hasPassword?'&#128274;':'<span style="color:var(--text-muted)">None</span>';
       const isDefault=profiles.length<=1;
       const deleteBtn=isDefault?'':`<button class="btn btn-danger btn-sm" onclick="deleteAccount('${escAttr(p.id)}','${escAttr(p.name)}')" style="padding:4px 10px;font-size:.75rem">Delete</button>`;
-      return `<div style="display:flex;align-items:center;gap:12px;padding:12px 16px;background:var(--bg-card);border-radius:10px;border:1px solid rgba(255,255,255,.06)"><div style="width:40px;height:40px;border-radius:10px;background:${p.avatar};display:flex;align-items:center;justify-content:center;font-weight:700;font-size:1.1rem;color:#fff;flex-shrink:0">${p.name[0].toUpperCase()}</div><div style="flex:1;min-width:0"><div style="font-weight:600;font-size:.9rem">${esc(p.name)}</div><div style="font-size:.75rem;color:var(--text-muted);margin-top:2px">Password: ${lockIcon}</div></div><div style="display:flex;align-items:center;gap:8px">${roleBadge}<button class="btn btn-secondary btn-sm" onclick="editAccount('${escAttr(p.id)}')" style="padding:4px 10px;font-size:.75rem">Edit</button>${deleteBtn}</div></div>`;
+      return `<div style="display:flex;align-items:center;gap:12px;padding:12px 16px;background:var(--bg-card);border-radius:10px;border:1px solid rgba(255,255,255,.06)"><div style="width:40px;height:40px;border-radius:10px;background:${p.avatar};display:flex;align-items:center;justify-content:center;font-weight:700;font-size:1.1rem;color:#fff;flex-shrink:0">${p.name[0].toUpperCase()}</div><div style="flex:1;min-width:0"><div style="font-weight:600;font-size:.9rem">${esc(p.name)}</div><div style="font-size:.75rem;color:var(--text-muted);margin-top:2px">@${esc(p.username||'')} &middot; Password: ${lockIcon}</div></div><div style="display:flex;align-items:center;gap:8px">${roleBadge}<button class="btn btn-secondary btn-sm" onclick="editAccount('${escAttr(p.id)}')" style="padding:4px 10px;font-size:.75rem">Edit</button>${deleteBtn}</div></div>`;
     }).join('');
     acctHtml=`<h3 style="font-size:1rem;font-weight:700;margin:28px 0 12px">Accounts</h3><div style="display:flex;flex-direction:column;gap:8px">${rows}<div style="margin-top:8px"><button class="btn btn-primary btn-sm" onclick="createProfile()">&#10010; Add Account</button></div></div>`;
   }
@@ -1771,13 +1779,9 @@ async function playMedia(id){
         if(seekOff>=0) window._hlsSeekOffset=seekOff;
         if(hlsInstance){hlsInstance.destroy();hlsInstance=null;}
         hlsInstance=new Hls({
-          maxBufferLength:60,maxMaxBufferLength:120,startFragPrefetch:true,
+          maxBufferLength:30,maxMaxBufferLength:120,startFragPrefetch:true,
           liveSyncDuration:0,liveMaxLatencyDuration:Infinity,
-          highBufferWatchdogPeriod:5,nudgeOffset:0.5,enableWorker:true,
-          maxBufferHole:2,maxFragLookUpTolerance:0.5,
-          fragLoadingMaxRetry:6,fragLoadingRetryDelay:1000,
-          manifestLoadingMaxRetry:6,manifestLoadingRetryDelay:1000,
-          levelLoadingMaxRetry:6,levelLoadingRetryDelay:1000,
+          highBufferWatchdogPeriod:2,nudgeOffset:0.2,enableWorker:true,
         });
         hlsInstance.loadSource(url);
         hlsInstance.attachMedia(V);
@@ -2048,7 +2052,24 @@ document.addEventListener('keydown',e=>{
   }
 });
 
-function showControls(){modal.classList.add('controls-visible');clearTimeout(controlsTimeout);controlsTimeout=setTimeout(()=>{if(!V.paused)modal.classList.remove('controls-visible');},3000);}
+function showControls(){modal.classList.add('controls-visible');clearTimeout(controlsTimeout);controlsTimeout=setTimeout(()=>{modal.classList.remove('controls-visible');},3000);}
+
+// Touch support: tap video to toggle controls, auto-hide after 3s
+const _isTouch='ontouchstart' in window;
+document.getElementById('videoWrapper').addEventListener('click',function(e){
+  if(!_isTouch)return; // desktop uses mousemove
+  if(e.target.closest('.player-controls,.player-top-bar,.sub-menu,.audio-menu,.speed-menu,.skip-menu'))return;
+  e.stopPropagation(); // prevent togglePlay on mobile
+  if(modal.classList.contains('controls-visible')){
+    modal.classList.remove('controls-visible');clearTimeout(controlsTimeout);
+  } else {
+    showControls();
+  }
+});
+
+// Re-show controls on orientation change so user doesn't lose them
+screen.orientation?.addEventListener('change',()=>{if(modal.classList.contains('active'))showControls();});
+window.addEventListener('resize',()=>{if(_isTouch&&modal.classList.contains('active'))showControls();});
 
 function startProgressSync(){clearInterval(progressSaveInterval);progressSaveInterval=setInterval(saveProg,5000);}
 async function saveProg(){
@@ -2278,23 +2299,43 @@ setFilter('all');
 async function initApp(){
   const startup=document.getElementById('startupScreen');
   const profile=document.getElementById('profileScreen');
+  const msg=document.getElementById('startupMsg');
+  const detail=document.getElementById('startupDetail');
+  startup.style.display='';
+  profile.style.display='none';
+  document.getElementById('appContainer').style.display='none';
+
   let attempt=0;
   while(true){
     try{
-      const r=await fetch('/api/me');
+      const r=await fetch('/api/health');
       if(r.ok){
-        await fetchConfig();
-        startup.style.display='none';
-        await showProfileScreen();
-        return;
+        const health=await r.json();
+        if(health.ready){
+          break;
+        }
+        // Show status-specific messages
+        const statusMessages={
+          starting:'Preparing server...',
+          loading:'Loading media library...',
+          scanning:'Scanning media files...',
+        };
+        msg.textContent=statusMessages[health.status]||'Loading...';
+        detail.textContent=`Uptime: ${Math.round(health.uptime)}s`;
       }
-    }catch{}
-    attempt++;
-    startup.style.display='';
-    profile.style.display='none';
-    document.getElementById('startupMsg').textContent=`Connecting to server... attempt ${attempt}`;
-    await new Promise(r=>setTimeout(r,3000));
+    }catch{
+      attempt++;
+      msg.textContent='Connecting to server...';
+      detail.textContent=attempt>2?`Attempt ${attempt}`:'';
+    }
+    await new Promise(r=>setTimeout(r,2000));
   }
+
+  msg.textContent='Almost ready...';
+  detail.textContent='';
+  try{await fetchConfig();}catch{}
+  startup.style.display='none';
+  await showProfileScreen();
 }
 initApp();
 </script>

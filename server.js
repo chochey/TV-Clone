@@ -137,6 +137,10 @@ for (const p of config.profiles) {
 }
 if (configDirty) saveJSON(CONFIG_FILE, config);
 
+// ── Server ready state tracking ──────────────────────────────────────────
+let serverReady = false;
+let serverReadyStatus = 'starting';
+
 // ── Password hashing (scrypt, no external deps) ─────────────────────────
 function hashPassword(password) {
   const salt = crypto.randomBytes(16).toString('hex');
@@ -996,9 +1000,27 @@ function scanLibrary() {
 // ── Profile APIs ─────────────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════
 
+// Auto-migrate: add username to profiles that don't have one
+let _migrated = false;
+for (const p of config.profiles) {
+  if (!p.username) {
+    p.username = p.name.toLowerCase().replace(/[^a-z0-9]/g, '');
+    _migrated = true;
+  }
+}
+if (_migrated) saveJSON(CONFIG_FILE, config);
+
+// Health / ready check — frontend uses this to show loading screen
+app.get('/api/health', (_req, res) => {
+  res.json({ ready: serverReady, status: serverReadyStatus, uptime: process.uptime() });
+});
+
+// Profiles — only return list to authenticated sessions (hide from public)
 app.get('/api/profiles', (_req, res) => {
+  const session = getSession(_req);
+  if (!session) return res.json([]); // unauthenticated: return empty, reveal nothing
   res.json(config.profiles.map(p => ({
-    id: p.id, name: p.name, hasPin: !!p.pin, hasPassword: !!p.password, avatar: p.avatar, role: p.role || 'user',
+    id: p.id, name: p.name, username: p.username, hasPin: !!p.pin, hasPassword: !!p.password, avatar: p.avatar, role: p.role || 'user',
   })));
 });
 
@@ -1011,25 +1033,25 @@ app.post('/api/login', (req, res) => {
   if (now - loginAttempts[ip].lastAttempt > 300000) loginAttempts[ip].count = 0;
   if (loginAttempts[ip].count >= 10) return res.status(429).json({ error: 'Too many attempts. Try again in 5 minutes.' });
 
-  const { profileId, password } = req.body;
-  const profile = config.profiles.find(p => p.id === profileId);
-  if (!profile) return res.status(404).json({ error: 'Profile not found' });
+  const { username, password, profileId } = req.body;
+  // Support both username-based login (new) and profileId-based login (legacy/internal)
+  let profile;
+  if (username) {
+    profile = config.profiles.find(p => (p.username || '').toLowerCase() === username.toLowerCase());
+  } else if (profileId) {
+    profile = config.profiles.find(p => p.id === profileId);
+  }
+  if (!profile) {
+    loginAttempts[ip].count++;
+    loginAttempts[ip].lastAttempt = now;
+    return res.status(403).json({ error: 'Invalid username or password' });
+  }
 
   loginAttempts[ip].lastAttempt = now;
 
-  // If profile has no password, allow login without one
-  if (!profile.password) {
-    const token = createSession(profile.id, profile.role || 'user');
-    res.cookie('session', token, { httpOnly: true, maxAge: SESSION_MAX_AGE, sameSite: 'lax' });
-    if ((profile.role || 'user') === 'admin') {
-      res.cookie('adminSession', adminToken, { httpOnly: true, maxAge: SESSION_MAX_AGE, sameSite: 'lax' });
-    }
-    return res.json({ ok: true, role: profile.role || 'user', profileId: profile.id });
-  }
-
-  if (!verifyPassword(password || '', profile.password)) {
+  if (!verifyPassword(password || '', profile.password || '')) {
     loginAttempts[ip].count++;
-    return res.status(403).json({ error: 'Incorrect password' });
+    return res.status(403).json({ error: 'Invalid username or password' });
   }
 
   const token = createSession(profile.id, profile.role || 'user');
@@ -1037,7 +1059,7 @@ app.post('/api/login', (req, res) => {
   if ((profile.role || 'user') === 'admin') {
     res.cookie('adminSession', adminToken, { httpOnly: true, maxAge: SESSION_MAX_AGE, sameSite: 'lax' });
   }
-  res.json({ ok: true, role: profile.role || 'user', profileId: profile.id });
+  res.json({ ok: true, role: profile.role || 'user', profileId: profile.id, name: profile.name });
 });
 
 app.post('/api/logout', (_req, res) => {
@@ -1057,19 +1079,30 @@ app.get('/api/me', (req, res) => {
 });
 
 app.post('/api/profiles', requireAdminSession, (req, res) => {
-  const { name, pin, avatar, password, role } = req.body;
+  const { name, username, pin, avatar, password, role } = req.body;
   if (!name) return res.status(400).json({ error: 'Name required' });
+  const uname = (username || name.toLowerCase().replace(/[^a-z0-9]/g, '')).toLowerCase();
+  if (config.profiles.some(p => (p.username || '').toLowerCase() === uname)) {
+    return res.status(400).json({ error: 'Username already taken' });
+  }
   const id = crypto.randomBytes(6).toString('hex');
-  const profile = { id, name, pin: pin ? hashPassword(pin) : '', avatar: avatar || '#00a4dc', role: role || 'user', password: password ? hashPassword(password) : '' };
+  const profile = { id, name, username: uname, pin: pin ? hashPassword(pin) : '', avatar: avatar || '#00a4dc', role: role || 'user', password: password ? hashPassword(password) : '' };
   config.profiles.push(profile);
   saveJSON(CONFIG_FILE, config);
-  res.json({ ok: true, profile: { id, name, hasPin: !!pin, hasPassword: !!password, avatar, role: profile.role } });
+  res.json({ ok: true, profile: { id, name, username: uname, hasPin: !!pin, hasPassword: !!password, avatar, role: profile.role } });
 });
 
 app.put('/api/profiles/:id', requireAdminSession, (req, res) => {
   const p = config.profiles.find(p => p.id === req.params.id);
   if (!p) return res.status(404).json({ error: 'Profile not found' });
   if (req.body.name) p.name = req.body.name;
+  if (req.body.username !== undefined) {
+    const uname = req.body.username.toLowerCase();
+    if (config.profiles.some(x => x.id !== p.id && (x.username || '').toLowerCase() === uname)) {
+      return res.status(400).json({ error: 'Username already taken' });
+    }
+    p.username = uname;
+  }
   if (req.body.pin !== undefined) p.pin = req.body.pin ? hashPassword(req.body.pin) : '';
   if (req.body.avatar) p.avatar = req.body.avatar;
   if (req.body.role) p.role = req.body.role;
@@ -2693,7 +2726,7 @@ app.listen(PORT, '0.0.0.0', () => {
   const ip = getLocalIP();
   console.log('');
   console.log('  ╔══════════════════════════════════════════════╗');
-  console.log('  ║         🎬  Local Stream is running          ║');
+  console.log("  ║     🎬  Chochey's Media Server running        ║");
   console.log('  ╠══════════════════════════════════════════════╣');
   console.log(`  ║  Local:   http://localhost:${PORT}              ║`);
   console.log(`  ║  Network: http://${ip}:${PORT}        ║`);
@@ -2718,10 +2751,11 @@ app.listen(PORT, '0.0.0.0', () => {
     });
   } catch {}
 
-  // Load cached library from disk for instant startup
+  // Load cached library from disk (server not ready until full rescan completes)
   const hadCache = loadLibraryCache();
   if (hadCache) {
     console.log(`  Total media: ${libraryCache.length} file(s) (from cache)`);
+    serverReadyStatus = 'loading';
   }
   console.log('');
 
@@ -2730,11 +2764,14 @@ app.listen(PORT, '0.0.0.0', () => {
 
   // Background rescan after a delay to avoid blocking early requests
   setTimeout(() => {
+    serverReadyStatus = 'scanning';
     console.log('[Startup] Background library rescan...');
     libraryCache = null;
     const library = scanLibrary();
     const probed = library.filter(i => i.codec).length;
     console.log(`  [Startup] Rescan complete: ${library.length} file(s) (${probed} probed)`);
+    serverReady = true;
+    serverReadyStatus = 'ready';
     notifyClients('library-updated');
 
     // Chain background tasks after rescan
