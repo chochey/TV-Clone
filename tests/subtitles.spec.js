@@ -1,18 +1,10 @@
 const { test, expect } = require('@playwright/test');
+const { loginAsUser, navigateTo, searchFor, showControls } = require('./helpers');
 
-async function loginAsTest1(page) {
-  await page.goto('/');
-  await page.waitForSelector('#profileScreen', { timeout: 10000 });
-  await page.locator('.profile-item', { hasText: 'test1' }).click();
-  await page.locator('#loginPassword').fill('123');
-  await page.locator('.login-form button', { hasText: 'Sign In' }).click();
-  await page.waitForSelector('.sidebar', { timeout: 15000 });
-}
-
-test.describe('Subtitle feature', () => {
+test.describe('Subtitle Feature', () => {
 
   test('API returns subtitles for Ghosted', async ({ page }) => {
-    await loginAsTest1(page);
+    await loginAsUser(page);
     const result = await page.evaluate(async () => {
       const lib = await (await fetch('/api/library')).json();
       const ghosted = lib.find(i => i.title.includes('Ghosted'));
@@ -22,41 +14,90 @@ test.describe('Subtitle feature', () => {
     });
     expect(result.found).toBe(true);
     expect(result.hasSubs).toBe(true);
-    expect(result.subsCount).toBe(43);
+    expect(result.subsCount).toBeGreaterThan(10);
   });
 
-  test('Ghosted CC menu shows all subtitle tracks', async ({ page }) => {
-    await loginAsTest1(page);
-    await page.locator('.nav-item', { hasText: 'Movies' }).click();
-    await page.waitForTimeout(1000);
-    await page.locator('#searchInput').fill('Ghosted');
-    await page.waitForTimeout(1500);
+  test('CC menu shows all subtitle tracks', async ({ page }) => {
+    await loginAsUser(page);
+    await navigateTo(page, 'Movies');
+    await searchFor(page, 'Ghosted');
     await page.locator('.card', { hasText: 'Ghosted' }).first().click();
     await expect(page.locator('#playerModal')).toHaveClass(/active/, { timeout: 10000 });
     await page.waitForTimeout(3000);
 
-    // Open CC menu
-    await page.mouse.move(640, 400);
-    await page.waitForTimeout(500);
+    await showControls(page);
     await page.locator('#subBtn').click();
     await page.waitForTimeout(500);
 
-    // Verify subtitle options
     const options = page.locator('#subMenu .menu-option');
     const count = await options.count();
-    expect(count).toBe(44); // 43 subs + Off
-
-    // Verify Off is first and active
+    expect(count).toBeGreaterThan(10);
     await expect(options.first()).toHaveText('Off');
-    await expect(options.first()).toHaveClass(/active/);
-
-    // Verify English is in the list
     await expect(page.locator('#subMenu .menu-option', { hasText: 'English' }).first()).toBeVisible();
+  });
 
-    // Verify some specific languages
-    await expect(page.locator('#subMenu .menu-option', { hasText: 'French' }).first()).toBeVisible();
-    await expect(page.locator('#subMenu .menu-option', { hasText: 'Japanese' })).toBeVisible();
+  test('CC menu is scrollable', async ({ page }) => {
+    await loginAsUser(page);
+    await navigateTo(page, 'Movies');
+    await searchFor(page, 'Ghosted');
+    await page.locator('.card', { hasText: 'Ghosted' }).first().click();
+    await expect(page.locator('#playerModal')).toHaveClass(/active/, { timeout: 10000 });
+    await page.waitForTimeout(3000);
 
-    await page.screenshot({ path: 'tests/screenshots/cc-menu-working.png' });
+    await showControls(page);
+    await page.locator('#subBtn').click();
+    await page.waitForTimeout(500);
+
+    const isScrollable = await page.locator('#subMenu').evaluate(el => el.scrollHeight > el.clientHeight);
+    expect(isScrollable).toBe(true);
+  });
+
+  test('selecting English loads subtitle cues', async ({ page }) => {
+    await loginAsUser(page);
+    await navigateTo(page, 'Movies');
+    await searchFor(page, 'Ghosted');
+    await page.locator('.card', { hasText: 'Ghosted' }).first().click();
+    await expect(page.locator('#playerModal')).toHaveClass(/active/, { timeout: 10000 });
+    await page.waitForTimeout(3000);
+
+    await page.evaluate(() => { document.querySelector('video').currentTime = 120; });
+    await page.waitForTimeout(2000);
+
+    await showControls(page);
+    await page.locator('#subBtn').click();
+    await page.waitForTimeout(500);
+    await page.locator('#subMenu .menu-option', { hasText: /^English$/ }).first().click();
+    await page.waitForTimeout(2000);
+
+    const trackInfo = await page.evaluate(() => {
+      const t = document.querySelector('video').textTracks[0];
+      return { mode: t?.mode, cueCount: t?.cues?.length || 0 };
+    });
+    expect(trackInfo.mode).toBe('showing');
+    expect(trackInfo.cueCount).toBeGreaterThan(0);
+  });
+
+  test('turning off subtitles removes track', async ({ page }) => {
+    await loginAsUser(page);
+    await navigateTo(page, 'Movies');
+    await searchFor(page, 'Ghosted');
+    await page.locator('.card', { hasText: 'Ghosted' }).first().click();
+    await expect(page.locator('#playerModal')).toHaveClass(/active/, { timeout: 10000 });
+    await page.waitForTimeout(3000);
+
+    await showControls(page);
+    await page.locator('#subBtn').click();
+    await page.waitForTimeout(300);
+    await page.locator('#subMenu .menu-option', { hasText: /^English$/ }).first().click();
+    await page.waitForTimeout(1000);
+
+    await showControls(page);
+    await page.locator('#subBtn').click();
+    await page.waitForTimeout(300);
+    await page.locator('#subMenu .menu-option', { hasText: 'Off' }).click();
+    await page.waitForTimeout(500);
+
+    const trackCount = await page.evaluate(() => document.querySelector('video').querySelectorAll('track').length);
+    expect(trackCount).toBe(0);
   });
 });

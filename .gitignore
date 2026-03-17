@@ -3,4 +3,7 @@ data/
 config.json
 media/
 transcode_tmp/
+transcode_tmp_*/
 docs/
+test-results/
+tests/screenshots/

@@ -1,10 +1,21 @@
 {
-  "name": "local-stream",
+  "name": "chocheys-media-server",
   "version": "1.0.0",
   "description": "Self-hosted media streaming server for your local network",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "npx playwright test",
+    "test:auth": "npx playwright test tests/auth.spec.js",
+    "test:library": "npx playwright test tests/library.spec.js",
+    "test:playback": "npx playwright test tests/playback.spec.js",
+    "test:subtitles": "npx playwright test tests/subtitles.spec.js",
+    "test:progress": "npx playwright test tests/progress.spec.js",
+    "test:queue": "npx playwright test tests/queue.spec.js",
+    "test:history": "npx playwright test tests/history.spec.js",
+    "test:settings": "npx playwright test tests/settings.spec.js",
+    "test:downloads": "npx playwright test tests/downloads.spec.js",
+    "test:report": "npx playwright show-report test-results/html-report"
   },
   "dependencies": {
     "express": "^4.21.0"
