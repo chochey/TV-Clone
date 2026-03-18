@@ -2449,8 +2449,8 @@ app.get('/hls/:id/master.m3u8', requireAuth, ensureLibrary, async (req, res) => 
     return res.status(503).send('Too many active transcode sessions');
   }
 
-  // Probe on-demand if not yet cached
-  if (!probeCache[filePath]) await probeFileAsync(filePath);
+  // Probe on-demand if not yet cached (also re-probe if pixFmt unknown for VAAPI 10-bit detection)
+  if (!probeCache[filePath] || (VAAPI_AVAILABLE && !pixFmtCache[filePath])) await probeFileAsync(filePath);
 
   // Clean old segments on every new session start
   try {
