@@ -444,6 +444,8 @@ let subProbeCacheDirty = false;
 
 let probeCache = loadJSON(PROBE_CACHE_FILE, {});
 let probeCacheDirty = false;
+// Pixel format cache: filePath -> pix_fmt string (e.g. 'yuv420p', 'yuv420p10le')
+const pixFmtCache = {};
 const AUDIO_PROBE_CACHE_FILE = path.join(DATA_DIR, 'audio_probe_cache.json');
 let audioProbeCache = loadJSON(AUDIO_PROBE_CACHE_FILE, {});
 let audioProbeCacheDirty = false;
@@ -525,10 +527,10 @@ function getStreamMode(filePath) {
 
 function probeFileAsync(filePath) {
   return new Promise((resolve) => {
-    // Probe video, audio codecs + full audio stream details in one call
+    // Probe video, audio codecs + pixel format + full audio stream details in one call
     const proc = spawn('ffprobe', [
       '-v', 'error',
-      '-show_entries', 'stream=index,codec_name,codec_type,channels,channel_layout:stream_tags=language,title',
+      '-show_entries', 'stream=index,codec_name,codec_type,pix_fmt,channels,channel_layout:stream_tags=language,title',
       '-of', 'json', filePath,
     ]);
     let out = '';
@@ -536,10 +538,12 @@ function probeFileAsync(filePath) {
     proc.on('close', () => {
       try {
         const streams = JSON.parse(out).streams || [];
-        const videoCodec = streams.find(s => s.codec_type === 'video')?.codec_name || 'unknown';
+        const videoStream = streams.find(s => s.codec_type === 'video');
+        const videoCodec = videoStream?.codec_name || 'unknown';
         const audioCodec = streams.find(s => s.codec_type === 'audio')?.codec_name || 'unknown';
         probeCache[filePath] = videoCodec;
         probeCacheDirty = true;
+        if (videoStream?.pix_fmt) pixFmtCache[filePath] = videoStream.pix_fmt;
         audioProbeCache[filePath] = audioCodec;
         audioProbeCacheDirty = true;
         // Build full audio tracks list
@@ -2335,13 +2339,24 @@ function startFfmpeg(id, filePath, sessionDir, seekTime, startSegNum, audioStrea
       ffmpegArgs.push('-c:a', 'aac', '-ac', '2', '-b:a', '192k');
     }
   } else if (VAAPI_AVAILABLE) {
-    // Hardware decode + encode: decode on GPU (avoids CPU bottleneck for HEVC),
-    // keep frames in GPU memory, encode to H.264 on GPU
-    ffmpegArgs.splice(ffmpegArgs.indexOf('-i'), 0,
-      '-hwaccel', 'vaapi', '-hwaccel_device', '/dev/dri/renderD128', '-hwaccel_output_format', 'vaapi',
-    );
+    const pixFmt = pixFmtCache[filePath] || '';
+    const is10bit = pixFmt.includes('10le') || pixFmt.includes('10be') || pixFmt.includes('p010');
+    if (is10bit) {
+      // 10-bit source: software decode → convert to 8-bit nv12 → upload to GPU → VAAPI encode
+      // (Intel UHD 630 can't encode 10-bit H.264, only 8-bit)
+      ffmpegArgs.push(
+        '-vaapi_device', '/dev/dri/renderD128',
+        '-vf', 'format=nv12,hwupload',
+        '-c:v', 'h264_vaapi', '-qp', '22',
+      );
+    } else {
+      // 8-bit source: full hardware decode + encode pipeline (fastest)
+      ffmpegArgs.splice(ffmpegArgs.indexOf('-i'), 0,
+        '-hwaccel', 'vaapi', '-hwaccel_device', '/dev/dri/renderD128', '-hwaccel_output_format', 'vaapi',
+      );
+      ffmpegArgs.push('-c:v', 'h264_vaapi', '-qp', '22');
+    }
     ffmpegArgs.push(
-      '-c:v', 'h264_vaapi', '-qp', '22',
       '-c:a', 'aac', '-ac', '2', '-b:a', '192k',
       '-af', 'aresample=async=1:first_pts=0',
     );
