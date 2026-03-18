@@ -1,3 +1,12 @@
+// Load .env file if present (no external dependencies)
+const _envFile = require('path').join(__dirname, '.env');
+try {
+  for (const line of require('fs').readFileSync(_envFile, 'utf-8').split('\n')) {
+    const m = line.match(/^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*?)\s*$/);
+    if (m && !(m[1] in process.env)) process.env[m[1]] = m[2].replace(/^["']|["']$/g, '');
+  }
+} catch {}
+
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
@@ -25,6 +34,18 @@ const QBT_PASSWORD = process.env.QBT_PASS || '';
 const SUPPORTED_EXT = ['.mp4', '.mkv', '.avi'];
 const SUBTITLE_EXT = ['.srt', '.vtt'];
 const POSTER_EXT = ['.jpg', '.jpeg', '.png', '.webp'];
+
+// ── Tunable constants ────────────────────────────────────────────────
+const AUTO_WATCHED_PERCENT = 92;          // mark as watched above this %
+const MAX_HISTORY_ITEMS = 100;            // max entries in watch history
+const TRANSCODE_TIMEOUT_MS = 120000;      // kill idle transcode sessions after 2min
+const STARTUP_SCAN_DELAY_MS = 30000;      // delay before background library rescan
+const SSE_MAX_CLIENTS = 50;               // max concurrent SSE connections
+const SSE_HEARTBEAT_MS = 30000;           // SSE keep-alive heartbeat interval
+const FILE_WATCHER_DEBOUNCE_MS = 10000;   // debounce for file system change events
+const SESSION_CLEANUP_INTERVAL_MS = 3600000; // clean expired sessions every hour
+const LOGIN_RATE_WINDOW_MS = 300000;      // rate-limit window (5 min)
+const LOGIN_MAX_ATTEMPTS = 10;            // max login attempts per window
 const LANG_CODES = {
   eng: 'English', spa: 'Spanish', fre: 'French', ger: 'German', ita: 'Italian',
   por: 'Portuguese', jpn: 'Japanese', kor: 'Korean', chi: 'Chinese', zho: 'Chinese',
@@ -111,7 +132,21 @@ function loadJSON(filePath, fallback) {
   return typeof fallback === 'function' ? fallback() : JSON.parse(JSON.stringify(fallback));
 }
 
+// Async write — non-blocking for request handlers.
+// Uses atomic write (temp file + rename) to prevent corruption on crash.
 function saveJSON(filePath, data) {
+  const content = JSON.stringify(data, null, 2);
+  const tmpPath = filePath + '.tmp';
+  fs.writeFile(tmpPath, content, (err) => {
+    if (err) { console.error('[saveJSON] Write error:', filePath, err.message); return; }
+    fs.rename(tmpPath, filePath, (err2) => {
+      if (err2) console.error('[saveJSON] Rename error:', filePath, err2.message);
+    });
+  });
+}
+
+// Sync write — only for startup/migration when order matters.
+function saveJSONSync(filePath, data) {
   fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
 }
 
@@ -135,7 +170,7 @@ for (const p of config.profiles) {
     configDirty = true;
   }
 }
-if (configDirty) saveJSON(CONFIG_FILE, config);
+if (configDirty) saveJSONSync(CONFIG_FILE, config);
 
 // ── Server ready state tracking ──────────────────────────────────────────
 let serverReady = false;
@@ -193,6 +228,25 @@ function requireAdminSession(req, res, next) {
   if (!session) return res.status(401).json({ error: 'Login required' });
   if (session.role !== 'admin') return res.status(403).json({ error: 'Admin access required' });
   req.session = session;
+  next();
+}
+
+// Periodic cleanup of expired sessions (prevents unbounded memory growth)
+setInterval(() => {
+  const now = Date.now();
+  let cleaned = 0;
+  for (const [token, session] of sessions) {
+    if (now - session.createdAt > SESSION_MAX_AGE) {
+      sessions.delete(token);
+      cleaned++;
+    }
+  }
+  if (cleaned > 0) console.log(`[Sessions] Cleaned ${cleaned} expired session(s), ${sessions.size} active`);
+}, SESSION_CLEANUP_INTERVAL_MS);
+
+// Middleware: ensure library is indexed before serving file-dependent routes
+function ensureLibrary(req, res, next) {
+  if (Object.keys(fileIndex).length === 0) scanLibrary();
   next();
 }
 
@@ -418,13 +472,38 @@ function probeFile(filePath) {
   }
 }
 
+// Duration cache — avoids blocking ffprobe on every seek
+const durationCache = {};
+
 function probeDuration(filePath) {
+  if (durationCache[filePath]) return durationCache[filePath];
   try {
     const raw = execFileSync('ffprobe', [
       '-v', 'error', '-show_entries', 'format=duration', '-of', 'json', filePath,
     ], { timeout: 10000, encoding: 'utf-8' });
-    return parseFloat(JSON.parse(raw).format?.duration) || 0;
+    const dur = parseFloat(JSON.parse(raw).format?.duration) || 0;
+    if (dur > 0) durationCache[filePath] = dur;
+    return dur;
   } catch { return 0; }
+}
+
+function probeDurationAsync(filePath) {
+  if (durationCache[filePath]) return Promise.resolve(durationCache[filePath]);
+  return new Promise((resolve) => {
+    const proc = spawn('ffprobe', [
+      '-v', 'error', '-show_entries', 'format=duration', '-of', 'json', filePath,
+    ]);
+    let out = '';
+    proc.stdout.on('data', d => out += d);
+    proc.on('close', () => {
+      try {
+        const dur = parseFloat(JSON.parse(out).format?.duration) || 0;
+        if (dur > 0) durationCache[filePath] = dur;
+        resolve(dur);
+      } catch { resolve(0); }
+    });
+    proc.on('error', () => resolve(0));
+  });
 }
 
 
@@ -435,8 +514,9 @@ function getStreamMode(filePath) {
   if (!codec) {
     return 'unknown';
   }
-  // H.264 + AAC in .mp4 → direct play (browser-native)
-  if (codec === 'h264' && ext === '.mp4' && (!audioCodec || audioCodec === 'aac')) return 'direct';
+  // H.264 + browser-native audio in .mp4 → direct play
+  const directAudio = new Set(['aac', 'mp3', 'opus']);
+  if (codec === 'h264' && ext === '.mp4' && (!audioCodec || directAudio.has(audioCodec))) return 'direct';
   // H.264 with incompatible container or audio → remux (copy video, transcode audio)
   if (codec === 'h264') return 'remux';
   // Everything else (HEVC, etc.) → full transcode
@@ -864,7 +944,12 @@ const LIBRARY_CACHE_FILE = path.join(DATA_DIR, 'library_cache.json');
 
 function saveLibraryCache() {
   if (!libraryCache) return;
-  try { fs.writeFileSync(LIBRARY_CACHE_FILE, JSON.stringify(libraryCache)); } catch {}
+  const content = JSON.stringify(libraryCache);
+  const tmpPath = LIBRARY_CACHE_FILE + '.tmp';
+  fs.writeFile(tmpPath, content, (err) => {
+    if (err) return;
+    fs.rename(tmpPath, LIBRARY_CACHE_FILE, () => {});
+  });
 }
 
 function loadLibraryCache() {
@@ -1008,7 +1093,7 @@ for (const p of config.profiles) {
     _migrated = true;
   }
 }
-if (_migrated) saveJSON(CONFIG_FILE, config);
+if (_migrated) saveJSONSync(CONFIG_FILE, config);
 
 // Health / ready check — frontend uses this to show loading screen
 app.get('/api/health', (_req, res) => {
@@ -1030,8 +1115,8 @@ app.post('/api/login', (req, res) => {
   const ip = req.ip;
   const now = Date.now();
   if (!loginAttempts[ip]) loginAttempts[ip] = { count: 0, lastAttempt: 0 };
-  if (now - loginAttempts[ip].lastAttempt > 300000) loginAttempts[ip].count = 0;
-  if (loginAttempts[ip].count >= 10) return res.status(429).json({ error: 'Too many attempts. Try again in 5 minutes.' });
+  if (now - loginAttempts[ip].lastAttempt > LOGIN_RATE_WINDOW_MS) loginAttempts[ip].count = 0;
+  if (loginAttempts[ip].count >= LOGIN_MAX_ATTEMPTS) return res.status(429).json({ error: 'Too many attempts. Try again in 5 minutes.' });
 
   const { username, password, profileId } = req.body;
   // Support both username-based login (new) and profileId-based login (legacy/internal)
@@ -1126,9 +1211,9 @@ app.post('/api/profiles/:id/verify-pin', (req, res) => {
   const ip = req.ip;
   const now = Date.now();
   if (!pinAttempts[ip]) pinAttempts[ip] = { count: 0, lastAttempt: 0 };
-  // Reset after 5 minutes
-  if (now - pinAttempts[ip].lastAttempt > 300000) pinAttempts[ip].count = 0;
-  if (pinAttempts[ip].count >= 10) return res.status(429).json({ error: 'Too many attempts. Try again later.' });
+  // Reset after rate-limit window
+  if (now - pinAttempts[ip].lastAttempt > LOGIN_RATE_WINDOW_MS) pinAttempts[ip].count = 0;
+  if (pinAttempts[ip].count >= LOGIN_MAX_ATTEMPTS) return res.status(429).json({ error: 'Too many attempts. Try again later.' });
 
   const p = config.profiles.find(p => p.id === req.params.id);
   if (!p) return res.status(404).json({ error: 'Profile not found' });
@@ -1227,15 +1312,14 @@ app.post('/api/progress', requireAuth, (req, res) => {
   const percent = duration > 0 ? Math.round((currentTime / duration) * 100) : 0;
   data.progress[id] = { currentTime: currentTime || 0, duration: duration || 0, percent, updatedAt: Date.now() };
 
-  // Auto-mark as watched if >92%
-  if (percent > 92) data.watched[id] = true;
+  // Auto-mark as watched if above threshold
+  if (percent > AUTO_WATCHED_PERCENT) data.watched[id] = true;
 
-  // Update history
-  const lib = scanLibrary();
-  const item = lib.find(m => m.id === id);
+  // Update history — use cached library to avoid triggering a full rescan
+  const item = (libraryCache || []).find(m => m.id === id);
   data.history = data.history.filter(h => h.id !== id);
   data.history.unshift({ id, timestamp: Date.now(), title: item ? item.title : '' });
-  if (data.history.length > 100) data.history = data.history.slice(0, 100);
+  if (data.history.length > MAX_HISTORY_ITEMS) data.history = data.history.slice(0, MAX_HISTORY_ITEMS);
 
   saveProfileData(profileId, data);
   res.json({ ok: true });
@@ -1333,7 +1417,7 @@ function fetchIntroDb(imdbId, season, episode) {
   });
 }
 
-app.get('/api/skip-segments/:id', async (req, res) => {
+app.get('/api/skip-segments/:id', requireAuth, async (req, res) => {
   const id = req.params.id;
   // Check for per-episode override first, then show-level
   if (skipSegments[id]) return res.json(skipSegments[id]);
@@ -1502,7 +1586,7 @@ async function detectIntroForShow(showName) {
 }
 
 // API to trigger intro detection for a show
-app.post('/api/detect-intro/:id', async (req, res) => {
+app.post('/api/detect-intro/:id', requireAuth, async (req, res) => {
   const lib = scanLibrary();
   const item = lib.find(i => i.id === req.params.id);
   if (!item || !item.showName) return res.status(400).json({ error: 'Not a TV show episode' });
@@ -1711,8 +1795,7 @@ app.get('/api/browse', requireAdmin, (req, res) => {
 // ── Streaming & File serving ─────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════
 
-app.get('/stream/:id', requireAuth, (req, res) => {
-  if (Object.keys(fileIndex).length === 0) scanLibrary();
+app.get('/stream/:id', requireAuth, ensureLibrary, (req, res) => {
   const filePath = fileIndex[req.params.id];
   if (!filePath || !fs.existsSync(filePath)) return res.status(404).send('File not found');
 
@@ -1740,10 +1823,10 @@ app.get('/stream/:id', requireAuth, (req, res) => {
   }
 });
 
-app.get('/poster/:id', requireAuth, (req, res) => {
-  if (Object.keys(fileIndex).length === 0) scanLibrary();
+app.get('/poster/:id', requireAuth, ensureLibrary, (req, res) => {
   const p = fileIndex[`poster_${req.params.id}`];
   if (!p || !fs.existsSync(p)) return res.status(404).send('Not found');
+  res.set('Cache-Control', 'public, max-age=86400');
   res.sendFile(p);
 });
 
@@ -1830,28 +1913,26 @@ function extractFrame(filePath, timestamp, outFile) {
 
 // Extract all frames using parallel fast-seeking (multiple concurrent ffmpeg processes)
 const SPRITE_PARALLEL = parseInt(process.env.SPRITE_PARALLEL, 10) || 2; // concurrent frame extractions per file
-function extractAllFrames(filePath, tmpDir, totalFrames) {
-  return new Promise(async (resolve) => {
-    // Collect frames that still need extracting
-    const pending = [];
-    for (let i = 0; i < totalFrames; i++) {
-      const outFile = path.join(tmpDir, `frame_${String(i + 1).padStart(5, '0')}.jpg`);
-      if (!fs.existsSync(outFile)) pending.push({ ts: i * SPRITE_INTERVAL, outFile });
-    }
-    if (pending.length === 0) return resolve(true);
+async function extractAllFrames(filePath, tmpDir, totalFrames) {
+  // Collect frames that still need extracting
+  const pending = [];
+  for (let i = 0; i < totalFrames; i++) {
+    const outFile = path.join(tmpDir, `frame_${String(i + 1).padStart(5, '0')}.jpg`);
+    if (!fs.existsSync(outFile)) pending.push({ ts: i * SPRITE_INTERVAL, outFile });
+  }
+  if (pending.length === 0) return true;
 
-    let allOk = true;
-    for (let i = 0; i < pending.length; i += SPRITE_PARALLEL) {
-      // Pause if someone is watching
-      if (Object.keys(transcodeSessions).length > 0) {
-        await waitForTranscodeIdle();
-      }
-      const batch = pending.slice(i, i + SPRITE_PARALLEL);
-      const results = await Promise.all(batch.map(f => extractFrame(filePath, f.ts, f.outFile)));
-      if (results.some(r => !r)) allOk = false;
+  let allOk = true;
+  for (let i = 0; i < pending.length; i += SPRITE_PARALLEL) {
+    // Pause if someone is watching
+    if (Object.keys(transcodeSessions).length > 0) {
+      await waitForTranscodeIdle();
     }
-    resolve(allOk);
-  });
+    const batch = pending.slice(i, i + SPRITE_PARALLEL);
+    const results = await Promise.all(batch.map(f => extractFrame(filePath, f.ts, f.outFile)));
+    if (results.some(r => !r)) allOk = false;
+  }
+  return allOk;
 }
 
 // Stitch individual frame files into a sprite sheet using ffmpeg xstack
@@ -2010,7 +2091,7 @@ function queueAllSpriteGen() {
 }
 
 // Sprite progress API — counts actual files on disk for accuracy
-app.get('/api/sprites/progress', (_req, res) => {
+app.get('/api/sprites/progress', requireAuth, (_req, res) => {
   const lib = scanLibrary();
   let total = 0, completed = 0;
   for (const item of lib) {
@@ -2111,12 +2192,11 @@ app.get('/api/system/stats', (_req, res) => {
 });
 
 // Trigger sprite generation + return sprite metadata
-app.post('/api/sprites/:id/generate', (req, res) => {
-  if (Object.keys(fileIndex).length === 0) scanLibrary();
+app.post('/api/sprites/:id/generate', requireAuth, ensureLibrary, async (req, res) => {
   const filePath = fileIndex[req.params.id];
   if (!filePath || !fs.existsSync(filePath)) return res.status(404).send('Not found');
   const thumbId = getThumbId(filePath);
-  const duration = probeDuration(filePath);
+  const duration = await probeDurationAsync(filePath);
   const totalFrames = Math.ceil(duration / SPRITE_INTERVAL);
   const totalSheets = Math.ceil(totalFrames / FRAMES_PER_SPRITE);
 
@@ -2145,8 +2225,7 @@ app.post('/api/sprites/:id/generate', (req, res) => {
 });
 
 // Serve individual sprite sheet
-app.get('/api/sprites/:id/:sheet', (req, res) => {
-  if (Object.keys(fileIndex).length === 0) scanLibrary();
+app.get('/api/sprites/:id/:sheet', requireAuth, ensureLibrary, (req, res) => {
   const filePath = fileIndex[req.params.id];
   if (!filePath || !fs.existsSync(filePath)) return res.status(404).send('Not found');
   const thumbId = getThumbId(filePath);
@@ -2159,8 +2238,7 @@ app.get('/api/sprites/:id/:sheet', (req, res) => {
   res.status(202).send('Generating');
 });
 
-app.get('/subtitle/:id', requireAuth, (req, res) => {
-  if (Object.keys(subtitleIndex).length === 0) scanLibrary();
+app.get('/subtitle/:id', requireAuth, ensureLibrary, (req, res) => {
   const sub = subtitleIndex[req.params.id];
   if (!sub || !fs.existsSync(sub.absPath)) return res.status(404).send('Not found');
 
@@ -2181,8 +2259,7 @@ app.get('/subtitle/:id', requireAuth, (req, res) => {
 });
 
 // ── Embedded subtitle extraction ─────────────────────────────────────
-app.get('/subtitle/embedded/:fileId/:streamIndex', requireAuth, (req, res) => {
-  if (Object.keys(fileIndex).length === 0) scanLibrary();
+app.get('/subtitle/embedded/:fileId/:streamIndex', requireAuth, ensureLibrary, (req, res) => {
   const filePath = fileIndex[req.params.fileId];
   if (!filePath || !fs.existsSync(filePath)) return res.status(404).send('File not found');
 
@@ -2249,11 +2326,21 @@ function startFfmpeg(id, filePath, sessionDir, seekTime, startSegNum, audioStrea
   }
 
   if (mode === 'remux' || mode === 'remux-audio') {
-    ffmpegArgs.push('-c:v', 'copy', '-c:a', 'aac', '-ac', '2', '-b:a', '192k');
+    const audioCodec = audioProbeCache[filePath];
+    const canCopyAudio = BROWSER_AUDIO_CODECS.has(audioCodec);
+    ffmpegArgs.push('-c:v', 'copy');
+    if (canCopyAudio) {
+      ffmpegArgs.push('-c:a', 'copy');
+    } else {
+      ffmpegArgs.push('-c:a', 'aac', '-ac', '2', '-b:a', '192k');
+    }
   } else if (VAAPI_AVAILABLE) {
+    // Hardware decode + encode: decode on GPU (avoids CPU bottleneck for HEVC),
+    // keep frames in GPU memory, encode to H.264 on GPU
+    ffmpegArgs.splice(ffmpegArgs.indexOf('-i'), 0,
+      '-hwaccel', 'vaapi', '-hwaccel_device', '/dev/dri/renderD128', '-hwaccel_output_format', 'vaapi',
+    );
     ffmpegArgs.push(
-      '-vaapi_device', '/dev/dri/renderD128',
-      '-vf', 'format=nv12,hwupload',
       '-c:v', 'h264_vaapi', '-qp', '22',
       '-c:a', 'aac', '-ac', '2', '-b:a', '192k',
       '-af', 'aresample=async=1:first_pts=0',
@@ -2285,14 +2372,13 @@ function startFfmpeg(id, filePath, sessionDir, seekTime, startSegNum, audioStrea
 
   transcodeSessions[id] = {
     process: proc, dir: sessionDir,
-    timeout: setTimeout(() => cleanupSession(id), 120000),
+    timeout: setTimeout(() => cleanupSession(id), TRANSCODE_TIMEOUT_MS),
     startSeg: startSegNum,
     lastRestartAt: Date.now(),
   };
 }
 
-app.get('/hls/:id/master.m3u8', requireAuth, async (req, res) => {
-  if (Object.keys(fileIndex).length === 0) scanLibrary();
+app.get('/hls/:id/master.m3u8', requireAuth, ensureLibrary, async (req, res) => {
   const id = req.params.id;
   const filePath = fileIndex[id];
   if (!filePath || !fs.existsSync(filePath)) return res.status(404).send('File not found');
@@ -2307,7 +2393,7 @@ app.get('/hls/:id/master.m3u8', requireAuth, async (req, res) => {
   }
 
   const m3u8Path = path.join(sessionDir, 'stream.m3u8');
-  const duration = probeDuration(filePath);
+  const duration = await probeDurationAsync(filePath);
 
   // Reuse existing session if same seek offset and same audio track
   if (transcodeSessions[id]) {
@@ -2319,7 +2405,7 @@ app.get('/hls/:id/master.m3u8', requireAuth, async (req, res) => {
         const content = fs.readFileSync(m3u8Path, 'utf-8');
         if (content.includes('#EXTINF:')) {
           clearTimeout(transcodeSessions[id].timeout);
-          transcodeSessions[id].timeout = setTimeout(() => cleanupSession(id), 120000);
+          transcodeSessions[id].timeout = setTimeout(() => cleanupSession(id), TRANSCODE_TIMEOUT_MS);
           res.set({
             'Content-Type': 'application/vnd.apple.mpegurl', 'Cache-Control': 'no-cache',
             'X-Total-Duration': String(duration), 'X-Seek-Offset': String(transcodeSessions[id].seekOffset || 0),
@@ -2330,12 +2416,17 @@ app.get('/hls/:id/master.m3u8', requireAuth, async (req, res) => {
     }
   }
 
-  // Kill existing session for this ID — use SIGKILL and wait for cleanup
+  // Kill existing session for this ID — wait for process to actually exit
   if (transcodeSessions[id]) {
-    try { transcodeSessions[id].process.kill('SIGKILL'); } catch {}
+    const proc = transcodeSessions[id].process;
     clearTimeout(transcodeSessions[id].timeout);
     delete transcodeSessions[id];
-    await new Promise(r => setTimeout(r, 200)); // let process die
+    await new Promise(resolve => {
+      if (proc.exitCode !== null) return resolve(); // already dead
+      proc.once('close', resolve);
+      try { proc.kill('SIGKILL'); } catch {}
+      setTimeout(resolve, 2000); // safety net — don't hang forever
+    });
   }
 
   // Limit concurrent transcode sessions
@@ -2416,7 +2507,7 @@ app.get('/hls/:id/:segment', requireAuth, (req, res) => {
   // Reset timeout
   if (transcodeSessions[id]) {
     clearTimeout(transcodeSessions[id].timeout);
-    transcodeSessions[id].timeout = setTimeout(() => cleanupSession(id), 120000);
+    transcodeSessions[id].timeout = setTimeout(() => cleanupSession(id), TRANSCODE_TIMEOUT_MS);
   }
 
   // If file already exists on disk and has content, serve immediately
@@ -2433,28 +2524,48 @@ app.get('/hls/:id/:segment', requireAuth, (req, res) => {
 
   // No session — just 404, the frontend should request master.m3u8 first
 
-  // Poll for the segment (longer timeout for first segment after seek which needs decoding)
+  // Wait for ffmpeg to produce the segment using fs.watch (no polling)
   if (!transcodeSessions[id]) return res.status(404).send('No active session');
 
-  let waited = 0;
-  const maxWait = 60000; // 60s timeout — first segment after seek on slow transcode can take time
-  const poll = setInterval(() => {
-    waited += 100;
-    if (fs.existsSync(segPath)) {
-      try {
-        if (fs.statSync(segPath).size > 0) {
-          clearInterval(poll);
-          const ct = segName.endsWith('.m3u8') ? 'application/vnd.apple.mpegurl' : 'video/mp2t';
-          res.set({ 'Content-Type': ct, 'Cache-Control': 'no-cache' });
-          return res.sendFile(segPath);
-        }
-      } catch {}
-    }
-    if (waited > maxWait) {
-      clearInterval(poll);
-      res.status(404).send('Segment not ready');
-    }
-  }, 100);
+  let resolved = false;
+  const timeout = setTimeout(() => {
+    resolved = true;
+    try { watcher.close(); } catch {}
+    res.status(404).send('Segment not ready');
+  }, 60000);
+
+  const serveSegment = () => {
+    if (resolved) return;
+    try {
+      if (fs.existsSync(segPath) && fs.statSync(segPath).size > 0) {
+        resolved = true;
+        clearTimeout(timeout);
+        try { watcher.close(); } catch {}
+        const ct = segName.endsWith('.m3u8') ? 'application/vnd.apple.mpegurl' : 'video/mp2t';
+        res.set({ 'Content-Type': ct, 'Cache-Control': 'no-cache' });
+        return res.sendFile(segPath);
+      }
+    } catch {}
+  };
+
+  // Watch the session directory for new files
+  let watcher;
+  try {
+    watcher = fs.watch(sessionDir, (event, filename) => {
+      if (filename === segName || filename === segName.replace('.tmp', '')) serveSegment();
+    });
+    watcher.on('error', () => {}); // dir may be deleted during cleanup
+  } catch {
+    // Fallback to polling if fs.watch fails (e.g. network filesystems)
+    const poll = setInterval(() => {
+      if (resolved) { clearInterval(poll); return; }
+      serveSegment();
+    }, 200);
+    watcher = { close() { clearInterval(poll); } };
+  }
+
+  // Also check immediately in case it appeared between the first check and watch setup
+  serveSegment();
 });
 
 // ══════════════════════════════════════════════════════════════════════
@@ -2464,15 +2575,19 @@ app.get('/hls/:id/:segment', requireAuth, (req, res) => {
 let sseClients = [];
 
 app.get('/api/events', (req, res) => {
-  if (sseClients.length >= 50) return res.status(503).send('Too many connections');
+  if (sseClients.length >= SSE_MAX_CLIENTS) return res.status(503).send('Too many connections');
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
     'Cache-Control': 'no-cache',
     'Connection': 'keep-alive',
   });
   res.write('data: connected\n\n');
+  // Heartbeat to keep connection alive through proxies/load balancers
+  const heartbeat = setInterval(() => {
+    try { res.write(':heartbeat\n\n'); } catch { clearInterval(heartbeat); }
+  }, SSE_HEARTBEAT_MS);
   sseClients.push(res);
-  req.on('close', () => { sseClients = sseClients.filter(c => c !== res); });
+  req.on('close', () => { clearInterval(heartbeat); sseClients = sseClients.filter(c => c !== res); });
 });
 
 function notifyClients(event, data) {
@@ -2638,7 +2753,7 @@ function setupWatchers() {
         if (SUPPORTED_EXT.includes(ext)) {
           // Debounce: longer delay to avoid constant rescans during bulk conversion
           clearTimeout(watcher._debounce);
-          watcher._debounce = setTimeout(() => { invalidateLibrary(); notifyClients('library-updated'); }, 10000);
+          watcher._debounce = setTimeout(() => { invalidateLibrary(); notifyClients('library-updated'); }, FILE_WATCHER_DEBOUNCE_MS);
         }
       });
       watchers.push(watcher);
@@ -2791,5 +2906,5 @@ app.listen(PORT, '0.0.0.0', () => {
         console.log('[OMDB] Background fetch complete, library refreshed');
       });
     }, 15000);
-  }, 30000);
+  }, STARTUP_SCAN_DELAY_MS);
 });
