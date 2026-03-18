@@ -486,7 +486,7 @@ video::cue{background:rgba(0,0,0,.8);color:#fff;font-size:clamp(1.6rem, 3.5vw, 2
       <div class="nav-label">System</div>
       <button class="nav-item" data-view="downloads" onclick="nav('downloads',this)"><span class="nav-icon">&#11015;</span> Downloads</button>
       <button class="nav-item" data-view="settings" onclick="nav('settings',this)"><span class="nav-icon">&#9881;&#65039;</span> Media Folders</button>
-      <button class="nav-item" onclick="scanLibrary()"><span class="nav-icon">&#128269;</span> Scan Library</button>
+      <button class="nav-item" onclick="scanLibrary(event)"><span class="nav-icon">&#128269;</span> Scan Library</button>
       <button class="nav-item" onclick="restartServer()"><span class="nav-icon">&#128260;</span> Restart Server</button>
       </div>
     </nav>
@@ -1202,8 +1202,12 @@ function renderShowDetail(showName){
 
 async function markAllWatched(showName,watched){
   const items=library.filter(m=>(m.showName||m.title)===showName&&(m.type==='show'||m.type===currentShowType));
-  for(const item of items){
-    await fetch('/api/watched',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:item.id,watched,profile:activeProfile})});
+  // Send requests in parallel batches of 10 for speed
+  const BATCH=10;
+  for(let i=0;i<items.length;i+=BATCH){
+    await Promise.all(items.slice(i,i+BATCH).map(item=>
+      fetch('/api/watched',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:item.id,watched,profile:activeProfile})})
+    ));
   }
   await fetchLib();
 }
@@ -1460,8 +1464,8 @@ async function addFolder(){
 async function removeFolder(fp){try{await adminFetch('/api/config/remove',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:fp})});await renderSettings();fetchLib();}catch{}}
 function showSettingsAlert(m,t){const e=document.getElementById('settingsAlert');if(!e)return;e.className=`alert ${t}`;e.textContent=m;setTimeout(()=>{e.className='alert';},3500);}
 
-function scanLibrary(){
-  const btn=event.target.closest('.nav-item');
+function scanLibrary(e){
+  const btn=(e&&e.target||event.target).closest('.nav-item');
   const orig=btn.innerHTML;
   btn.innerHTML='<span class="nav-icon">&#8987;</span> Scanning...';
   btn.disabled=true;
@@ -1779,9 +1783,10 @@ async function playMedia(id){
         if(seekOff>=0) window._hlsSeekOffset=seekOff;
         if(hlsInstance){hlsInstance.destroy();hlsInstance=null;}
         hlsInstance=new Hls({
-          maxBufferLength:30,maxMaxBufferLength:120,startFragPrefetch:true,
+          maxBufferLength:15,maxMaxBufferLength:120,startFragPrefetch:true,
           liveSyncDuration:0,liveMaxLatencyDuration:Infinity,
-          highBufferWatchdogPeriod:2,nudgeOffset:0.2,enableWorker:true,
+          highBufferWatchdogPeriod:2,nudgeOffset:0.2,nudgeMaxRetry:5,enableWorker:true,
+          fragLoadingTimeOut:30000,fragLoadingMaxRetry:4,fragLoadingRetryDelay:1000,
         });
         hlsInstance.loadSource(url);
         hlsInstance.attachMedia(V);
@@ -2020,7 +2025,7 @@ V.addEventListener('waiting',()=>{
   clearTimeout(_stallTimer);
   _stallTimer=setTimeout(()=>{
     if(V.paused||!currentMedia)return;
-    if(Date.now()-_lastStallRecovery<30000)return;
+    if(Date.now()-_lastStallRecovery<15000)return;
     if(V.readyState<3&&typeof window._hlsLoad==='function'){
       console.log('[Stall Recovery] Buffer exhausted, reloading HLS from current position');
       _lastStallRecovery=Date.now();
@@ -2029,7 +2034,7 @@ V.addEventListener('waiting',()=>{
       window._hlsSeekOffset=currentTime;
       window._hlsLoad('/hls/'+currentMedia.id+'/master.m3u8?start='+currentTime+audioParam);
     }
-  },10000);
+  },5000);
 });
 V.addEventListener('playing',()=>{clearTimeout(_stallTimer);_hasPlayedBefore=true;});
 V.addEventListener('ended',()=>{
