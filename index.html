@@ -1743,7 +1743,8 @@ async function playMedia(id){
   _hasPlayedBefore=false;_lastStallRecovery=0;
   document.getElementById('progressBuffered').style.width='0%';
 
-  const startTime=item.progress.currentTime>5?item.progress.currentTime:0;
+  const prog=item.progress||{};
+  const startTime=(prog.percent||0)>=95?0:(prog.currentTime>5?prog.currentTime:0);
   modal.classList.add('active');
 
   // Direct streaming — only when server confirms direct play is safe (h264+aac in mp4)
@@ -1824,6 +1825,7 @@ async function playMedia(id){
 
 async function closePlayer(){
   await saveProg();V.pause();resetUpNext();
+  if(document.fullscreenElement){_exitingFullscreen=true;document.exitFullscreen().catch(()=>{}).finally(()=>{_exitingFullscreen=false;});}
   if(hlsInstance){hlsInstance.destroy();hlsInstance=null;}
   V.removeAttribute('src');V.load();
   V.querySelectorAll('track').forEach(t=>t.remove());
@@ -2076,6 +2078,13 @@ document.addEventListener('keydown',e=>{
 });
 
 function showControls(){modal.classList.add('controls-visible');clearTimeout(controlsTimeout);controlsTimeout=setTimeout(()=>{modal.classList.remove('controls-visible');},3000);}
+
+// When user presses Escape in fullscreen, the browser exits fullscreen and swallows the
+// keydown event before our handler can call closePlayer(). Detect that and close the player.
+let _exitingFullscreen=false;
+document.addEventListener('fullscreenchange',()=>{
+  if(!document.fullscreenElement&&modal.classList.contains('active')&&!_exitingFullscreen)closePlayer();
+});
 
 // Touch support: tap video to toggle controls, auto-hide after 3s
 const _isTouch='ontouchstart' in window;
