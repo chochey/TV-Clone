@@ -1244,8 +1244,9 @@ function getRequestProfile(req) {
   return session ? (requested || session.profileId) : requested;
 }
 
-app.get('/api/library', (req, res) => {
-  const profileId = getRequestProfile(req) || req.query.profile || 'default';
+app.get('/api/library', requireAuth, (req, res) => {
+  const profileId = getRequestProfile(req);
+  if (!profileId) return res.status(403).json({ error: 'Cannot access other profiles' });
   const lib = scanLibrary();
   const profileData = loadProfileData(profileId);
 
@@ -1291,7 +1292,8 @@ app.get('/api/item/:id', requireAuth, (req, res) => {
   const item = lib.find(m => m.id === req.params.id);
   if (!item) return res.status(404).json({ error: 'Not found' });
   const omdb = getOmdbForItem(item);
-  const profileId = getRequestProfile(req) || 'default';
+  const profileId = getRequestProfile(req);
+  if (!profileId) return res.status(403).json({ error: 'Cannot access other profiles' });
   const profileData = loadProfileData(profileId);
   const { _filePath, ...safeItem } = item;
   // Strip internal fields from subtitles
@@ -1346,14 +1348,16 @@ app.post('/api/watched', requireAuth, (req, res) => {
 
 // ── History ────────────────────────────────────────────────────────────
 app.get('/api/history', requireAuth, (req, res) => {
-  const profileId = getRequestProfile(req) || 'default';
+  const profileId = getRequestProfile(req);
+  if (!profileId) return res.status(403).json({ error: 'Cannot access other profiles' });
   const data = loadProfileData(profileId);
   res.json(data.history || []);
 });
 
 // ── Queue ──────────────────────────────────────────────────────────────
 app.get('/api/queue', requireAuth, (req, res) => {
-  const profileId = getRequestProfile(req) || 'default';
+  const profileId = getRequestProfile(req);
+  if (!profileId) return res.status(403).json({ error: 'Cannot access other profiles' });
   const data = loadProfileData(profileId);
   res.json(data.queue || []);
 });
@@ -1671,7 +1675,7 @@ app.get('/omdb-poster/:hash', (req, res) => {
 });
 
 // ── Disk stats ─────────────────────────────────────────────────────────
-app.get('/api/stats', (_req, res) => {
+app.get('/api/stats', requireAuth, (_req, res) => {
   const lib = scanLibrary();
   const byFolder = {};
   let totalSize = 0;
@@ -2116,7 +2120,7 @@ app.get('/api/sprites/progress', requireAuth, (_req, res) => {
 
 // System stats API
 let _prevCpu = null;
-app.get('/api/system/stats', (_req, res) => {
+app.get('/api/system/stats', requireAdminSession, (_req, res) => {
   const cpus = os.cpus();
   const cpuModel = cpus[0]?.model || 'Unknown';
   const cpuCores = cpus.length;
@@ -2589,7 +2593,7 @@ app.get('/hls/:id/:segment', requireAuth, (req, res) => {
 
 let sseClients = [];
 
-app.get('/api/events', (req, res) => {
+app.get('/api/events', requireAuth, (req, res) => {
   if (sseClients.length >= SSE_MAX_CLIENTS) return res.status(503).send('Too many connections');
   res.writeHead(200, {
     'Content-Type': 'text/event-stream',
@@ -2626,7 +2630,8 @@ function qbtRequest(method, apiPath, body) {
       opts.headers['Content-Type'] = 'application/x-www-form-urlencoded';
       opts.headers['Content-Length'] = Buffer.byteLength(body);
     }
-    const req = http.request(opts, res => {
+    const transport = url.protocol === 'https:' ? https : http;
+    const req = transport.request(opts, res => {
       let data = '';
       res.on('data', c => data += c);
       res.on('end', () => resolve({ status: res.statusCode, data, headers: res.headers }));
