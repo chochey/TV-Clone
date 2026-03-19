@@ -1825,7 +1825,7 @@ async function playMedia(id){
 
 async function closePlayer(){
   await saveProg();V.pause();resetUpNext();
-  if(document.fullscreenElement){_exitingFullscreen=true;document.exitFullscreen().catch(()=>{}).finally(()=>{_exitingFullscreen=false;});}
+  if(document.fullscreenElement)document.exitFullscreen().catch(()=>{});
   if(hlsInstance){hlsInstance.destroy();hlsInstance=null;}
   V.removeAttribute('src');V.load();
   V.querySelectorAll('track').forEach(t=>t.remove());
@@ -1841,7 +1841,7 @@ async function closePlayer(){
 function togglePlay(e){if(e&&e.target.closest('.player-controls,.player-top-bar'))return;V.paused?V.play():V.pause();}
 function toggleMute(){V.muted=!V.muted;document.getElementById('volumeBtn').innerHTML=V.muted?'&#128263;':'&#128266;';document.getElementById('volumeSlider').value=V.muted?0:V.volume;}
 function setVol(v){V.volume=v;V.muted=v==0;document.getElementById('volumeBtn').innerHTML=v==0?'&#128263;':v<.5?'&#128265;':'&#128266;';}
-function toggleFS(){document.fullscreenElement?document.exitFullscreen():modal.requestFullscreen().catch(()=>{});}
+function toggleFS(){document.fullscreenElement?document.exitFullscreen().catch(()=>{}):modal.requestFullscreen().catch(()=>{});}
 
 // Click vs double-click on video wrapper (manual detection for reliability)
 let _clickCount=0,_clickTimer=null;
@@ -2079,12 +2079,8 @@ document.addEventListener('keydown',e=>{
 
 function showControls(){modal.classList.add('controls-visible');clearTimeout(controlsTimeout);controlsTimeout=setTimeout(()=>{modal.classList.remove('controls-visible');},3000);}
 
-// When user presses Escape in fullscreen, the browser exits fullscreen and swallows the
-// keydown event before our handler can call closePlayer(). Detect that and close the player.
-let _exitingFullscreen=false;
-document.addEventListener('fullscreenchange',()=>{
-  if(!document.fullscreenElement&&modal.classList.contains('active')&&!_exitingFullscreen)closePlayer();
-});
+// When user presses Escape in fullscreen, the browser exits fullscreen (swallowing the
+// keydown event). A second Escape press then closes the player via the keydown handler.
 
 // Touch support: tap video to toggle controls, auto-hide after 3s
 const _isTouch='ontouchstart' in window;
