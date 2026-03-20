@@ -484,10 +484,10 @@ video::cue{background:rgba(0,0,0,.8);color:#fff;font-size:clamp(1.6rem, 3.5vw, 2
       <div id="customNavItems"></div>
       <div id="systemSection" class="system-section">
       <div class="nav-label">System</div>
-      <button class="nav-item" data-view="downloads" onclick="nav('downloads',this)"><span class="nav-icon">&#11015;</span> Downloads</button>
-      <button class="nav-item" data-view="settings" onclick="nav('settings',this)"><span class="nav-icon">&#9881;&#65039;</span> Media Folders</button>
-      <button class="nav-item" onclick="scanLibrary(event)"><span class="nav-icon">&#128269;</span> Scan Library</button>
-      <button class="nav-item" onclick="restartServer()"><span class="nav-icon">&#128260;</span> Restart Server</button>
+      <button class="nav-item" id="navDownloads" data-view="downloads" onclick="nav('downloads',this)"><span class="nav-icon">&#11015;</span> Downloads</button>
+      <button class="nav-item" id="navSettings" data-view="settings" onclick="nav('settings',this)"><span class="nav-icon">&#9881;&#65039;</span> Media Folders</button>
+      <button class="nav-item" id="navScan" onclick="scanLibrary(event)"><span class="nav-icon">&#128269;</span> Scan Library</button>
+      <button class="nav-item" id="navRestart" onclick="restartServer()"><span class="nav-icon">&#128260;</span> Restart Server</button>
       </div>
     </nav>
     <div class="sidebar-profile" onclick="switchProfile()">
@@ -595,13 +595,25 @@ let library=[],currentView='home',currentMedia=null,controlsTimeout=null,progres
 let folderConfig=[],activeProfile=null,profileQueue=[];
 let skipInterval=10,playbackSpeed=1,watchFilter='all';
 let currentRole='user'; // 'admin' or 'user'
+let currentPermissions=[]; // ['canDownload','canScan','canRestart']
+function hasPerm(p){return currentRole==='admin'||currentPermissions.includes(p);}
 // Admin auth is handled via HttpOnly cookie — no token in JS needed
 function adminHeaders(){return{'Content-Type':'application/json'};}
 function adminFetch(url,opts={}){opts.credentials='same-origin';return fetch(url,opts);}
 
 function updateSystemVisibility(){
+  const isAdmin=currentRole==='admin';
+  const showDownloads=isAdmin||currentPermissions.includes('canDownload');
+  const showSettings=isAdmin; // settings/folders always admin-only
+  const showScan=isAdmin||currentPermissions.includes('canScan');
+  const showRestart=isAdmin||currentPermissions.includes('canRestart');
+  const showSystem=showDownloads||showSettings||showScan||showRestart;
   const el=document.getElementById('systemSection');
-  if(el){currentRole==='admin'?el.classList.add('visible'):el.classList.remove('visible');}
+  if(el){showSystem?el.classList.add('visible'):el.classList.remove('visible');}
+  const nd=document.getElementById('navDownloads');if(nd)nd.style.display=showDownloads?'':'none';
+  const ns=document.getElementById('navSettings');if(ns)ns.style.display=showSettings?'':'none';
+  const nsc=document.getElementById('navScan');if(nsc)nsc.style.display=showScan?'':'none';
+  const nr=document.getElementById('navRestart');if(nr)nr.style.display=showRestart?'':'none';
 }
 
 const V=document.getElementById('videoElement'),modal=document.getElementById('playerModal');
@@ -624,6 +636,7 @@ async function checkExistingSession(){
     if(data.loggedIn){
       activeProfile=data.profileId;
       currentRole=data.role||'user';
+      currentPermissions=data.permissions||[];
       return true;
     }
   }catch{}
@@ -648,7 +661,7 @@ async function showProfileScreen(skipSessionCheck){
     renderView();
     await fetchQueue();
     setupSSE();
-    if(currentRole==='admin')dlFetchPlugins();
+    if(hasPerm('canDownload'))dlFetchPlugins();
     return;
   }
 
@@ -684,6 +697,7 @@ async function doLogin(){
     }
     activeProfile=data.profileId;
     currentRole=data.role||'user';
+    currentPermissions=data.permissions||[];
     document.getElementById('profileScreen').style.display='none';
     document.getElementById('appContainer').style.display='';
     updateSystemVisibility();
@@ -699,7 +713,7 @@ async function doLogin(){
     renderView();
     await fetchQueue();
     setupSSE();
-    if(currentRole==='admin')dlFetchPlugins();
+    if(hasPerm('canDownload'))dlFetchPlugins();
   }catch(e){
     err.textContent='Connection error';
   }
@@ -739,10 +753,18 @@ function createProfile(){
     </div>
     <div class="modal-field">
       <label>Role</label>
-      <select id="modalRole">
+      <select id="modalRole" onchange="togglePermissions()">
         <option value="user">User — browse &amp; watch only</option>
         <option value="admin">Admin — full system access</option>
       </select>
+    </div>
+    <div class="modal-field" id="permissionsField" style="display:block">
+      <label>Permissions</label>
+      <div style="display:flex;flex-direction:column;gap:10px;margin-top:6px">
+        <div style="display:flex;align-items:center;gap:10px;cursor:pointer" onclick="document.getElementById('permDownload').click()"><input type="checkbox" id="permDownload" style="width:18px;height:18px;flex-shrink:0;accent-color:var(--accent)" onclick="event.stopPropagation()"><span style="font-size:.85rem;color:var(--text-primary);text-transform:none;letter-spacing:0;font-weight:400">Downloads — search &amp; manage torrents</span></div>
+        <div style="display:flex;align-items:center;gap:10px;cursor:pointer" onclick="document.getElementById('permScan').click()"><input type="checkbox" id="permScan" style="width:18px;height:18px;flex-shrink:0;accent-color:var(--accent)" onclick="event.stopPropagation()"><span style="font-size:.85rem;color:var(--text-primary);text-transform:none;letter-spacing:0;font-weight:400">Scan Library — trigger media rescans</span></div>
+        <div style="display:flex;align-items:center;gap:10px;cursor:pointer" onclick="document.getElementById('permRestart').click()"><input type="checkbox" id="permRestart" style="width:18px;height:18px;flex-shrink:0;accent-color:var(--accent)" onclick="event.stopPropagation()"><span style="font-size:.85rem;color:var(--text-primary);text-transform:none;letter-spacing:0;font-weight:400">Restart Server</span></div>
+      </div>
     </div>
     <div class="modal-field">
       <label>Avatar Color</label>
@@ -764,15 +786,30 @@ function pickAvatar(color,el){
   el.classList.add('selected');
 }
 
+function togglePermissions(){
+  const role=document.getElementById('modalRole').value;
+  const pf=document.getElementById('permissionsField');
+  if(pf) pf.style.display=role==='admin'?'none':'block';
+}
+
+function getSelectedPermissions(){
+  const perms=[];
+  if(document.getElementById('permDownload')?.checked) perms.push('canDownload');
+  if(document.getElementById('permScan')?.checked) perms.push('canScan');
+  if(document.getElementById('permRestart')?.checked) perms.push('canRestart');
+  return perms;
+}
+
 async function submitCreateProfile(){
   const name=document.getElementById('modalName').value.trim();
   if(!name){document.getElementById('modalName').style.borderColor='#e5484d';return;}
   const username=document.getElementById('modalUsername').value.trim();
   const password=document.getElementById('modalPassword').value;
   const role=document.getElementById('modalRole').value;
+  const permissions=role==='admin'?[]:getSelectedPermissions();
   if(!password){document.getElementById('modalPassword').style.borderColor='#e5484d';return;}
   closeModal();
-  await adminFetch('/api/profiles',{method:'POST',headers:adminHeaders(),body:JSON.stringify({name,username:username||'',password,role,avatar:_selectedAvatar})});
+  await adminFetch('/api/profiles',{method:'POST',headers:adminHeaders(),body:JSON.stringify({name,username:username||'',password,role,avatar:_selectedAvatar,permissions})});
   if(currentView==='settings')renderSettings();
   else showProfileScreen(true);
 }
@@ -782,6 +819,8 @@ async function editAccount(profileId){
   const p=profiles.find(x=>x.id===profileId);
   if(!p)return;
   _selectedAvatar=p.avatar||AVATAR_COLORS[0];
+  const perms=p.permissions||[];
+  const isAdmin=p.role==='admin';
   openModal(`
     <h2>Edit Account</h2>
     <div class="modal-field">
@@ -799,10 +838,18 @@ async function editAccount(profileId){
     </div>
     <div class="modal-field">
       <label>Role</label>
-      <select id="modalRole">
-        <option value="user"${p.role!=='admin'?' selected':''}>User — browse &amp; watch only</option>
-        <option value="admin"${p.role==='admin'?' selected':''}>Admin — full system access</option>
+      <select id="modalRole" onchange="togglePermissions()">
+        <option value="user"${!isAdmin?' selected':''}>User — browse &amp; watch only</option>
+        <option value="admin"${isAdmin?' selected':''}>Admin — full system access</option>
       </select>
+    </div>
+    <div class="modal-field" id="permissionsField" style="display:${isAdmin?'none':'block'}">
+      <label>Permissions</label>
+      <div style="display:flex;flex-direction:column;gap:10px;margin-top:6px">
+        <div style="display:flex;align-items:center;gap:10px;cursor:pointer" onclick="document.getElementById('permDownload').click()"><input type="checkbox" id="permDownload" style="width:18px;height:18px;flex-shrink:0;accent-color:var(--accent)" onclick="event.stopPropagation()"${perms.includes('canDownload')?' checked':''}><span style="font-size:.85rem;color:var(--text-primary);text-transform:none;letter-spacing:0;font-weight:400">Downloads — search &amp; manage torrents</span></div>
+        <div style="display:flex;align-items:center;gap:10px;cursor:pointer" onclick="document.getElementById('permScan').click()"><input type="checkbox" id="permScan" style="width:18px;height:18px;flex-shrink:0;accent-color:var(--accent)" onclick="event.stopPropagation()"${perms.includes('canScan')?' checked':''}><span style="font-size:.85rem;color:var(--text-primary);text-transform:none;letter-spacing:0;font-weight:400">Scan Library — trigger media rescans</span></div>
+        <div style="display:flex;align-items:center;gap:10px;cursor:pointer" onclick="document.getElementById('permRestart').click()"><input type="checkbox" id="permRestart" style="width:18px;height:18px;flex-shrink:0;accent-color:var(--accent)" onclick="event.stopPropagation()"${perms.includes('canRestart')?' checked':''}><span style="font-size:.85rem;color:var(--text-primary);text-transform:none;letter-spacing:0;font-weight:400">Restart Server</span></div>
+      </div>
     </div>
     <div class="modal-field">
       <label>Avatar Color</label>
@@ -824,7 +871,8 @@ async function submitEditAccount(profileId){
   const username=document.getElementById('modalUsername').value.trim();
   const password=document.getElementById('modalPassword').value;
   const role=document.getElementById('modalRole').value;
-  const body={name,username,role,avatar:_selectedAvatar};
+  const permissions=role==='admin'?[]:getSelectedPermissions();
+  const body={name,username,role,avatar:_selectedAvatar,permissions};
   if(password) body.password=password; // only update password if provided
   closeModal();
   await adminFetch('/api/profiles/'+profileId,{method:'PUT',headers:adminHeaders(),body:JSON.stringify(body)});
@@ -947,7 +995,7 @@ function renderView(){
     case 'queue':a.innerHTML=renderQueue();break;
     case 'history':renderHistory();return;
     case 'settings':if(currentRole!=='admin'){nav('home',document.querySelector('[data-view="home"]'));return;}renderSettings();return;
-    case 'downloads':if(currentRole!=='admin'){nav('home',document.querySelector('[data-view="home"]'));return;}renderDownloads();return;
+    case 'downloads':if(!hasPerm('canDownload')){nav('home',document.querySelector('[data-view="home"]'));return;}renderDownloads();return;
     case 'showDetail':a.innerHTML=renderShowDetail(currentShowName);break;
     default:
       if(currentView.startsWith('custom_')){
@@ -1388,11 +1436,21 @@ async function renderSettings(){
   if(currentRole==='admin'){
     const profiles=await loadProfiles();
     let rows=profiles.map(p=>{
-      const roleBadge=p.role==='admin'?'<span style="background:var(--accent);color:#fff;padding:2px 8px;border-radius:4px;font-size:.7rem;font-weight:700">ADMIN</span>':'<span style="background:rgba(255,255,255,.1);color:var(--text-secondary);padding:2px 8px;border-radius:4px;font-size:.7rem;font-weight:700">USER</span>';
+      const perms=p.permissions||[];
+      let roleBadge;
+      if(p.role==='admin'){
+        roleBadge='<span style="background:var(--accent);color:#fff;padding:2px 8px;border-radius:4px;font-size:.7rem;font-weight:700">ADMIN</span>';
+      } else {
+        const permTags=[];
+        if(perms.includes('canDownload'))permTags.push('<span style="background:rgba(59,130,246,.2);color:#60a5fa;padding:2px 6px;border-radius:4px;font-size:.65rem;font-weight:600">DL</span>');
+        if(perms.includes('canScan'))permTags.push('<span style="background:rgba(16,185,129,.2);color:#34d399;padding:2px 6px;border-radius:4px;font-size:.65rem;font-weight:600">SCAN</span>');
+        if(perms.includes('canRestart'))permTags.push('<span style="background:rgba(245,158,11,.2);color:#fbbf24;padding:2px 6px;border-radius:4px;font-size:.65rem;font-weight:600">RST</span>');
+        roleBadge='<span style="background:rgba(255,255,255,.1);color:var(--text-secondary);padding:2px 8px;border-radius:4px;font-size:.7rem;font-weight:700">USER</span>'+(permTags.length?' '+permTags.join(' '):'');
+      }
       const lockIcon=p.hasPassword?'&#128274;':'<span style="color:var(--text-muted)">None</span>';
       const isDefault=profiles.length<=1;
       const deleteBtn=isDefault?'':`<button class="btn btn-danger btn-sm" onclick="deleteAccount('${escAttr(p.id)}','${escAttr(p.name)}')" style="padding:4px 10px;font-size:.75rem">Delete</button>`;
-      return `<div style="display:flex;align-items:center;gap:12px;padding:12px 16px;background:var(--bg-card);border-radius:10px;border:1px solid rgba(255,255,255,.06)"><div style="width:40px;height:40px;border-radius:10px;background:${p.avatar};display:flex;align-items:center;justify-content:center;font-weight:700;font-size:1.1rem;color:#fff;flex-shrink:0">${p.name[0].toUpperCase()}</div><div style="flex:1;min-width:0"><div style="font-weight:600;font-size:.9rem">${esc(p.name)}</div><div style="font-size:.75rem;color:var(--text-muted);margin-top:2px">@${esc(p.username||'')} &middot; Password: ${lockIcon}</div></div><div style="display:flex;align-items:center;gap:8px">${roleBadge}<button class="btn btn-secondary btn-sm" onclick="editAccount('${escAttr(p.id)}')" style="padding:4px 10px;font-size:.75rem">Edit</button>${deleteBtn}</div></div>`;
+      return `<div style="display:flex;align-items:center;gap:12px;padding:12px 16px;background:var(--bg-card);border-radius:10px;border:1px solid rgba(255,255,255,.06)"><div style="width:40px;height:40px;border-radius:10px;background:${p.avatar};display:flex;align-items:center;justify-content:center;font-weight:700;font-size:1.1rem;color:#fff;flex-shrink:0">${p.name[0].toUpperCase()}</div><div style="flex:1;min-width:0"><div style="font-weight:600;font-size:.9rem">${esc(p.name)}</div><div style="font-size:.75rem;color:var(--text-muted);margin-top:2px">@${esc(p.username||'')} &middot; Password: ${lockIcon}</div></div><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">${roleBadge}<button class="btn btn-secondary btn-sm" onclick="editAccount('${escAttr(p.id)}')" style="padding:4px 10px;font-size:.75rem">Edit</button>${deleteBtn}</div></div>`;
     }).join('');
     acctHtml=`<h3 style="font-size:1rem;font-weight:700;margin:28px 0 12px">Accounts</h3><div style="display:flex;flex-direction:column;gap:8px">${rows}<div style="margin-top:8px"><button class="btn btn-primary btn-sm" onclick="createProfile()">&#10010; Add Account</button></div></div>`;
   }

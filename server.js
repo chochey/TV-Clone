@@ -38,7 +38,7 @@ const POSTER_EXT = ['.jpg', '.jpeg', '.png', '.webp'];
 // ── Tunable constants ────────────────────────────────────────────────
 const AUTO_WATCHED_PERCENT = 92;          // mark as watched above this %
 const MAX_HISTORY_ITEMS = 100;            // max entries in watch history
-const TRANSCODE_TIMEOUT_MS = 120000;      // kill idle transcode sessions after 2min
+const TRANSCODE_TIMEOUT_MS = 300000;      // kill idle transcode sessions after 5min
 const STARTUP_SCAN_DELAY_MS = 30000;      // delay before background library rescan
 const SSE_MAX_CLIENTS = 50;               // max concurrent SSE connections
 const SSE_HEARTBEAT_MS = 30000;           // SSE keep-alive heartbeat interval
@@ -192,12 +192,13 @@ function verifyPassword(password, stored) {
 }
 
 // ── Session management ──────────────────────────────────────────────────
-const sessions = new Map(); // token -> { profileId, role, createdAt }
+const sessions = new Map(); // token -> { profileId, role, permissions, createdAt }
 const SESSION_MAX_AGE = 7 * 24 * 60 * 60 * 1000; // 7 days
+const VALID_PERMISSIONS = ['canDownload', 'canScan', 'canRestart'];
 
-function createSession(profileId, role) {
+function createSession(profileId, role, permissions) {
   const token = crypto.randomBytes(32).toString('hex');
-  sessions.set(token, { profileId, role, createdAt: Date.now() });
+  sessions.set(token, { profileId, role, permissions: permissions || [], createdAt: Date.now() });
   return token;
 }
 
@@ -1109,7 +1110,7 @@ app.get('/api/profiles', (_req, res) => {
   const session = getSession(_req);
   if (!session) return res.json([]); // unauthenticated: return empty, reveal nothing
   res.json(config.profiles.map(p => ({
-    id: p.id, name: p.name, username: p.username, hasPin: !!p.pin, hasPassword: !!p.password, avatar: p.avatar, role: p.role || 'user',
+    id: p.id, name: p.name, username: p.username, hasPin: !!p.pin, hasPassword: !!p.password, avatar: p.avatar, role: p.role || 'user', permissions: p.permissions || [],
   })));
 });
 
@@ -1143,12 +1144,14 @@ app.post('/api/login', (req, res) => {
     return res.status(403).json({ error: 'Invalid username or password' });
   }
 
-  const token = createSession(profile.id, profile.role || 'user');
+  const role = profile.role || 'user';
+  const permissions = role === 'admin' ? [...VALID_PERMISSIONS] : (profile.permissions || []);
+  const token = createSession(profile.id, role, permissions);
   res.cookie('session', token, { httpOnly: true, maxAge: SESSION_MAX_AGE, sameSite: 'lax' });
-  if ((profile.role || 'user') === 'admin') {
+  if (role === 'admin' || permissions.includes('canDownload') || permissions.includes('canScan') || permissions.includes('canRestart')) {
     res.cookie('adminSession', adminToken, { httpOnly: true, maxAge: SESSION_MAX_AGE, sameSite: 'lax' });
   }
-  res.json({ ok: true, role: profile.role || 'user', profileId: profile.id, name: profile.name });
+  res.json({ ok: true, role, profileId: profile.id, name: profile.name, permissions });
 });
 
 app.post('/api/logout', (_req, res) => {
@@ -1164,21 +1167,22 @@ app.get('/api/me', (req, res) => {
   const session = getSession(req);
   if (!session) return res.json({ loggedIn: false });
   const profile = config.profiles.find(p => p.id === session.profileId);
-  res.json({ loggedIn: true, profileId: session.profileId, role: session.role, name: profile?.name, avatar: profile?.avatar });
+  res.json({ loggedIn: true, profileId: session.profileId, role: session.role, permissions: session.permissions || [], name: profile?.name, avatar: profile?.avatar });
 });
 
 app.post('/api/profiles', requireAdminSession, (req, res) => {
-  const { name, username, pin, avatar, password, role } = req.body;
+  const { name, username, pin, avatar, password, role, permissions } = req.body;
   if (!name) return res.status(400).json({ error: 'Name required' });
   const uname = (username || name.toLowerCase().replace(/[^a-z0-9]/g, '')).toLowerCase();
   if (config.profiles.some(p => (p.username || '').toLowerCase() === uname)) {
     return res.status(400).json({ error: 'Username already taken' });
   }
   const id = crypto.randomBytes(6).toString('hex');
-  const profile = { id, name, username: uname, pin: pin ? hashPassword(pin) : '', avatar: avatar || '#00a4dc', role: role || 'user', password: password ? hashPassword(password) : '' };
+  const validPerms = Array.isArray(permissions) ? permissions.filter(p => VALID_PERMISSIONS.includes(p)) : [];
+  const profile = { id, name, username: uname, pin: pin ? hashPassword(pin) : '', avatar: avatar || '#00a4dc', role: role || 'user', password: password ? hashPassword(password) : '', permissions: validPerms };
   config.profiles.push(profile);
   saveJSON(CONFIG_FILE, config);
-  res.json({ ok: true, profile: { id, name, username: uname, hasPin: !!pin, hasPassword: !!password, avatar, role: profile.role } });
+  res.json({ ok: true, profile: { id, name, username: uname, hasPin: !!pin, hasPassword: !!password, avatar, role: profile.role, permissions: validPerms } });
 });
 
 app.put('/api/profiles/:id', requireAdminSession, (req, res) => {
@@ -1195,6 +1199,7 @@ app.put('/api/profiles/:id', requireAdminSession, (req, res) => {
   if (req.body.pin !== undefined) p.pin = req.body.pin ? hashPassword(req.body.pin) : '';
   if (req.body.avatar) p.avatar = req.body.avatar;
   if (req.body.role) p.role = req.body.role;
+  if (req.body.permissions !== undefined) p.permissions = Array.isArray(req.body.permissions) ? req.body.permissions.filter(x => VALID_PERMISSIONS.includes(x)) : [];
   if (req.body.password !== undefined) p.password = req.body.password ? hashPassword(req.body.password) : '';
   saveJSON(CONFIG_FILE, config);
   res.json({ ok: true });
@@ -1715,6 +1720,23 @@ function requireAdmin(req, res, next) {
   const token = adminMatch ? adminMatch[1] : req.headers['x-admin-token'];
   if (token !== adminToken) return res.status(403).json({ error: 'Unauthorized' });
   next();
+}
+
+// Permission-based auth: checks admin token AND that session has a specific permission (or is admin)
+function requirePermission(permission) {
+  return (req, res, next) => {
+    // Must have admin token cookie (set at login for users with any elevated permissions)
+    const cookieHeader = req.headers.cookie || '';
+    const adminMatch = cookieHeader.match(/adminSession=([a-f0-9]{48})/);
+    const token = adminMatch ? adminMatch[1] : req.headers['x-admin-token'];
+    if (token !== adminToken) return res.status(403).json({ error: 'Unauthorized' });
+    // Check session for permission
+    const session = getSession(req);
+    if (!session) return res.status(401).json({ error: 'Login required' });
+    if (session.role === 'admin') return next(); // admins can do everything
+    if (session.permissions && session.permissions.includes(permission)) return next();
+    return res.status(403).json({ error: 'Permission denied' });
+  };
 }
 
 app.get('/api/config', requireAdmin, (_req, res) => {
@@ -2302,17 +2324,21 @@ function cleanupSession(id, keepFiles) {
   if (!session) return;
   try { session.process.kill('SIGTERM'); } catch {}
   clearTimeout(session.timeout);
+  delete transcodeSessions[id];
   if (!keepFiles) {
+    // Use a unique cleanup path to avoid race conditions with new sessions reusing the same id.
+    // Rename the directory first so a new session can safely recreate it.
+    const deadDir = session.dir + '_dead_' + Date.now();
+    try { fs.renameSync(session.dir, deadDir); } catch { return; }
     setTimeout(() => {
       try {
-        if (fs.existsSync(session.dir)) {
-          fs.readdirSync(session.dir).forEach(f => fs.unlinkSync(path.join(session.dir, f)));
-          fs.rmdirSync(session.dir);
+        if (fs.existsSync(deadDir)) {
+          fs.readdirSync(deadDir).forEach(f => fs.unlinkSync(path.join(deadDir, f)));
+          fs.rmdirSync(deadDir);
         }
       } catch {}
     }, 5000);
   }
-  delete transcodeSessions[id];
 }
 
 function startFfmpeg(id, filePath, sessionDir, seekTime, startSegNum, audioStreamIndex) {
@@ -2670,7 +2696,7 @@ function requireQbt(req, res, next) {
 }
 
 // qBittorrent status
-app.get('/api/qbt/status', requireAdminSession, requireQbt, async (_req, res) => {
+app.get('/api/qbt/status', requirePermission('canDownload'), requireQbt, async (_req, res) => {
   try {
     const ok = await qbtAuth();
     res.json({ connected: ok });
@@ -2678,7 +2704,7 @@ app.get('/api/qbt/status', requireAdminSession, requireQbt, async (_req, res) =>
 });
 
 // Search plugins
-app.get('/api/qbt/search/plugins', requireAdminSession, requireQbt, async (_req, res) => {
+app.get('/api/qbt/search/plugins', requirePermission('canDownload'), requireQbt, async (_req, res) => {
   try {
     const r = await qbt('GET', '/api/v2/search/plugins');
     res.json(qbtJson(r));
@@ -2686,7 +2712,7 @@ app.get('/api/qbt/search/plugins', requireAdminSession, requireQbt, async (_req,
 });
 
 // Start search
-app.post('/api/qbt/search/start', requireAdminSession, requireQbt, async (req, res) => {
+app.post('/api/qbt/search/start', requirePermission('canDownload'), requireQbt, async (req, res) => {
   try {
     const { pattern, category, plugins } = req.body;
     const body = `pattern=${encodeURIComponent(pattern)}&category=${encodeURIComponent(category || 'all')}&plugins=${encodeURIComponent(plugins || 'all')}`;
@@ -2696,7 +2722,7 @@ app.post('/api/qbt/search/start', requireAdminSession, requireQbt, async (req, r
 });
 
 // Get search results
-app.get('/api/qbt/search/results', requireAdminSession, requireQbt, async (req, res) => {
+app.get('/api/qbt/search/results', requirePermission('canDownload'), requireQbt, async (req, res) => {
   try {
     const { id, offset, limit } = req.query;
     const r = await qbt('GET', `/api/v2/search/results?id=${id}&offset=${offset || 0}&limit=${limit || 50}`);
@@ -2705,7 +2731,7 @@ app.get('/api/qbt/search/results', requireAdminSession, requireQbt, async (req, 
 });
 
 // Stop search
-app.post('/api/qbt/search/stop', requireAdminSession, requireQbt, async (req, res) => {
+app.post('/api/qbt/search/stop', requirePermission('canDownload'), requireQbt, async (req, res) => {
   try {
     await qbt('POST', '/api/v2/search/stop', `id=${req.body.id}`);
     res.json({ ok: true });
@@ -2713,7 +2739,7 @@ app.post('/api/qbt/search/stop', requireAdminSession, requireQbt, async (req, re
 });
 
 // List torrents
-app.get('/api/qbt/torrents', requireAdminSession, requireQbt, async (_req, res) => {
+app.get('/api/qbt/torrents', requirePermission('canDownload'), requireQbt, async (_req, res) => {
   try {
     const r = await qbt('GET', '/api/v2/torrents/info');
     res.json(qbtJson(r));
@@ -2721,7 +2747,7 @@ app.get('/api/qbt/torrents', requireAdminSession, requireQbt, async (_req, res) 
 });
 
 // Add torrent
-app.post('/api/qbt/torrents/add', requireAdminSession, requireQbt, async (req, res) => {
+app.post('/api/qbt/torrents/add', requirePermission('canDownload'), requireQbt, async (req, res) => {
   try {
     const { urls, savepath } = req.body;
     let body = `urls=${encodeURIComponent(urls)}`;
@@ -2732,7 +2758,7 @@ app.post('/api/qbt/torrents/add', requireAdminSession, requireQbt, async (req, r
 });
 
 // Pause torrent
-app.post('/api/qbt/torrents/pause', requireAdminSession, requireQbt, async (req, res) => {
+app.post('/api/qbt/torrents/pause', requirePermission('canDownload'), requireQbt, async (req, res) => {
   try {
     await qbt('POST', '/api/v2/torrents/stop', `hashes=${req.body.hashes}`);
     res.json({ ok: true });
@@ -2740,7 +2766,7 @@ app.post('/api/qbt/torrents/pause', requireAdminSession, requireQbt, async (req,
 });
 
 // Resume torrent
-app.post('/api/qbt/torrents/resume', requireAdminSession, requireQbt, async (req, res) => {
+app.post('/api/qbt/torrents/resume', requirePermission('canDownload'), requireQbt, async (req, res) => {
   try {
     await qbt('POST', '/api/v2/torrents/start', `hashes=${req.body.hashes}`);
     res.json({ ok: true });
@@ -2748,7 +2774,7 @@ app.post('/api/qbt/torrents/resume', requireAdminSession, requireQbt, async (req
 });
 
 // Delete torrent
-app.post('/api/qbt/torrents/delete', requireAdminSession, requireQbt, async (req, res) => {
+app.post('/api/qbt/torrents/delete', requirePermission('canDownload'), requireQbt, async (req, res) => {
   try {
     const { hashes, deleteFiles } = req.body;
     await qbt('POST', '/api/v2/torrents/delete', `hashes=${hashes}&deleteFiles=${deleteFiles ? 'true' : 'false'}`);
@@ -2800,7 +2826,7 @@ function getLocalIP() {
 
 // ── Scan endpoint ───────────────────────────────────────────────────────
 let scanRunning = false;
-app.post('/api/scan', requireAdmin, async (_req, res) => {
+app.post('/api/scan', requirePermission('canScan'), async (_req, res) => {
   if (scanRunning) return res.json({ ok: false, message: 'Scan already in progress' });
   scanRunning = true;
   res.json({ ok: true, message: 'Scan started' });
@@ -2828,7 +2854,7 @@ app.post('/api/scan', requireAdmin, async (_req, res) => {
 });
 
 // ── Restart endpoint ────────────────────────────────────────────────────
-app.post('/api/restart', requireAdmin, (_req, res) => {
+app.post('/api/restart', requirePermission('canRestart'), (_req, res) => {
   res.json({ ok: true });
   setTimeout(() => {
     Object.keys(transcodeSessions).forEach(cleanupSession);
