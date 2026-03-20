@@ -15,6 +15,7 @@
     "test:history": "npx playwright test tests/history.spec.js",
     "test:settings": "npx playwright test tests/settings.spec.js",
     "test:downloads": "npx playwright test tests/downloads.spec.js",
+    "test:permissions": "npx playwright test tests/permissions.spec.js",
     "test:report": "npx playwright show-report test-results/html-report"
   },
   "dependencies": {
