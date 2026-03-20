@@ -435,6 +435,17 @@ video::cue{background:rgba(0,0,0,.8);color:#fff;font-size:clamp(1.6rem, 3.5vw, 2
 .dl-sortable:hover{color:var(--accent)}
 .dl-sortable.active{color:var(--accent)}
 .dl-sort-arrow{font-size:.6rem}
+.org-log-controls{display:flex;gap:8px;margin:16px 0;align-items:center;flex-wrap:wrap}
+.org-log-controls select{padding:8px 12px;border-radius:8px;background:var(--bg-card);border:1px solid rgba(255,255,255,.1);color:var(--text-secondary);font-size:.82rem}
+.org-log-container{background:var(--bg-card);border:1px solid rgba(255,255,255,.06);border-radius:10px;padding:16px;max-height:70vh;overflow-y:auto;font-family:'SF Mono',Monaco,Consolas,monospace;font-size:.78rem;line-height:1.7}
+.org-log-line{padding:2px 0;border-bottom:1px solid rgba(255,255,255,.03)}
+.org-log-line.log-move{color:#4caf50}
+.org-log-line.log-found{color:var(--accent)}
+.org-log-line.log-error{color:#f44336}
+.org-log-line.log-skip{color:#ff9800}
+.org-log-line.log-scan{color:var(--text-muted);font-weight:600}
+.org-log-line.log-info{color:var(--text-secondary)}
+.org-log-ts{color:var(--text-muted);margin-right:8px}
 </style>
 </head>
 <body>
@@ -2178,7 +2189,7 @@ function formatSize(b){if(b<1024)return b+' B';if(b<1048576)return(b/1024).toFix
 // ══════════════════════════════════════════════════════════════════════
 // Downloads (qBittorrent)
 // ══════════════════════════════════════════════════════════════════════
-let dlSearchId=null,dlSearchResults=[],dlSearching=false,dlTorrents=[],dlRefreshInterval=null,dlActiveTab='search';
+let dlSearchId=null,dlSearchResults=[],dlSearching=false,dlTorrents=[],dlRefreshInterval=null,dlActiveTab='search',orgLogLines=[],orgLogFilter='all';
 let dlSortField='nbSeeders',dlSortAsc=false,dlPlugins=[];
 
 function dlStatusClass(state){
@@ -2200,6 +2211,14 @@ function dlFormatEta(s){if(s<=0||s>=8640000)return '';const h=Math.floor(s/3600)
 async function renderDownloads(){
   const a=document.getElementById('contentArea');
   a.innerHTML=`<div class="dl-page"><h2 style="font-size:1.3rem;font-weight:700;margin-bottom:4px">Downloads</h2><p style="color:var(--text-muted);font-size:.82rem;margin-bottom:12px">Search and download torrents via qBittorrent</p><div id="dlContent"><div style="text-align:center;padding:60px"><span class="dl-spinner" style="width:32px;height:32px;border-width:3px"></span><p style="color:var(--text-muted);margin-top:16px;font-size:.85rem">Connecting to qBittorrent...</p></div></div></div>`;
+  // If on logs tab, skip qBT check entirely
+  if(dlActiveTab==='logs'){
+    const a2=document.getElementById('dlContent');
+    const tabs=`<div class="dl-tabs"><button class="filter-btn" onclick="dlSwitchTab('search')">Search</button><button class="filter-btn" onclick="dlSwitchTab('active')">Active Downloads</button><button class="filter-btn active" onclick="dlSwitchTab('logs')">Organizer Logs</button></div>`;
+    a2.innerHTML=tabs+'<div id="dlTabContent"></div>';
+    renderOrgLogs();
+    return;
+  }
   // Check if qBT is configured and reachable
   try{
     const r=await fetch('/api/qbt/status');
@@ -2220,9 +2239,10 @@ async function renderDownloads(){
     if(currentView!=='downloads')return;
     const a2=document.getElementById('dlContent');
     if(!a2)return;
-    const tabs=`<div class="dl-tabs"><button class="filter-btn ${dlActiveTab==='search'?'active':''}" onclick="dlSwitchTab('search')">Search</button><button class="filter-btn ${dlActiveTab==='active'?'active':''}" onclick="dlSwitchTab('active')">Active Downloads <span id="dlCount">(${dlTorrents.length})</span></button></div>`;
+    const tabs=`<div class="dl-tabs"><button class="filter-btn ${dlActiveTab==='search'?'active':''}" onclick="dlSwitchTab('search')">Search</button><button class="filter-btn ${dlActiveTab==='active'?'active':''}" onclick="dlSwitchTab('active')">Active Downloads <span id="dlCount">(${dlTorrents.length})</span></button><button class="filter-btn ${dlActiveTab==='logs'?'active':''}" onclick="dlSwitchTab('logs')">Organizer Logs</button></div>`;
     a2.innerHTML=tabs+'<div id="dlTabContent"></div>';
     if(dlActiveTab==='search')renderDlSearch();
+    else if(dlActiveTab==='logs')renderOrgLogs();
     else renderDlActive();
     startDlRefresh();
   });
@@ -2253,14 +2273,18 @@ function renderDlSearch(){
   if(!c)return;
   // Only build search bar if it doesn't exist yet (prevents dropdown reset during polling)
   if(!document.getElementById('dlSearchInput')||!document.getElementById('dlResultsArea')){
-    const pluginOpts=dlPlugins.map(p=>`<option value="${esc(p.name)}">${esc(p.fullName)}</option>`).join('');
+    const tpb=dlPlugins.find(p=>/pirate/i.test(p.name)||/pirate/i.test(p.fullName));
+    const defaultPlugin=tpb?tpb.name:'all';
+    const pluginOpts=dlPlugins.map(p=>`<option value="${esc(p.name)}"${p.name===defaultPlugin?' selected':''}>${esc(p.fullName)}</option>`).join('');
     const searchHtml=`<div class="dl-search-bar"><input type="text" id="dlSearchInput" placeholder="Search torrents..." onkeydown="if(event.key==='Enter')dlStartSearch()"><select id="dlCategorySelect"><option value="all">All</option><option value="movies">Movies</option><option value="tv">TV Shows</option><option value="music">Music</option><option value="anime">Anime</option><option value="software">Software</option><option value="games">Games</option></select><select id="dlPluginSelect"><option value="all">All Plugins</option>${pluginOpts}</select><button class="btn btn-primary" id="dlSearchBtn" onclick="dlStartSearch()">Search</button><button class="btn btn-sm" onclick="dlClearSearch()" style="font-size:.78rem;padding:7px 10px">Clear</button></div><div id="dlResultsArea"></div>`;
     c.innerHTML=searchHtml;
   }
   // Update plugin dropdown if plugins loaded after initial render
   const ps=document.getElementById('dlPluginSelect');
   if(ps&&ps.options.length<=1&&dlPlugins.length>0){
-    ps.innerHTML='<option value="all">All Plugins</option>'+dlPlugins.map(p=>`<option value="${esc(p.name)}">${esc(p.fullName)}</option>`).join('');
+    const tpb2=dlPlugins.find(p=>/pirate/i.test(p.name)||/pirate/i.test(p.fullName));
+    const defPlugin=tpb2?tpb2.name:'all';
+    ps.innerHTML='<option value="all">All Plugins</option>'+dlPlugins.map(p=>`<option value="${esc(p.name)}"${p.name===defPlugin?' selected':''}>${esc(p.fullName)}</option>`).join('');
   }
   // Update search button state
   const btn=document.getElementById('dlSearchBtn');
@@ -2362,6 +2386,35 @@ function dlClearSearch(){
   if(btn){btn.disabled=false;btn.textContent='Search';}
 }
 function dlSwitchTab(tab){dlActiveTab=tab;renderDownloads();}
+
+async function renderOrgLogs(){
+  const c=document.getElementById('dlTabContent');
+  if(!c)return;
+  c.innerHTML=`<div class="org-log-controls"><select id="orgLogFilter" onchange="orgLogFilter=this.value;renderOrgLogs()"><option value="all"${orgLogFilter==='all'?' selected':''}>All Activity</option><option value="moves"${orgLogFilter==='moves'?' selected':''}>Moves &amp; Matches</option><option value="errors"${orgLogFilter==='errors'?' selected':''}>Errors &amp; Skips</option><option value="scans"${orgLogFilter==='scans'?' selected':''}>Scan Summaries</option></select><button class="btn btn-sm" onclick="renderOrgLogs()" style="font-size:.78rem;padding:7px 10px">&#8635; Refresh</button></div><div class="org-log-container" id="orgLogArea"><div style="text-align:center;padding:40px"><span class="dl-spinner" style="width:24px;height:24px;border-width:2px"></span></div></div>`;
+  try{
+    const r=await fetch('/api/organizer/logs?lines=500&filter='+orgLogFilter);
+    const d=await r.json();
+    const area=document.getElementById('orgLogArea');
+    if(!area)return;
+    if(!d.ok){area.innerHTML=`<div style="text-align:center;padding:40px;color:var(--text-muted)">${d.error||'Could not load logs'}</div>`;return;}
+    if(!d.lines.length){area.innerHTML='<div style="text-align:center;padding:40px;color:var(--text-muted)">No log entries found</div>';return;}
+    area.innerHTML=d.lines.map(l=>{
+      let cls='log-info';
+      if(/Moved ->/.test(l))cls='log-move';
+      else if(/\[MOVIE\].*Found|\[TV\].*Found/.test(l))cls='log-found';
+      else if(/SKIP|No confident/i.test(l))cls='log-skip';
+      else if(/ERROR|FAIL|rate limit/i.test(l))cls='log-error';
+      else if(/Scan complete|====/.test(l))cls='log-scan';
+      const tsMatch=l.match(/^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]\s*(.*)/);
+      if(tsMatch)return `<div class="org-log-line ${cls}"><span class="org-log-ts">${tsMatch[1]}</span>${esc(tsMatch[2])}</div>`;
+      return `<div class="org-log-line ${cls}">${esc(l)}</div>`;
+    }).join('');
+    area.scrollTop=area.scrollHeight;
+  }catch{
+    const area=document.getElementById('orgLogArea');
+    if(area)area.innerHTML='<div style="text-align:center;padding:40px;color:var(--text-muted)">Could not reach the server</div>';
+  }
+}
 
 async function dlPauseTorrent(hash){
   await fetch('/api/qbt/torrents/pause',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({hashes:hash})});

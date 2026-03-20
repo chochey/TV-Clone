@@ -192,13 +192,35 @@ function verifyPassword(password, stored) {
 }
 
 // ── Session management ──────────────────────────────────────────────────
-const sessions = new Map(); // token -> { profileId, role, permissions, createdAt }
-const SESSION_MAX_AGE = 7 * 24 * 60 * 60 * 1000; // 7 days
+const SESSIONS_FILE = path.join(DATA_DIR, 'sessions.json');
+const SESSION_MAX_AGE = 30 * 24 * 60 * 60 * 1000; // 30 days
 const VALID_PERMISSIONS = ['canDownload', 'canScan', 'canRestart'];
+
+// Load persisted sessions from disk
+const sessions = new Map();
+try {
+  const saved = JSON.parse(fs.readFileSync(SESSIONS_FILE, 'utf-8'));
+  const now = Date.now();
+  for (const [token, session] of Object.entries(saved)) {
+    if (now - session.createdAt < SESSION_MAX_AGE) sessions.set(token, session);
+  }
+  if (sessions.size > 0) console.log(`[Sessions] Restored ${sessions.size} session(s) from disk`);
+} catch {}
+
+let _sessionSaveTimer = null;
+function persistSessions() {
+  if (_sessionSaveTimer) return; // debounce
+  _sessionSaveTimer = setTimeout(() => {
+    _sessionSaveTimer = null;
+    const obj = Object.fromEntries(sessions);
+    saveJSON(SESSIONS_FILE, obj);
+  }, 5000);
+}
 
 function createSession(profileId, role, permissions) {
   const token = crypto.randomBytes(32).toString('hex');
   sessions.set(token, { profileId, role, permissions: permissions || [], createdAt: Date.now() });
+  persistSessions();
   return token;
 }
 
@@ -214,6 +236,8 @@ function getSession(req) {
     sessions.delete(token);
     return null;
   }
+  // Sliding expiration: refresh timer on activity
+  session.createdAt = Date.now();
   return session;
 }
 
@@ -242,7 +266,7 @@ setInterval(() => {
       cleaned++;
     }
   }
-  if (cleaned > 0) console.log(`[Sessions] Cleaned ${cleaned} expired session(s), ${sessions.size} active`);
+  if (cleaned > 0) { console.log(`[Sessions] Cleaned ${cleaned} expired session(s), ${sessions.size} active`); persistSessions(); }
 }, SESSION_CLEANUP_INTERVAL_MS);
 
 // Middleware: ensure library is indexed before serving file-dependent routes
@@ -1157,7 +1181,7 @@ app.post('/api/login', (req, res) => {
 app.post('/api/logout', (_req, res) => {
   const cookieHeader = _req.headers.cookie || '';
   const match = cookieHeader.match(/session=([a-f0-9]{64})/);
-  if (match) sessions.delete(match[1]);
+  if (match) { sessions.delete(match[1]); persistSessions(); }
   res.clearCookie('session');
   res.clearCookie('adminSession');
   res.json({ ok: true });
@@ -2851,6 +2875,36 @@ app.post('/api/scan', requirePermission('canScan'), async (_req, res) => {
     console.log('  [scan] Complete');
   } catch (err) { console.error('  [scan] Error:', err.message); }
   scanRunning = false;
+});
+
+// ── Media Organizer logs endpoint ───────────────────────────────────────
+const ORGANIZER_LOG = process.env.ORGANIZER_LOG || '/home/blue/Desktop/Repos/Media-Organizer/media-organizer.log';
+
+app.get('/api/organizer/logs', requireAdminSession, async (req, res) => {
+  const lines = parseInt(req.query.lines) || 200;
+  const filter = req.query.filter || 'all'; // all, moves, errors, scans
+  try {
+    await fs.promises.access(ORGANIZER_LOG);
+    const data = await fs.promises.readFile(ORGANIZER_LOG, 'utf-8');
+    let allLines = data.split('\n').filter(l => l.trim());
+    // Filter out heartbeat noise by default
+    if (filter !== 'all') {
+      allLines = allLines.filter(l => {
+        if (filter === 'moves') return /Moved ->|MOVIE.*Found|TV.*Found|Parsed:|OMDb match:|Scan complete/.test(l);
+        if (filter === 'errors') return /SKIP|ERROR|FAIL|No confident|rate limit/i.test(l);
+        if (filter === 'scans') return /Scan complete|Watching|============/.test(l);
+        return true;
+      });
+    } else {
+      // Even in 'all' mode, strip "Still watching..." heartbeats
+      allLines = allLines.filter(l => !/Still watching\.\.\./.test(l));
+    }
+    const result = allLines.slice(-lines);
+    res.json({ ok: true, lines: result, total: allLines.length });
+  } catch (err) {
+    if (err.code === 'ENOENT') return res.json({ ok: false, error: 'Log file not found' });
+    res.json({ ok: false, error: err.message });
+  }
 });
 
 // ── Restart endpoint ────────────────────────────────────────────────────
