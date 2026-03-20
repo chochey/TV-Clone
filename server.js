@@ -2351,14 +2351,14 @@ function startFfmpeg(id, filePath, sessionDir, seekTime, startSegNum, audioStrea
       ffmpegArgs.push(
         '-vaapi_device', '/dev/dri/renderD128',
         '-vf', 'format=nv12,hwupload',
-        '-c:v', 'h264_vaapi', '-qp', '22',
+        '-c:v', 'h264_vaapi', '-qp', '22', '-maxrate', '4M', '-bufsize', '8M',
       );
     } else {
       // 8-bit source: full hardware decode + encode pipeline (fastest)
       ffmpegArgs.splice(ffmpegArgs.indexOf('-i'), 0,
         '-hwaccel', 'vaapi', '-hwaccel_device', '/dev/dri/renderD128', '-hwaccel_output_format', 'vaapi',
       );
-      ffmpegArgs.push('-c:v', 'h264_vaapi', '-qp', '22');
+      ffmpegArgs.push('-c:v', 'h264_vaapi', '-qp', '22', '-maxrate', '4M', '-bufsize', '8M');
     }
     ffmpegArgs.push(
       '-c:a', 'aac', '-ac', '2', '-b:a', '192k',
