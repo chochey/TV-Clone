@@ -546,10 +546,11 @@ video::cue{background:rgba(0,0,0,.8);color:#fff;font-size:clamp(1.6rem, 3.5vw, 2
   </div>
   <div class="mark-intro-panel" id="markIntroPanel">
     <h4>Mark Intro Timestamps</h4>
-    <div class="mark-intro-row"><span>Start:</span><span class="time-val" id="markIntroStart">--:--</span><button class="mark-intro-btn set" onclick="markIntroPoint('start')">Set to current</button></div>
-    <div class="mark-intro-row"><span>End:</span><span class="time-val" id="markIntroEnd">--:--</span><button class="mark-intro-btn set" onclick="markIntroPoint('end')">Set to current</button></div>
+    <div class="mark-intro-row"><span>Start:</span><span class="time-val" id="markIntroStart">--:--</span><button class="mark-intro-btn set" onclick="markIntroPoint('start')">Set</button></div>
+    <div class="mark-intro-row"><span>End:</span><span class="time-val" id="markIntroEnd">--:--</span><button class="mark-intro-btn set" onclick="markIntroPoint('end')">Set</button></div>
     <label class="mark-intro-check"><input type="checkbox" id="markIntroApplyShow" checked>Apply to all episodes of this show</label>
     <div class="mark-intro-actions">
+      <button class="mark-intro-btn auto" onclick="autoDetectIntro()" id="autoDetectBtn">Auto Detect</button>
       <button class="mark-intro-btn save" onclick="saveMarkedIntro()">Save</button>
       <button class="mark-intro-btn cancel" onclick="toggleMarkIntro()">Cancel</button>
     </div>
@@ -566,8 +567,8 @@ video::cue{background:rgba(0,0,0,.8);color:#fff;font-size:clamp(1.6rem, 3.5vw, 2
   </div>
   <div class="skip-intro-box" id="skipIntroBox">
     <div class="skip-intro-inner">
-      <div class="skip-intro-text"><strong>Intro playing</strong><span id="skipIntroLabel">Skip to continue</span></div>
-      <button class="skip-intro-btn" onclick="skipIntro()">Skip Intro</button>
+      <div class="skip-intro-text"><strong id="skipSegmentTitle">Intro playing</strong><span id="skipIntroLabel">Skip to continue</span></div>
+      <button class="skip-intro-btn" id="skipSegmentBtn" onclick="skipSegment()">Skip</button>
     </div>
     <div class="skip-intro-progress"><div class="skip-intro-progress-bar" id="skipIntroProgress"></div></div>
   </div>
@@ -1759,73 +1760,95 @@ function setAudioTrack(streamIndex){
   closeMenus();
 }
 
-// Skip Intro
+// Skip Segment (intro/recap/outro)
 let _skipSegments=null;
+let _skipSegmentDismissed={}; // track per segment type
 let _markIntroStart=null,_markIntroEnd=null;
 
 async function loadSkipSegments(id){
-  _skipSegments=null;_skipIntroDismissed=false;
+  _skipSegments=null;
+  _skipSegmentDismissed={};
   document.getElementById('skipIntroBox').classList.remove('visible','fade-out');
   try{
     const res=await fetch('/api/skip-segments/'+id);
     const data=await res.json();
-    if(data&&data.intro){
+    if(data&&(data.intro||data.recap||data.outro)){
       _skipSegments=data;
-      console.log('[SkipIntro] Loaded:',data.intro.start+'s -',data.intro.end+'s');
+      console.log('[SkipSegment] Loaded:',data);
     }
-  }catch(e){console.error('[SkipIntro] Load error:',e);}
+  }catch(e){console.error('[SkipSegment] Load error:',e);}
   // Show mark intro button for TV shows
   const btn=document.getElementById('markIntroBtn');
   if(btn) btn.style.display=(currentMedia&&currentMedia.type==='show')?'':'none';
 }
 
-const SKIP_INTRO_LEAD=2; // show popup this many seconds before intro starts
-let _skipIntroDismissed=false;
+const SKIP_SEGMENT_LEAD=3; // show popup this many seconds before segment starts
 
-function checkSkipIntro(){
-  if(!_skipSegments||!_skipSegments.intro||_skipIntroDismissed) return;
+function checkSkipSegment(){
+  if(!_skipSegments)return;
   const t=V.currentTime+(window._hlsSeekOffset||0);
   const box=document.getElementById('skipIntroBox');
-  const introStart=_skipSegments.intro.start;
-  const introEnd=_skipSegments.intro.end;
-  const introDuration=introEnd-introStart;
-
-  // Show popup SKIP_INTRO_LEAD seconds before intro, keep visible through intro
-  if(t>=(introStart-SKIP_INTRO_LEAD)&&t<introEnd){
-    box.classList.add('visible');
-    box.classList.remove('fade-out');
-    // Update progress bar during the intro
-    if(t>=introStart){
-      const pct=Math.min(100,((t-introStart)/introDuration)*100);
-      document.getElementById('skipIntroProgress').style.width=pct+'%';
-      document.getElementById('skipIntroLabel').textContent='Intro · '+Math.ceil(introEnd-t)+'s left';
-    } else {
-      document.getElementById('skipIntroProgress').style.width='0%';
-      document.getElementById('skipIntroLabel').textContent='Intro starting...';
+  
+  // Check each segment type in priority order: recap, intro, outro
+  const segmentTypes=['recap','intro','outro'];
+  const segmentLabels={recap:'Recap',intro:'Intro',outro:'Outro'};
+  
+  for(const type of segmentTypes){
+    const seg=_skipSegments[type];
+    if(!seg||_skipSegmentDismissed[type])continue;
+    
+    const segStart=seg.start;
+    const segEnd=seg.end;
+    const segDuration=segEnd-segStart;
+    
+    // Show popup SKIP_SEGMENT_LEAD seconds before segment, keep visible through segment
+    if(t>=(segStart-SKIP_SEGMENT_LEAD)&&t<segEnd){
+      box.classList.add('visible');
+      box.classList.remove('fade-out');
+      document.getElementById('skipSegmentTitle').textContent=segmentLabels[type]+' playing';
+      document.getElementById('skipSegmentBtn').textContent='Skip '+segmentLabels[type];
+      document.getElementById('skipSegmentBtn').onclick=()=>skipSegment(type);
+      // Update progress bar during the segment
+      if(t>=segStart){
+        const pct=Math.min(100,((t-segStart)/segDuration)*100);
+        document.getElementById('skipIntroProgress').style.width=pct+'%';
+        document.getElementById('skipIntroLabel').textContent=segmentLabels[type]+' · '+Math.ceil(segEnd-t)+'s left';
+      }else{
+        document.getElementById('skipIntroProgress').style.width='0%';
+        document.getElementById('skipIntroLabel').textContent=segmentLabels[type]+' starting...';
+      }
+      return; // Only show one segment type at a time
     }
-  } else if(t>=introEnd&&box.classList.contains('visible')){
-    // Intro ended — fade out
+  }
+  
+  // No segment active — hide if visible
+  if(box.classList.contains('visible')){
     box.classList.add('fade-out');
     setTimeout(()=>{box.classList.remove('visible','fade-out');},500);
   }
 }
 
-function skipIntro(){
-  if(!_skipSegments||!_skipSegments.intro) return;
-  const targetTime=_skipSegments.intro.end;
+function skipSegment(type){
+  if(!_skipSegments||!_skipSegments[type])return;
+  const seg=_skipSegments[type];
+  const targetTime=seg.end;
   const offset=window._hlsSeekOffset||0;
   const box=document.getElementById('skipIntroBox');
-  _skipIntroDismissed=true;
+  _skipSegmentDismissed[type]=true;
   box.classList.add('fade-out');
   setTimeout(()=>{box.classList.remove('visible','fade-out');},400);
   // If target is beyond current HLS range, do a full seek reload
   if(targetTime>offset+(V.duration||0)){
     const hlsUrl='/hls/'+currentMedia.id+'/master.m3u8?start='+targetTime;
     window._hlsLoad(hlsUrl);
-  } else {
+  }else{
     V.currentTime=targetTime-offset;
   }
 }
+
+// Legacy aliases for compatibility
+function skipIntro(){skipSegment('intro');}
+function checkSkipIntro(){checkSkipSegment();}
 
 function toggleMarkIntro(){
   const panel=document.getElementById('markIntroPanel');
@@ -1860,9 +1883,35 @@ async function saveMarkedIntro(){
     method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({intro:{start:_markIntroStart,end:_markIntroEnd},applyToShow})
   });
-  _skipSegments={intro:{start:_markIntroStart,end:_markIntroEnd}};
+  _skipSegments=Object.assign({},_skipSegments,{intro:{start:_markIntroStart,end:_markIntroEnd}});
   document.getElementById('markIntroPanel').classList.remove('visible');
-  console.log('[SkipIntro] Saved intro:',_markIntroStart+'s -',_markIntroEnd+'s',applyToShow?'(all episodes)':'(this episode)');
+  console.log('[SkipIntro] Saved:',_markIntroStart+'s -',_markIntroEnd+'s',applyToShow?'(all episodes)':'(this episode)');
+}
+
+async function autoDetectIntro(){
+  const btn=document.getElementById('autoDetectBtn');
+  btn.textContent='Detecting...';
+  btn.disabled=true;
+  try{
+    const res=await fetch('/api/detect-intro/'+currentMedia.id,{method:'POST'});
+    const data=await res.json();
+    if(data.ok&&data.intro){
+      _markIntroStart=data.intro.start;
+      _markIntroEnd=data.intro.end;
+      updateMarkIntroDisplay();
+      btn.textContent='Auto-detect';
+      btn.disabled=false;
+      console.log('[SkipIntro] Auto-detected:',data.intro.start+'s -',data.intro.end+'s');
+    } else {
+      btn.textContent='Auto-detect';
+      btn.disabled=false;
+      alert(data.message||'Could not detect intro pattern');
+    }
+  }catch(e){
+    btn.textContent='Auto-detect';
+    btn.disabled=false;
+    console.error('[SkipIntro] Auto-detect error:',e);
+  }
 }
 
 function toggleMenu(id,e){e.stopPropagation();const m=document.getElementById(id);const o=m.classList.contains('open');closeMenus();if(!o)m.classList.add('open');}
@@ -1981,7 +2030,7 @@ async function closePlayer(){
   V.removeAttribute('src');V.load();
   V.querySelectorAll('track').forEach(t=>t.remove());
   modal.classList.remove('active');currentMedia=null;
-  _skipSegments=null;_currentAudioTrack=null;_markIntroStart=null;_markIntroEnd=null;_skipIntroDismissed=false;
+  _skipSegments=null;_skipSegmentDismissed={};_currentAudioTrack=null;_markIntroStart=null;_markIntroEnd=null;
   document.getElementById('skipIntroBox').classList.remove('visible','fade-out');
   document.getElementById('markIntroPanel').classList.remove('visible');
   document.getElementById('markIntroBtn').style.display='none';
@@ -2112,6 +2161,8 @@ function seekVisual(e){
 }
 function seekCommit(){
   if(!currentMedia)return;
+  // Reset dismissed flags so skip buttons can reappear after seeking
+  _skipSegmentDismissed={};
   const isHls=currentMedia.streamMode&&currentMedia.streamMode!=='direct';
   if(isHls&&typeof window._hlsLoad==='function'){
     // For HLS: restart ffmpeg from seek position and reload stream

@@ -38,14 +38,14 @@ const POSTER_EXT = ['.jpg', '.jpeg', '.png', '.webp'];
 // ── Tunable constants ────────────────────────────────────────────────
 const AUTO_WATCHED_PERCENT = 92;          // mark as watched above this %
 const MAX_HISTORY_ITEMS = 100;            // max entries in watch history
-const TRANSCODE_TIMEOUT_MS = 300000;      // kill idle transcode sessions after 5min
-const STARTUP_SCAN_DELAY_MS = 30000;      // delay before background library rescan
+const TRANSCODE_TIMEOUT_MS = 120000;      // kill idle transcode sessions after 2min
 const SSE_MAX_CLIENTS = 50;               // max concurrent SSE connections
 const SSE_HEARTBEAT_MS = 30000;           // SSE keep-alive heartbeat interval
 const FILE_WATCHER_DEBOUNCE_MS = 10000;   // debounce for file system change events
 const SESSION_CLEANUP_INTERVAL_MS = 3600000; // clean expired sessions every hour
 const LOGIN_RATE_WINDOW_MS = 300000;      // rate-limit window (5 min)
 const LOGIN_MAX_ATTEMPTS = 10;            // max login attempts per window
+const COOKIE_SECURE = process.env.COOKIE_SECURE === 'true' || process.env.NODE_ENV === 'production';
 const LANG_CODES = {
   eng: 'English', spa: 'Spanish', fre: 'French', ger: 'German', ita: 'Italian',
   por: 'Portuguese', jpn: 'Japanese', kor: 'Korean', chi: 'Chinese', zho: 'Chinese',
@@ -101,6 +101,7 @@ app.use((req, res, next) => {
   res.setHeader('X-XSS-Protection', '1; mode=block');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=()');
+  res.setHeader('Content-Security-Policy', "default-src 'self'; img-src 'self' data: https:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; connect-src 'self'");
   next();
 });
 
@@ -694,13 +695,27 @@ function stripYearFromName(name) {
   return name.replace(/[\s\.\-_]*[\(\[]?\d{4}[\)\]]?\s*$/, '').trim();
 }
 
-function httpGet(url) {
+function httpGet(url, maxRedirects = 3) {
   return new Promise((resolve, reject) => {
+    if (maxRedirects <= 0) return reject(new Error('Too many redirects'));
+    const urlObj = new URL(url);
+    // Only allow http/https
+    if (!['http:', 'https:'].includes(urlObj.protocol)) {
+      return reject(new Error('Invalid protocol'));
+    }
     const mod = url.startsWith('https') ? https : http;
     mod.get(url, (res) => {
       if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        // Follow redirect
-        return httpGet(res.headers.location).then(resolve, reject);
+        // Validate redirect target stays within http/https
+        try {
+          const redirectUrl = new URL(res.headers.location, url);
+          if (!['http:', 'https:'].includes(redirectUrl.protocol)) {
+            return reject(new Error('Invalid redirect protocol'));
+          }
+          return httpGet(redirectUrl.href, maxRedirects - 1).then(resolve, reject);
+        } catch {
+          return reject(new Error('Invalid redirect URL'));
+        }
       }
       const chunks = [];
       res.on('data', chunk => chunks.push(chunk));
@@ -1171,9 +1186,9 @@ app.post('/api/login', (req, res) => {
   const role = profile.role || 'user';
   const permissions = role === 'admin' ? [...VALID_PERMISSIONS] : (profile.permissions || []);
   const token = createSession(profile.id, role, permissions);
-  res.cookie('session', token, { httpOnly: true, maxAge: SESSION_MAX_AGE, sameSite: 'lax' });
+  res.cookie('session', token, { httpOnly: true, secure: COOKIE_SECURE, sameSite: 'strict', maxAge: SESSION_MAX_AGE });
   if (role === 'admin' || permissions.includes('canDownload') || permissions.includes('canScan') || permissions.includes('canRestart')) {
-    res.cookie('adminSession', adminToken, { httpOnly: true, maxAge: SESSION_MAX_AGE, sameSite: 'lax' });
+    res.cookie('adminSession', adminToken, { httpOnly: true, secure: COOKIE_SECURE, sameSite: 'strict', maxAge: SESSION_MAX_AGE });
   }
   res.json({ ok: true, role, profileId: profile.id, name: profile.name, permissions });
 });
@@ -1240,7 +1255,7 @@ app.delete('/api/profiles/:id', requireAdminSession, (req, res) => {
 });
 
 const pinAttempts = {}; // ip -> { count, lastAttempt }
-app.post('/api/profiles/:id/verify-pin', (req, res) => {
+app.post('/api/profiles/:id/verify-pin', requireAuth, (req, res) => {
   const ip = req.ip;
   const now = Date.now();
   if (!pinAttempts[ip]) pinAttempts[ip] = { count: 0, lastAttempt: 0 };
@@ -1648,7 +1663,7 @@ app.post('/api/genres', requireAuth, (req, res) => {
 });
 
 // ── OMDB metadata on-demand endpoint ────────────────────────────────────
-app.get('/api/metadata/:id', async (req, res) => {
+app.get('/api/metadata/:id', requireAuth, async (req, res) => {
   const lib = scanLibrary();
   const item = lib.find(i => i.id === req.params.id);
   if (!item) return res.status(404).json({ error: 'Item not found' });
@@ -1694,7 +1709,7 @@ app.get('/api/metadata/:id', async (req, res) => {
 });
 
 // ── Serve OMDB poster images ───────────────────────────────────────────
-app.get('/omdb-poster/:hash', (req, res) => {
+app.get('/omdb-poster/:hash', requireAuth, (req, res) => {
   const hash = req.params.hash.replace(/[^a-f0-9]/gi, ''); // sanitize
   const posterPath = path.join(OMDB_POSTER_DIR, `${hash}.jpg`);
   if (!fs.existsSync(posterPath)) return res.status(404).send('Poster not found');
@@ -1862,8 +1877,12 @@ app.get('/stream/:id', requireAuth, ensureLibrary, (req, res) => {
 
   if (range) {
     const parts = range.replace(/bytes=/, '').split('-');
-    const start = parseInt(parts[0], 10);
-    const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+    let start = Number(parts[0]) || 0;
+    let end = parts[1] ? Number(parts[1]) : fileSize - 1;
+    // Validate range
+    if (isNaN(start) || isNaN(end) || start < 0 || end >= fileSize || start > end) {
+      return res.status(416).send('Requested Range Not Satisfiable');
+    }
     res.writeHead(206, {
       'Content-Range': `bytes ${start}-${end}/${fileSize}`,
       'Accept-Ranges': 'bytes',
@@ -2977,34 +2996,8 @@ app.listen(PORT, '0.0.0.0', () => {
   // Setup watchers immediately
   setupWatchers();
 
-  // Background rescan after a delay to avoid blocking early requests
-  setTimeout(() => {
-    serverReadyStatus = 'scanning';
-    console.log('[Startup] Background library rescan...');
-    libraryCache = null;
-    const library = scanLibrary();
-    const probed = library.filter(i => i.codec).length;
-    console.log(`  [Startup] Rescan complete: ${library.length} file(s) (${probed} probed)`);
-    serverReady = true;
-    serverReadyStatus = 'ready';
-    notifyClients('library-updated');
-
-    // Chain background tasks after rescan
-    setTimeout(() => {
-      console.log('[Probe] Starting background audio tracks probe...');
-      backgroundProbe().then(() => {
-        invalidateLibrary();
-        console.log('[Probe] Background probe complete');
-      });
-    }, 5000);
-    setTimeout(() => queueAllSpriteGen(), 10000);
-    setTimeout(() => {
-      console.log('[OMDB] Starting background poster fetch...');
-      backgroundOmdbFetch().then(() => {
-        invalidateLibrary();
-        scanLibrary();
-        console.log('[OMDB] Background fetch complete, library refreshed');
-      });
-    }, 15000);
-  }, STARTUP_SCAN_DELAY_MS);
+  // Server is ready immediately (library loaded from cache, watchers active)
+  serverReady = true;
+  serverReadyStatus = 'ready';
+  console.log('[Startup] Server ready (using cached library, automatic rescan disabled)');
 });
