@@ -97,6 +97,32 @@ test.describe('Video Playback', () => {
     expect(isUnmuted).toBe(true);
   });
 
+  test('audio boost control raises gain when needed', async ({ page }) => {
+    await loginAsUser(page);
+    await navigateTo(page, 'Movies');
+    await page.locator('.card').first().click();
+    await expect(page.locator('#playerModal')).toHaveClass(/active/, { timeout: 10000 });
+    await page.waitForTimeout(2000);
+    await showControls(page);
+
+    await page.locator('#boostBtn').click();
+    await page.locator('#boostSlider').evaluate(el => {
+      el.value = '2';
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await page.waitForTimeout(500);
+
+    const boostState = await page.evaluate(() => ({
+      slider: parseFloat(document.getElementById('boostSlider').value),
+      label: document.getElementById('boostLevel').textContent,
+      gain: window._audioBoostGainNode ? window._audioBoostGainNode.gain.value : null,
+    }));
+
+    expect(boostState.slider).toBeCloseTo(2, 1);
+    expect(boostState.label).toBe('2.0x');
+    expect(boostState.gain).toBeGreaterThan(1.9);
+  });
+
   test('close player returns to library', async ({ page }) => {
     await loginAsUser(page);
     await navigateTo(page, 'Movies');

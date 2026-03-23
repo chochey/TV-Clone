@@ -320,18 +320,24 @@ video::cue{background:rgba(0,0,0,.8);color:#fff;font-size:clamp(1.6rem, 3.5vw, 2
 .ctrl-divider{width:1px;height:18px;background:rgba(255,255,255,.12);margin:0 2px}
 .time-display{font-size:.75rem;color:var(--text-secondary);margin-left:6px;font-variant-numeric:tabular-nums}
 .ep-info{font-size:.7rem;color:var(--text-muted);margin-left:4px;white-space:nowrap}
-.speed-menu,.skip-menu,.sub-menu,.audio-menu{position:absolute;bottom:100%;right:0;background:var(--bg-secondary);border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:6px 0;min-width:120px;box-shadow:0 8px 32px rgba(0,0,0,.5);display:none;z-index:20}
-.speed-menu.open,.skip-menu.open,.sub-menu.open,.audio-menu.open{display:block}
+.speed-menu,.skip-menu,.sub-menu,.audio-menu,.boost-menu{position:absolute;bottom:100%;right:0;background:var(--bg-secondary);border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:6px 0;min-width:120px;box-shadow:0 8px 32px rgba(0,0,0,.5);display:none;z-index:20}
+.speed-menu.open,.skip-menu.open,.sub-menu.open,.audio-menu.open,.boost-menu.open{display:block}
 .sub-menu{min-width:200px;max-height:60vh;overflow-y:auto}
 .sub-menu::-webkit-scrollbar{width:6px}
 .sub-menu::-webkit-scrollbar-track{background:transparent}
 .sub-menu::-webkit-scrollbar-thumb{background:rgba(255,255,255,.2);border-radius:3px}
 .audio-menu{min-width:180px;max-height:300px;overflow-y:auto}
+.boost-menu{min-width:220px;padding:12px}
+.boost-menu-head{display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:.8rem;font-weight:600;margin-bottom:10px}
+.boost-slider{width:100%;height:4px;-webkit-appearance:none;appearance:none;background:rgba(255,255,255,.2);border-radius:2px;outline:none}
+.boost-slider::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;border-radius:50%;background:#fff;cursor:pointer}
+.boost-hint{margin-top:8px;font-size:.72rem;line-height:1.4;color:var(--text-muted)}
 .menu-option{display:flex;align-items:center;justify-content:space-between;padding:7px 14px;font-size:.82rem;cursor:pointer;transition:background var(--transition)}
 .menu-option:hover{background:var(--bg-hover)}
 .menu-option.active{color:var(--accent);font-weight:600}
 .menu-option.active::after{content:'✓';margin-left:8px}
 .ctrl-btn-wrap{position:relative}
+.ctrl-btn.boost-active{color:var(--accent);background:rgba(0,164,220,.14)}
 .volume-wrapper{display:flex;align-items:center;gap:4px}
 .volume-slider{width:70px;height:4px;-webkit-appearance:none;appearance:none;background:rgba(255,255,255,.2);border-radius:2px;outline:none}
 .volume-slider::-webkit-slider-thumb{-webkit-appearance:none;width:12px;height:12px;border-radius:50%;background:#fff;cursor:pointer}
@@ -590,6 +596,7 @@ video::cue{background:rgba(0,0,0,.8);color:#fff;font-size:clamp(1.6rem, 3.5vw, 2
         <div class="ctrl-btn-wrap"><button class="ctrl-btn" onclick="toggleMenu('subMenu',event)" id="subBtn" title="Subtitles" style="font-size:.72rem;font-weight:700">CC</button><div class="sub-menu" id="subMenu"><div class="menu-option active" onclick="setSub(-1)">Off</div></div></div>
         <div class="ctrl-divider"></div>
         <div class="volume-wrapper"><button class="ctrl-btn" id="volumeBtn" onclick="toggleMute()">&#128266;</button><input class="volume-slider" type="range" min="0" max="1" step="0.05" value="1" id="volumeSlider" oninput="setVol(this.value)"></div>
+        <div class="ctrl-btn-wrap"><button class="ctrl-btn" onclick="toggleMenu('boostMenu',event)" id="boostBtn" title="Audio Boost" style="font-size:1rem">&#128266;+</button><div class="boost-menu" id="boostMenu"><div class="boost-menu-head"><span>Audio Boost</span><span id="boostLevel">1.0x</span></div><input class="boost-slider" type="range" min="1" max="3" step="0.1" value="1" id="boostSlider" oninput="setBoost(this.value)"><div class="boost-hint" id="boostHint">Boost quiet audio up to 3x when needed.</div></div></div>
         <button class="ctrl-btn" onclick="togglePiP()" title="PiP" id="pipBtn">&#128247;</button>
         <button class="ctrl-btn" onclick="toggleMarkIntro()" title="Mark Intro" id="markIntroBtn" style="font-size:.72rem;font-weight:700;display:none">INTRO</button>
         <button class="ctrl-btn" onclick="toggleFS()" title="Fullscreen">&#x26F6;</button>
@@ -631,6 +638,10 @@ const V=document.getElementById('videoElement'),modal=document.getElementById('p
 const progContainer=document.getElementById('progressContainer');
 let hlsInstance=null;
 window._hlsSeekOffset=0;
+let audioBoostLevel=1;
+let audioBoostContext=null,audioBoostSource=null,audioBoostGain=null,audioBoostError='';
+window._audioBoostGainNode=null;
+window._audioBoostLevel=audioBoostLevel;
 
 // ══════════════════════════════════════════════════════════════════════
 // Profiles
@@ -1606,6 +1617,76 @@ function setSpd(v){
   document.querySelectorAll('#speedMenu .menu-option').forEach(e=>e.classList.toggle('active',parseFloat(e.textContent)===v));closeMenus();
 }
 
+function updateVolumeUI(){
+  const muted=V.muted||V.volume===0;
+  document.getElementById('volumeBtn').innerHTML=muted?'&#128263;':V.volume<.5?'&#128265;':'&#128266;';
+  document.getElementById('volumeSlider').value=muted?0:V.volume;
+}
+
+function getAudioContextCtor(){
+  return window.AudioContext||window.webkitAudioContext||null;
+}
+
+function updateBoostUI(){
+  const btn=document.getElementById('boostBtn');
+  const slider=document.getElementById('boostSlider');
+  const level=document.getElementById('boostLevel');
+  const hint=document.getElementById('boostHint');
+  if(slider)slider.value=audioBoostLevel.toFixed(1);
+  if(level)level.textContent=audioBoostLevel.toFixed(1)+'x';
+  if(btn){
+    btn.classList.toggle('boost-active',audioBoostLevel>1.01);
+    btn.title=audioBoostLevel>1.01?`Audio Boost (${audioBoostLevel.toFixed(1)}x)`:'Audio Boost';
+  }
+  if(hint){
+    if(!getAudioContextCtor())hint.textContent='Audio boost is not supported in this browser.';
+    else if(audioBoostError)hint.textContent=audioBoostError;
+    else hint.textContent='Boost quiet audio up to 3x when needed.';
+  }
+}
+
+function syncAudioBoostGain(){
+  window._audioBoostLevel=audioBoostLevel;
+  if(audioBoostGain)audioBoostGain.gain.value=V.muted?0:audioBoostLevel;
+  updateBoostUI();
+}
+
+async function ensureAudioBoostReady(){
+  const AudioCtx=getAudioContextCtor();
+  if(!AudioCtx){
+    audioBoostError='Audio boost is not supported in this browser.';
+    updateBoostUI();
+    return false;
+  }
+  try{
+    if(!audioBoostContext){
+      audioBoostContext=new AudioCtx();
+      audioBoostSource=audioBoostContext.createMediaElementSource(V);
+      audioBoostGain=audioBoostContext.createGain();
+      audioBoostSource.connect(audioBoostGain);
+      audioBoostGain.connect(audioBoostContext.destination);
+      window._audioBoostGainNode=audioBoostGain;
+    }
+    if(audioBoostContext.state==='suspended')await audioBoostContext.resume();
+    audioBoostError='';
+    syncAudioBoostGain();
+    return true;
+  }catch(err){
+    console.warn('[AudioBoost] Failed to initialize:',err);
+    audioBoostError='Audio boost is unavailable right now.';
+    updateBoostUI();
+    return false;
+  }
+}
+
+async function setBoost(v){
+  const next=Math.max(1,Math.min(3,Number(v)||1));
+  audioBoostLevel=Math.round(next*10)/10;
+  updateBoostUI();
+  const ready=await ensureAudioBoostReady();
+  if(ready)syncAudioBoostGain();
+}
+
 // Subtitles
 function buildSubMenu(){
   const menu=document.getElementById('subMenu');
@@ -1785,7 +1866,7 @@ async function saveMarkedIntro(){
 }
 
 function toggleMenu(id,e){e.stopPropagation();const m=document.getElementById(id);const o=m.classList.contains('open');closeMenus();if(!o)m.classList.add('open');}
-function closeMenus(){document.querySelectorAll('.speed-menu,.skip-menu,.sub-menu,.audio-menu').forEach(m=>m.classList.remove('open'));}
+function closeMenus(){document.querySelectorAll('.speed-menu,.skip-menu,.sub-menu,.audio-menu,.boost-menu').forEach(m=>m.classList.remove('open'));}
 document.addEventListener('click',e=>{if(!e.target.closest('.ctrl-btn-wrap'))closeMenus();});
 
 async function togglePiP(){try{if(document.pictureInPictureElement)await document.exitPictureInPicture();else if(V.requestPictureInPicture)await V.requestPictureInPicture();}catch{}}
@@ -1793,6 +1874,7 @@ if(!document.pictureInPictureEnabled){const b=document.getElementById('pipBtn');
 
 async function playMedia(id){
   const item=library.find(m=>m.id===id);if(!item)return;
+  ensureAudioBoostReady().catch(()=>{});
   // Fetch full item details (subtitles, audioTracks, etc.)
   try{
     const res=await fetch(`/api/item/${id}`);
@@ -1908,8 +1990,12 @@ async function closePlayer(){
 }
 
 function togglePlay(e){if(e&&e.target.closest('.player-controls,.player-top-bar'))return;V.paused?V.play():V.pause();}
-function toggleMute(){V.muted=!V.muted;document.getElementById('volumeBtn').innerHTML=V.muted?'&#128263;':'&#128266;';document.getElementById('volumeSlider').value=V.muted?0:V.volume;}
-function setVol(v){V.volume=v;V.muted=v==0;document.getElementById('volumeBtn').innerHTML=v==0?'&#128263;':v<.5?'&#128265;':'&#128266;';}
+function toggleMute(){V.muted=!V.muted;updateVolumeUI();syncAudioBoostGain();}
+function setVol(v){
+  const next=Math.max(0,Math.min(1,Number(v)||0));
+  V.volume=next;V.muted=next===0;
+  updateVolumeUI();syncAudioBoostGain();
+}
 function toggleFS(){document.fullscreenElement?document.exitFullscreen().catch(()=>{}):modal.requestFullscreen().catch(()=>{});}
 
 // Click vs double-click on video wrapper (manual detection for reliability)
@@ -2087,6 +2173,7 @@ V.addEventListener('timeupdate',()=>{
 // Buffer bar: shows how far ahead the browser/HLS.js has buffered
 V.addEventListener('progress',updateBufferBar);
 V.addEventListener('timeupdate',updateBufferBar);
+V.addEventListener('volumechange',()=>{updateVolumeUI();syncAudioBoostGain();});
 function updateBufferBar(){
   if(!V.duration&&!window._hlsTotalDur)return;
   const offset=window._hlsSeekOffset||0;
@@ -2155,7 +2242,7 @@ function showControls(){modal.classList.add('controls-visible');clearTimeout(con
 const _isTouch='ontouchstart' in window;
 document.getElementById('videoWrapper').addEventListener('click',function(e){
   if(!_isTouch)return; // desktop uses mousemove
-  if(e.target.closest('.player-controls,.player-top-bar,.sub-menu,.audio-menu,.speed-menu,.skip-menu'))return;
+  if(e.target.closest('.player-controls,.player-top-bar,.sub-menu,.audio-menu,.boost-menu,.speed-menu,.skip-menu'))return;
   e.stopPropagation(); // prevent togglePlay on mobile
   if(modal.classList.contains('controls-visible')){
     modal.classList.remove('controls-visible');clearTimeout(controlsTimeout);
@@ -2435,6 +2522,8 @@ async function dlDeleteTorrent(hash,name){
 // ══════════════════════════════════════════════════════════════════════
 setSkip(10);
 setFilter('all');
+updateVolumeUI();
+updateBoostUI();
 async function initApp(){
   const startup=document.getElementById('startupScreen');
   const profile=document.getElementById('profileScreen');
