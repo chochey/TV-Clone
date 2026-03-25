@@ -365,6 +365,20 @@
       "priority": "low",
       "description": "External subtitle upload — allow uploading a .srt file for a specific item from the UI",
       "passes": false
+    },
+    {
+      "id": "new-012",
+      "category": "ui",
+      "priority": "medium",
+      "description": "Dismiss from Continue Watching — X button on in-progress items to remove them from the continue watching row without marking as watched",
+      "passes": false
+    },
+    {
+      "id": "new-013",
+      "category": "ui",
+      "priority": "medium",
+      "description": "Dismiss from Recently Added — X button on items in the recently added row to hide them from that list per-profile",
+      "passes": false
     }
   ]
 }

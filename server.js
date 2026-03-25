@@ -23,7 +23,10 @@ const PORT = parseInt(process.env.PORT, 10) || 4800;
 const CONFIG_FILE = path.join(__dirname, 'config.json');
 const DATA_DIR = path.join(__dirname, 'data');
 const TRANSCODE_DIR = path.join(__dirname, PORT === 4800 ? 'transcode_tmp' : `transcode_tmp_${PORT}`);
+const COOKIE_NAME = PORT === 4800 ? 'session' : `session_${PORT}`;
+const ADMIN_COOKIE_NAME = PORT === 4800 ? 'adminSession' : `adminSession_${PORT}`;
 const PROBE_CACHE_FILE = path.join(DATA_DIR, 'probe_cache.json');
+const CORRUPTED_FILES_FILE = path.join(DATA_DIR, 'corrupted_files.json');
 const OMDB_CACHE_FILE = path.join(DATA_DIR, 'omdb_cache.json');
 const OMDB_POSTER_DIR = path.join(DATA_DIR, 'posters');
 const OMDB_API_KEY = process.env.OMDB_API_KEY || '';
@@ -228,7 +231,7 @@ function createSession(profileId, role, permissions) {
 function getSession(req) {
   // Check cookie first, then header
   const cookieHeader = req.headers.cookie || '';
-  const match = cookieHeader.match(/session=([a-f0-9]{64})/);
+  const match = cookieHeader.match(new RegExp(`${COOKIE_NAME}=([a-f0-9]{64})`));
   const token = match ? match[1] : req.headers['x-session-token'];
   if (!token) return null;
   const session = sessions.get(token);
@@ -295,7 +298,12 @@ function loadProfileData(profileId) {
     history: [],     // [{ id, timestamp, title }] most recent first
     queue: [],       // [id, id, ...]
     watched: {},     // id -> true/false
+    dismissed: { continueWatching: {}, recentlyAdded: {} },
   });
+  // Migration: ensure dismissed field exists for older profiles
+  if (!data.dismissed) data.dismissed = { continueWatching: {}, recentlyAdded: {} };
+  if (!data.dismissed.continueWatching) data.dismissed.continueWatching = {};
+  if (!data.dismissed.recentlyAdded) data.dismissed.recentlyAdded = {};
   profileDataCache.set(profileId, { data, dirty: false });
   return data;
 }
@@ -479,6 +487,17 @@ let audioProbeCacheDirty = false;
 const AUDIO_TRACKS_CACHE_FILE = path.join(DATA_DIR, 'audio_tracks_cache.json');
 let audioTracksCache = loadJSON(AUDIO_TRACKS_CACHE_FILE, {});
 let audioTracksCacheDirty = false;
+
+// Corrupted file registry — persisted to disk, fileId -> { filePath, title, detectedAt, reason }
+let corruptedFiles = loadJSON(CORRUPTED_FILES_FILE, {});
+console.log(`[Startup] Corrupted file registry: ${Object.keys(corruptedFiles).length} entries`);
+
+function markFileCorrupted(id, filePath, title, reason) {
+  corruptedFiles[id] = { filePath, title, detectedAt: Date.now(), reason };
+  saveJSON(CORRUPTED_FILES_FILE, corruptedFiles);
+  console.log(`[CORRUPT] Marked ${title || path.basename(filePath)} as corrupted: ${reason}`);
+}
+
 // Audio codecs browsers can play natively
 const BROWSER_AUDIO_CODECS = new Set(['aac', 'mp3', 'opus', 'vorbis', 'flac']);
 
@@ -513,6 +532,28 @@ function probeDuration(filePath) {
     if (dur > 0) durationCache[filePath] = dur;
     return dur;
   } catch { return 0; }
+}
+
+// Like probeDuration but captures ffprobe stderr for corruption reason reporting
+function probeDurationWithReason(filePath) {
+  if (durationCache[filePath]) return Promise.resolve({ duration: durationCache[filePath], reason: '' });
+  return new Promise((resolve) => {
+    const proc = spawn('ffprobe', [
+      '-v', 'error', '-show_entries', 'format=duration', '-of', 'json', filePath,
+    ]);
+    let out = '', err = '';
+    proc.stdout.on('data', d => out += d);
+    proc.stderr.on('data', d => err += d);
+    proc.on('close', () => {
+      try {
+        const dur = parseFloat(JSON.parse(out).format?.duration) || 0;
+        if (dur > 0) durationCache[filePath] = dur;
+        const reason = err.trim().split('\n')[0] || '';
+        resolve({ duration: dur, reason });
+      } catch { resolve({ duration: 0, reason: err.trim().split('\n')[0] || 'ffprobe parse error' }); }
+    });
+    proc.on('error', () => resolve({ duration: 0, reason: 'ffprobe spawn error' }));
+  });
 }
 
 function probeDurationAsync(filePath) {
@@ -1186,19 +1227,19 @@ app.post('/api/login', (req, res) => {
   const role = profile.role || 'user';
   const permissions = role === 'admin' ? [...VALID_PERMISSIONS] : (profile.permissions || []);
   const token = createSession(profile.id, role, permissions);
-  res.cookie('session', token, { httpOnly: true, secure: COOKIE_SECURE, sameSite: 'strict', maxAge: SESSION_MAX_AGE });
+  res.cookie(COOKIE_NAME, token, { httpOnly: true, secure: COOKIE_SECURE, sameSite: 'strict', maxAge: SESSION_MAX_AGE });
   if (role === 'admin' || permissions.includes('canDownload') || permissions.includes('canScan') || permissions.includes('canRestart')) {
-    res.cookie('adminSession', adminToken, { httpOnly: true, secure: COOKIE_SECURE, sameSite: 'strict', maxAge: SESSION_MAX_AGE });
+    res.cookie(ADMIN_COOKIE_NAME, adminToken, { httpOnly: true, secure: COOKIE_SECURE, sameSite: 'strict', maxAge: SESSION_MAX_AGE });
   }
   res.json({ ok: true, role, profileId: profile.id, name: profile.name, permissions });
 });
 
 app.post('/api/logout', (_req, res) => {
   const cookieHeader = _req.headers.cookie || '';
-  const match = cookieHeader.match(/session=([a-f0-9]{64})/);
+  const match = cookieHeader.match(new RegExp(`${COOKIE_NAME}=([a-f0-9]{64})`));
   if (match) { sessions.delete(match[1]); persistSessions(); }
-  res.clearCookie('session');
-  res.clearCookie('adminSession');
+  res.clearCookie(COOKIE_NAME);
+  res.clearCookie(ADMIN_COOKIE_NAME);
   res.json({ ok: true });
 });
 
@@ -1436,6 +1477,50 @@ app.post('/api/queue/remove', requireAuth, (req, res) => {
   data.queue = (data.queue || []).filter(q => q !== id);
   saveProfileData(profileId, data);
   res.json({ ok: true, queue: data.queue });
+});
+
+// ── Dismissed (hide from Continue Watching / Recently Added) ──────────────
+app.get('/api/dismissed', requireAuth, (req, res) => {
+  const profileId = getRequestProfile(req);
+  if (!profileId) return res.status(403).json({ error: 'Cannot access other profiles' });
+  const data = loadProfileData(profileId);
+  res.json(data.dismissed || { continueWatching: {}, recentlyAdded: {} });
+});
+
+app.post('/api/dismissed/continue-watching/:id', requireAuth, (req, res) => {
+  const profileId = getRequestProfile(req);
+  if (!profileId) return res.status(403).json({ error: 'Cannot modify other profiles' });
+  const data = loadProfileData(profileId);
+  data.dismissed.continueWatching[req.params.id] = true;
+  saveProfileData(profileId, data);
+  res.json({ ok: true });
+});
+
+app.post('/api/dismissed/recently-added/:id', requireAuth, (req, res) => {
+  const profileId = getRequestProfile(req);
+  if (!profileId) return res.status(403).json({ error: 'Cannot modify other profiles' });
+  const data = loadProfileData(profileId);
+  data.dismissed.recentlyAdded[req.params.id] = true;
+  saveProfileData(profileId, data);
+  res.json({ ok: true });
+});
+
+app.delete('/api/dismissed/continue-watching/:id', requireAuth, (req, res) => {
+  const profileId = getRequestProfile(req);
+  if (!profileId) return res.status(403).json({ error: 'Cannot modify other profiles' });
+  const data = loadProfileData(profileId);
+  delete data.dismissed.continueWatching[req.params.id];
+  saveProfileData(profileId, data);
+  res.json({ ok: true });
+});
+
+app.delete('/api/dismissed/recently-added/:id', requireAuth, (req, res) => {
+  const profileId = getRequestProfile(req);
+  if (!profileId) return res.status(403).json({ error: 'Cannot modify other profiles' });
+  const data = loadProfileData(profileId);
+  delete data.dismissed.recentlyAdded[req.params.id];
+  saveProfileData(profileId, data);
+  res.json({ ok: true });
 });
 
 // ── Skip Intro / Outro ──────────────────────────────────────────────────
@@ -1755,7 +1840,7 @@ app.get('/api/stats', requireAuth, (_req, res) => {
 function requireAdmin(req, res, next) {
   // Check admin cookie first, then header (no query param to avoid token leakage in logs/history)
   const cookieHeader = req.headers.cookie || '';
-  const adminMatch = cookieHeader.match(/adminSession=([a-f0-9]{48})/);
+  const adminMatch = cookieHeader.match(new RegExp(`${ADMIN_COOKIE_NAME}=([a-f0-9]{48})`));
   const token = adminMatch ? adminMatch[1] : req.headers['x-admin-token'];
   if (token !== adminToken) return res.status(403).json({ error: 'Unauthorized' });
   next();
@@ -1766,7 +1851,7 @@ function requirePermission(permission) {
   return (req, res, next) => {
     // Must have admin token cookie (set at login for users with any elevated permissions)
     const cookieHeader = req.headers.cookie || '';
-    const adminMatch = cookieHeader.match(/adminSession=([a-f0-9]{48})/);
+    const adminMatch = cookieHeader.match(new RegExp(`${ADMIN_COOKIE_NAME}=([a-f0-9]{48})`));
     const token = adminMatch ? adminMatch[1] : req.headers['x-admin-token'];
     if (token !== adminToken) return res.status(403).json({ error: 'Unauthorized' });
     // Check session for permission
@@ -2049,12 +2134,16 @@ function generateXstackLayout(count, cols, rows) {
   return parts.join('|');
 }
 
-async function startSpriteGen(id, filePath) {
+async function startSpriteGen(id, filePath, title) {
   const thumbId = getThumbId(filePath);
   if (spriteJobs[id] && spriteJobs[id].thumbId === thumbId) return spriteJobs[id];
 
-  const duration = probeDuration(filePath);
-  if (duration <= 0) return null;
+  const { duration, reason: probeReason } = await probeDurationWithReason(filePath);
+  if (duration <= 0) {
+    const reason = probeReason || 'duration probe returned 0';
+    markFileCorrupted(id, filePath, title || path.basename(filePath), reason);
+    return null;
+  }
 
   const totalFrames = Math.ceil(duration / SPRITE_INTERVAL);
   const totalSheets = Math.ceil(totalFrames / FRAMES_PER_SPRITE);
@@ -2087,6 +2176,18 @@ async function startSpriteGen(id, filePath) {
     ok = await extractAllFrames(filePath, tmpDir, totalFrames);
   }
   if (!ok) {
+    // Check if any frames were actually extracted; if none, file is likely corrupted
+    let extractedCount = 0;
+    try {
+      const tmpFiles = fs.readdirSync(tmpDir);
+      extractedCount = tmpFiles.filter(f => f.endsWith('.jpg')).length;
+    } catch {}
+    if (extractedCount === 0) {
+      try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
+      markFileCorrupted(id, filePath, title || path.basename(filePath), 'no frames extracted');
+      if (spriteJobs[id]) spriteJobs[id].done = true;
+      return spriteJobs[id];
+    }
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
     if (spriteJobs[id]) spriteJobs[id].done = true;
     return spriteJobs[id];
@@ -2128,13 +2229,17 @@ function queueAllSpriteGen() {
   const lib = scanLibrary();
   const pending = [];
   let alreadyDone = 0;
+  let skippedCorrupted = 0;
   for (const item of lib) {
     const filePath = fileIndex[item.id];
     if (!filePath) continue;
+    // Skip files already known to be corrupted
+    if (corruptedFiles[item.id]) { skippedCorrupted++; alreadyDone++; continue; }
     const thumbId = getThumbId(filePath);
     if (fs.existsSync(spriteFilePath(thumbId, 0))) { alreadyDone++; continue; }
     pending.push({ id: item.id, filePath, title: item.title });
   }
+  if (skippedCorrupted > 0) console.log(`[SPRITE] Skipping ${skippedCorrupted} corrupted file(s)`);
   spriteQueue.total = alreadyDone + pending.length;
   spriteQueue.completed = alreadyDone;
   if (pending.length === 0) {
@@ -2172,7 +2277,7 @@ function queueAllSpriteGen() {
         spriteQueue.current = item.title;
         console.log(`[SPRITE] Processing: ${item.title}`);
         try {
-          await startSpriteGen(item.id, item.filePath);
+          await startSpriteGen(item.id, item.filePath, item.title);
         } catch (err) {
           console.error(`[SPRITE] Error processing ${item.title}:`, err);
         }
@@ -2226,6 +2331,23 @@ app.post('/api/sprites/resume', requireAdminSession, (req, res) => {
     try { queueAllSpriteGen(); } catch {}
   }
   res.json({ ok: true, enabled: true });
+});
+
+// ── Corrupted file registry API ─────────────────────────────────────────
+// GET /api/corrupted — return all corrupted file entries as array
+app.get('/api/corrupted', requireAdminSession, (_req, res) => {
+  const entries = Object.entries(corruptedFiles).map(([id, info]) => ({ id, ...info }));
+  res.json(entries);
+});
+
+// DELETE /api/corrupted/:id — remove a file from the corrupted registry
+app.delete('/api/corrupted/:id', requireAdminSession, (req, res) => {
+  const { id } = req.params;
+  if (!corruptedFiles[id]) return res.status(404).json({ error: 'Not found' });
+  delete corruptedFiles[id];
+  saveJSON(CORRUPTED_FILES_FILE, corruptedFiles);
+  console.log(`[CORRUPT] Removed entry ${id} from registry`);
+  res.json({ ok: true });
 });
 
 // System stats API
