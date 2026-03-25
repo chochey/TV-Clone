@@ -1,0 +1,370 @@
+{
+  "description": "TV-Clone feature backlog. Set passes=true only after testing end-to-end. Do not remove or rename entries.",
+  "features": [
+
+    {
+      "id": "auth-001",
+      "category": "auth",
+      "description": "Profile-based login with PIN and password",
+      "passes": true
+    },
+    {
+      "id": "auth-002",
+      "category": "auth",
+      "description": "Role-based permissions (canDownload, canScan, canRestart)",
+      "passes": true
+    },
+    {
+      "id": "auth-003",
+      "category": "auth",
+      "description": "30-day sliding session with HTTP-only cookie",
+      "passes": true
+    },
+
+    {
+      "id": "library-001",
+      "category": "library",
+      "description": "Recursive scan of configured folders, supports mp4/mkv/avi",
+      "passes": true
+    },
+    {
+      "id": "library-002",
+      "category": "library",
+      "description": "Movie vs show/episode auto-detection from folder structure",
+      "passes": true
+    },
+    {
+      "id": "library-003",
+      "category": "library",
+      "description": "Library cache persisted to disk, loaded on startup",
+      "passes": true
+    },
+    {
+      "id": "library-004",
+      "category": "library",
+      "description": "File system watcher auto-invalidates cache on changes",
+      "passes": true
+    },
+    {
+      "id": "library-005",
+      "category": "library",
+      "description": "External subtitle detection (.srt, .vtt) in media dir and subs/ subdir",
+      "passes": true
+    },
+    {
+      "id": "library-006",
+      "category": "library",
+      "description": "Local poster detection from media directory",
+      "passes": true
+    },
+
+    {
+      "id": "metadata-001",
+      "category": "metadata",
+      "description": "OMDB API integration for title, rating, plot, director, actors, genre",
+      "passes": true
+    },
+    {
+      "id": "metadata-002",
+      "category": "metadata",
+      "description": "OMDB poster download and local caching",
+      "passes": true
+    },
+    {
+      "id": "metadata-003",
+      "category": "metadata",
+      "description": "IntroDB API integration for automatic intro/outro detection",
+      "passes": true
+    },
+
+    {
+      "id": "playback-001",
+      "category": "playback",
+      "description": "Direct play for H.264+AAC/MP3 in MP4 (byte-range served, no transcode)",
+      "passes": true
+    },
+    {
+      "id": "playback-002",
+      "category": "playback",
+      "description": "Remux for H.264 with incompatible audio/container",
+      "passes": true
+    },
+    {
+      "id": "playback-003",
+      "category": "playback",
+      "description": "HLS transcode for HEVC and other codecs via FFmpeg",
+      "passes": true
+    },
+    {
+      "id": "playback-004",
+      "category": "playback",
+      "description": "VAAPI hardware acceleration (8-bit full GPU, 10-bit hybrid CPU+GPU)",
+      "passes": true
+    },
+    {
+      "id": "playback-005",
+      "category": "playback",
+      "description": "Multiple audio track selection during playback",
+      "passes": true
+    },
+    {
+      "id": "playback-006",
+      "category": "playback",
+      "description": "Embedded and external subtitle rendering",
+      "passes": true
+    },
+    {
+      "id": "playback-007",
+      "category": "playback",
+      "description": "Playback speed control (0.5x to 2x)",
+      "passes": true
+    },
+    {
+      "id": "playback-008",
+      "category": "playback",
+      "description": "Skip forward/backward buttons in player",
+      "passes": true
+    },
+    {
+      "id": "playback-009",
+      "category": "playback",
+      "description": "Up Next auto-play overlay at end of episode",
+      "passes": true
+    },
+    {
+      "id": "playback-010",
+      "category": "playback",
+      "description": "Max 5 concurrent transcode sessions, idle cleanup after 2 minutes",
+      "passes": true
+    },
+
+    {
+      "id": "sprites-001",
+      "category": "sprites",
+      "description": "Background sprite sheet generation (5x5 grid, 10s interval, 160x90)",
+      "passes": true
+    },
+    {
+      "id": "sprites-002",
+      "category": "sprites",
+      "description": "Seek bar thumbnail preview using sprite sheets",
+      "passes": true
+    },
+    {
+      "id": "sprites-003",
+      "category": "sprites",
+      "description": "Sprite gen pauses while active transcode session is running",
+      "passes": true
+    },
+    {
+      "id": "sprites-004",
+      "category": "sprites",
+      "description": "Per-frame 60s timeout in extractFrame() prevents queue hanging on bad files",
+      "passes": true
+    },
+    {
+      "id": "sprites-005",
+      "category": "sprites",
+      "description": "Sprite gen auto-starts on server restart (not just after scan)",
+      "passes": true
+    },
+    {
+      "id": "sprites-006",
+      "category": "sprites",
+      "description": "Progress endpoint /api/sprites/progress reports total and completed counts",
+      "passes": true
+    },
+
+    {
+      "id": "progress-001",
+      "category": "progress",
+      "description": "Playback progress saved per profile (currentTime, duration, percent)",
+      "passes": true
+    },
+    {
+      "id": "progress-002",
+      "category": "progress",
+      "description": "Auto-mark as watched at >=92% progress",
+      "passes": true
+    },
+    {
+      "id": "progress-003",
+      "category": "progress",
+      "description": "Watch history (100 items, most recent first) per profile",
+      "passes": true
+    },
+    {
+      "id": "progress-004",
+      "category": "progress",
+      "description": "Mark watched/unwatched manually",
+      "passes": true
+    },
+
+    {
+      "id": "queue-001",
+      "category": "queue",
+      "description": "Per-profile Up Next queue with add/remove",
+      "passes": true
+    },
+
+    {
+      "id": "skip-001",
+      "category": "skip",
+      "description": "Skip intro/outro with countdown UI",
+      "passes": true
+    },
+    {
+      "id": "skip-002",
+      "category": "skip",
+      "description": "Manual intro/outro segment editor in player",
+      "passes": true
+    },
+    {
+      "id": "skip-003",
+      "category": "skip",
+      "description": "Show-level skip segments apply to all episodes, per-episode overrides supported",
+      "passes": true
+    },
+
+    {
+      "id": "admin-001",
+      "category": "admin",
+      "description": "Add/remove media folders with type selection and file browser",
+      "passes": true
+    },
+    {
+      "id": "admin-002",
+      "category": "admin",
+      "description": "Create/edit/delete user profiles with avatar, PIN, password, role, permissions",
+      "passes": true
+    },
+    {
+      "id": "admin-003",
+      "category": "admin",
+      "description": "System stats dashboard (CPU, RAM, disk, uptime)",
+      "passes": true
+    },
+    {
+      "id": "admin-004",
+      "category": "admin",
+      "description": "Manual library scan trigger",
+      "passes": true
+    },
+    {
+      "id": "admin-005",
+      "category": "admin",
+      "description": "Server restart button (permission-gated)",
+      "passes": true
+    },
+
+    {
+      "id": "downloads-001",
+      "category": "downloads",
+      "description": "qBittorrent proxy — search, add, pause/resume, delete torrents",
+      "passes": true
+    },
+
+    {
+      "id": "ui-001",
+      "category": "ui",
+      "description": "Dark theme with responsive layout (mobile, tablet, desktop)",
+      "passes": true
+    },
+    {
+      "id": "ui-002",
+      "category": "ui",
+      "description": "Real-time search across library",
+      "passes": true
+    },
+    {
+      "id": "ui-003",
+      "category": "ui",
+      "description": "Filter by type (movies/shows) and sort options",
+      "passes": true
+    },
+    {
+      "id": "ui-004",
+      "category": "ui",
+      "description": "Season/episode detail pages",
+      "passes": true
+    },
+
+    {
+      "id": "new-001",
+      "category": "sprites",
+      "priority": "high",
+      "description": "Corrupted file detection — if ffprobe fails on a file, skip sprite gen and flag it in the admin panel rather than silently failing",
+      "passes": false
+    },
+    {
+      "id": "new-002",
+      "category": "admin",
+      "priority": "high",
+      "description": "Corrupted/unreadable files list in admin panel showing files that failed ffprobe or sprite gen",
+      "passes": false
+    },
+    {
+      "id": "new-003",
+      "category": "playback",
+      "priority": "high",
+      "description": "Transcoding quality presets — let user pick quality level (e.g. low/medium/high) instead of fixed QP 22",
+      "passes": false
+    },
+    {
+      "id": "new-004",
+      "category": "search",
+      "priority": "medium",
+      "description": "Advanced search — filter by director, actor, IMDb rating range, genre",
+      "passes": false
+    },
+    {
+      "id": "new-005",
+      "category": "library",
+      "priority": "medium",
+      "description": "Watchlist/favorites — per-profile list separate from queue",
+      "passes": false
+    },
+    {
+      "id": "new-006",
+      "category": "library",
+      "priority": "medium",
+      "description": "Collection grouping — group franchise films (e.g. all Marvel movies) into a collection view",
+      "passes": false
+    },
+    {
+      "id": "new-007",
+      "category": "metadata",
+      "priority": "medium",
+      "description": "Manual metadata override — let admin edit title, year, poster for any item without relying on OMDB match",
+      "passes": false
+    },
+    {
+      "id": "new-008",
+      "category": "playback",
+      "priority": "low",
+      "description": "Bandwidth/bitrate cap option for transcode sessions",
+      "passes": false
+    },
+    {
+      "id": "new-009",
+      "category": "ui",
+      "priority": "low",
+      "description": "Continue watching row on home page showing in-progress items across all types",
+      "passes": false
+    },
+    {
+      "id": "new-010",
+      "category": "admin",
+      "priority": "low",
+      "description": "Transcode session viewer in admin — see what is currently being transcoded and by whom",
+      "passes": false
+    },
+    {
+      "id": "new-011",
+      "category": "subtitles",
+      "priority": "low",
+      "description": "External subtitle upload — allow uploading a .srt file for a specific item from the UI",
+      "passes": false
+    }
+  ]
+}

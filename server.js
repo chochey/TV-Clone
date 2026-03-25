@@ -1867,6 +1867,7 @@ app.get('/api/browse', requireAdmin, (req, res) => {
 app.get('/stream/:id', requireAuth, ensureLibrary, (req, res) => {
   const filePath = fileIndex[req.params.id];
   if (!filePath || !fs.existsSync(filePath)) return res.status(404).send('File not found');
+  lastPlaybackAt = Date.now(); // pause sprite gen during direct play
 
   const stat = fs.statSync(filePath);
   const fileSize = stat.size;
@@ -1948,11 +1949,18 @@ print(json.dumps(out))
   }
 }
 
-// Pause sprite generation when transcoding is active to prioritize playback
-function waitForTranscodeIdle() {
+// Pause sprite generation when any playback is active to prioritize disk I/O
+function waitForTranscodeIdle(timeoutMs = 10 * 60 * 1000) {
   return new Promise((resolve) => {
+    const deadline = Date.now() + timeoutMs;
     const check = () => {
-      if (Object.keys(transcodeSessions).length === 0) return resolve();
+      const transcodeActive = Object.keys(transcodeSessions).length > 0;
+      const playbackRecent = (Date.now() - lastPlaybackAt) < 60000;
+      if (!transcodeActive && !playbackRecent) return resolve();
+      if (Date.now() >= deadline) {
+        console.warn('[SPRITE] waitForTranscodeIdle timed out after 10 min, resuming anyway');
+        return resolve();
+      }
       setTimeout(check, 2000);
     };
     check();
@@ -1961,6 +1969,8 @@ function waitForTranscodeIdle() {
 
 const spriteJobs = {}; // id -> { done, thumbId, totalSheets, duration }
 const spriteQueue = { total: 0, completed: 0, current: '', running: false };
+let lastPlaybackAt = 0; // timestamp of last segment/stream request — used to pause sprite gen during playback
+let spriteGenEnabled = true; // can be toggled via /api/sprites/pause and /api/sprites/resume
 
 function getThumbId(filePath) {
   return crypto.createHash('md5').update(filePath).digest('hex').slice(0, 16);
@@ -1979,8 +1989,12 @@ function extractFrame(filePath, timestamp, outFile) {
       '-vframes', '1', '-vf', `scale=${SPRITE_W}:${SPRITE_H}:force_original_aspect_ratio=decrease,pad=${SPRITE_W}:${SPRITE_H}:(ow-iw)/2:(oh-ih)/2`,
       '-q:v', '5', '-y', outFile,
     ]);
-    proc.on('close', (code) => resolve(code === 0));
-    proc.on('error', () => resolve(false));
+    const timeout = setTimeout(() => {
+      proc.kill();
+      resolve(false);
+    }, 60000); // 60s max per frame
+    proc.on('close', (code) => { clearTimeout(timeout); resolve(code === 0); });
+    proc.on('error', () => { clearTimeout(timeout); resolve(false); });
   });
 }
 
@@ -2151,16 +2165,28 @@ function queueAllSpriteGen() {
       for (const q of driveQueues) {
         const item = q[i];
         if (!item) continue;
+        // Wait while sprite generation is paused
+        while (!spriteGenEnabled) {
+          await new Promise(r => setTimeout(r, 5000));
+        }
         spriteQueue.current = item.title;
         console.log(`[SPRITE] Processing: ${item.title}`);
-        await startSpriteGen(item.id, item.filePath);
+        try {
+          await startSpriteGen(item.id, item.filePath);
+        } catch (err) {
+          console.error(`[SPRITE] Error processing ${item.title}:`, err);
+        }
         spriteQueue.completed++;
       }
     }
     spriteQueue.running = false;
     spriteQueue.current = '';
     console.log('[SPRITE] All queued items processed');
-  })();
+  })().catch(err => {
+    spriteQueue.running = false;
+    spriteQueue.current = '';
+    console.error('[SPRITE] Queue loop crashed:', err);
+  });
 }
 
 // Sprite progress API — counts actual files on disk for accuracy
@@ -2179,8 +2205,27 @@ app.get('/api/sprites/progress', requireAuth, (_req, res) => {
     completed,
     current: spriteQueue.current,
     running: spriteQueue.running,
+    enabled: spriteGenEnabled,
     percent: total > 0 ? Math.round((completed / total) * 100) : 100,
   });
+});
+
+// Pause sprite generation
+app.post('/api/sprites/pause', requireAdminSession, (_req, res) => {
+  spriteGenEnabled = false;
+  console.log('[SPRITE] Generation paused by admin');
+  res.json({ ok: true, enabled: false });
+});
+
+// Resume sprite generation
+app.post('/api/sprites/resume', requireAdminSession, (req, res) => {
+  const wasDisabled = !spriteGenEnabled;
+  spriteGenEnabled = true;
+  console.log('[SPRITE] Generation resumed by admin');
+  if (wasDisabled && !spriteQueue.running) {
+    try { queueAllSpriteGen(); } catch {}
+  }
+  res.json({ ok: true, enabled: true });
 });
 
 // System stats API
@@ -2597,6 +2642,7 @@ app.get('/hls/:id/:segment', requireAuth, (req, res) => {
     clearTimeout(transcodeSessions[id].timeout);
     transcodeSessions[id].timeout = setTimeout(() => cleanupSession(id), TRANSCODE_TIMEOUT_MS);
   }
+  lastPlaybackAt = Date.now(); // pause sprite gen during HLS playback
 
   // If file already exists on disk and has content, serve immediately
   if (fs.existsSync(segPath)) {
@@ -3000,4 +3046,6 @@ app.listen(PORT, '0.0.0.0', () => {
   serverReady = true;
   serverReadyStatus = 'ready';
   console.log('[Startup] Server ready (using cached library, automatic rescan disabled)');
+  // Resume sprite generation for any items that still need it
+  setTimeout(() => { try { queueAllSpriteGen(); } catch {} }, 5000);
 });

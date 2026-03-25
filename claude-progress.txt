@@ -1,0 +1,46 @@
+TV-Clone Development Progress Log
+====================================
+Last updated: 2026-03-25
+
+## Project Overview
+Personal media server (Plex-like) built in Node.js + vanilla JS.
+- Dev: Port 4801, branch `dev`, service `tvclone-dev.service`
+- Prod: Port 4800, branch `master`, service `tvclone-prod.service`
+- Both use shared git repo at /home/blue/Desktop/Repos/TV-Clone
+- Prod deployed from /home/blue/Desktop/Repos/TV-Clone-prod (git worktree on master)
+- 8,288 media items across two drives
+
+## Key Contacts / Context
+- Single developer/user setup (home server)
+- Hardware: Intel UHD 630 GPU (VAAPI), shared thumbnails dir between dev and prod
+- Critical 10-bit VAAPI fix in place: software decode → nv12,hwupload → GPU encode
+- DO NOT touch the VAAPI transcode pipeline without care — it took significant effort to get right
+
+## Architecture Reminders
+- Backend: server.js (~3022 lines, single file Express app)
+- Frontend: index.html (~single file, inline CSS + JS)
+- Data: /data/ directory (JSON files, no database)
+- Tests: Playwright E2E in /tests/
+- Always work in dev first, test, then deploy to prod via `git checkout master && git merge dev`
+- Deploy to prod: `sudo systemctl restart tvclone-prod.service`
+- Check prod logs: `sudo journalctl -u tvclone-prod.service --no-pager -n 50`
+
+## Session Log
+
+### 2026-03-25 — Sprite Generation Fixes
+**Problem:** Sprite generation was stuck on "The Banker (2020).mp4" for 3+ hours.
+**Root causes found:**
+1. `extractFrame()` had no timeout — one hung ffmpeg call blocked the entire queue forever
+2. `queueAllSpriteGen()` was only triggered by library scans, not on server restart — so after any restart sprite gen never resumed
+3. The Banker's mp4 is corrupted/unreadable at seek position ~5810s (frame 582)
+
+**Fixes applied (both dev and prod):**
+1. Added 60-second timeout to `extractFrame()` — hung frames now give up and move on
+2. Added `setTimeout(() => queueAllSpriteGen(), 5000)` on server startup so sprite gen always resumes after a restart
+3. Placeholder `_sprite_0.jpg` created for The Banker to permanently skip it in the queue
+
+**Also noted:** Several other files have "moov atom not found" errors (corrupted downloads) — they get skipped fast now due to ffprobe failing early.
+
+**Status:** Sprite gen running normally, ~1,730 items remaining as of this session.
+
+---

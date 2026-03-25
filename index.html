@@ -259,6 +259,9 @@ select,input{font-family:inherit}
 .sprite-badge{font-size:.7rem;padding:2px 8px;border-radius:10px;font-weight:600}
 .sprite-badge.running{background:rgba(0,164,220,.15);color:var(--accent)}
 .sprite-badge.done{background:rgba(76,175,80,.15);color:#4caf50}
+.sprite-badge.paused{background:rgba(255,165,0,.15);color:#ffaa33}
+.sprite-progress.paused .sprite-progress-fill{background:var(--text-muted)}
+.sprite-progress.paused{opacity:.75}
 .sys-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:20px}
 .sys-card{background:var(--bg-card);border-radius:10px;padding:16px}
 .sys-card-title{font-size:.75rem;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;font-weight:600}
@@ -1448,8 +1451,10 @@ async function renderSettings(){
   let sph='';
   if(spriteProgress){
     const sp=spriteProgress;
-    const badge=sp.running?'<span class="sprite-badge running">Generating</span>':'<span class="sprite-badge done">Complete</span>';
-    sph=`<h3 style="font-size:1rem;font-weight:700;margin:20px 0 12px">Thumbnail Sprites</h3><div class="sprite-progress"><div class="sprite-progress-title"><span>Progress</span>${badge}</div><div class="sprite-progress-bar"><div class="sprite-progress-fill" style="width:${sp.percent}%"></div></div><div class="sprite-progress-info"><span>${sp.completed} / ${sp.total} media</span><span>${sp.percent}%</span></div>${sp.running&&sp.current?`<div class="sprite-progress-current">Currently: ${esc(sp.current)}</div>`:''}</div>`;
+    const paused=!sp.enabled;
+    const badge=paused?'<span class="sprite-badge paused">Paused</span>':sp.running?'<span class="sprite-badge running">Generating</span>':'<span class="sprite-badge done">Complete</span>';
+    const toggleBtn=`<button class="btn btn-sm ${paused?'btn-primary':'btn-secondary'}" onclick="toggleSpriteGen()" style="font-size:.75rem;padding:4px 12px">${paused?'&#9654; Start Sprites':'&#9646;&#9646; Stop Sprites'}</button>`;
+    sph=`<h3 style="font-size:1rem;font-weight:700;margin:20px 0 12px">Thumbnail Sprites</h3><div class="sprite-progress${paused?' paused':''}"><div class="sprite-progress-title"><span>Progress</span><div style="display:flex;align-items:center;gap:8px">${badge}${toggleBtn}</div></div><div class="sprite-progress-bar"><div class="sprite-progress-fill" style="width:${sp.percent}%"></div></div><div class="sprite-progress-info"><span>${sp.completed} / ${sp.total} media</span><span>${sp.percent}%</span></div>${!paused&&sp.running&&sp.current?`<div class="sprite-progress-current">Currently: ${esc(sp.current)}</div>`:paused?'<div class="sprite-progress-current">Paused — click Start Sprites to resume</div>':''}</div>`;
   }
 
   const sysh=renderSysStats();
@@ -1497,8 +1502,23 @@ function updateSpriteProgress(){
   const el=document.querySelector('.sprite-progress');
   if(!el||!spriteProgress)return;
   const sp=spriteProgress;
-  const badge=sp.running?'<span class="sprite-badge running">Generating</span>':'<span class="sprite-badge done">Complete</span>';
-  el.innerHTML=`<div class="sprite-progress-title"><span>Progress</span>${badge}</div><div class="sprite-progress-bar"><div class="sprite-progress-fill" style="width:${sp.percent}%"></div></div><div class="sprite-progress-info"><span>${sp.completed} / ${sp.total} media</span><span>${sp.percent}%</span></div>${sp.running&&sp.current?`<div class="sprite-progress-current">Currently: ${esc(sp.current)}</div>`:''}`;
+  const paused=!sp.enabled;
+  const badge=paused?'<span class="sprite-badge paused">Paused</span>':sp.running?'<span class="sprite-badge running">Generating</span>':'<span class="sprite-badge done">Complete</span>';
+  const toggleBtn=`<button class="btn btn-sm ${paused?'btn-primary':'btn-secondary'}" onclick="toggleSpriteGen()" style="font-size:.75rem;padding:4px 12px">${paused?'&#9654; Start Sprites':'&#9646;&#9646; Stop Sprites'}</button>`;
+  if(paused)el.classList.add('paused');else el.classList.remove('paused');
+  el.innerHTML=`<div class="sprite-progress-title"><span>Progress</span><div style="display:flex;align-items:center;gap:8px">${badge}${toggleBtn}</div></div><div class="sprite-progress-bar"><div class="sprite-progress-fill" style="width:${sp.percent}%"></div></div><div class="sprite-progress-info"><span>${sp.completed} / ${sp.total} media</span><span>${sp.percent}%</span></div>${!paused&&sp.running&&sp.current?`<div class="sprite-progress-current">Currently: ${esc(sp.current)}</div>`:paused?'<div class="sprite-progress-current">Paused — click Start Sprites to resume</div>':''}`;
+}
+async function toggleSpriteGen(){
+  if(!spriteProgress)return;
+  const endpoint=spriteProgress.enabled?'/api/sprites/pause':'/api/sprites/resume';
+  try{
+    const r=await adminFetch(endpoint,{method:'POST'});
+    if(!r.ok)return;
+    const d=await r.json();
+    spriteProgress.enabled=d.enabled;
+    if(!d.enabled)spriteProgress.running=false;
+    updateSpriteProgress();
+  }catch{}
 }
 function updateSysStats(){
   const el=document.getElementById('sysStatsGrid');
