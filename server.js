@@ -299,11 +299,14 @@ function loadProfileData(profileId) {
     queue: [],       // [id, id, ...]
     watched: {},     // id -> true/false
     dismissed: { continueWatching: {}, recentlyAdded: {} },
+    quality: 'auto', // transcode quality preset
   });
   // Migration: ensure dismissed field exists for older profiles
   if (!data.dismissed) data.dismissed = { continueWatching: {}, recentlyAdded: {} };
   if (!data.dismissed.continueWatching) data.dismissed.continueWatching = {};
   if (!data.dismissed.recentlyAdded) data.dismissed.recentlyAdded = {};
+  // Migration: ensure quality field exists for older profiles
+  if (!data.quality) data.quality = 'auto';
   profileDataCache.set(profileId, { data, dirty: false });
   return data;
 }
@@ -1247,7 +1250,19 @@ app.get('/api/me', (req, res) => {
   const session = getSession(req);
   if (!session) return res.json({ loggedIn: false });
   const profile = config.profiles.find(p => p.id === session.profileId);
-  res.json({ loggedIn: true, profileId: session.profileId, role: session.role, permissions: session.permissions || [], name: profile?.name, avatar: profile?.avatar });
+  const profileData = loadProfileData(session.profileId);
+  res.json({ loggedIn: true, profileId: session.profileId, role: session.role, permissions: session.permissions || [], name: profile?.name, avatar: profile?.avatar, quality: profileData.quality || 'auto' });
+});
+
+app.put('/api/me/quality', requireAuth, (req, res) => {
+  const session = getSession(req);
+  if (!session) return res.status(401).json({ error: 'Not logged in' });
+  const { quality } = req.body;
+  if (!QUALITY_PRESETS[quality]) return res.status(400).json({ error: 'Invalid quality preset' });
+  const data = loadProfileData(session.profileId);
+  data.quality = quality;
+  saveProfileData(session.profileId, data);
+  res.json({ ok: true, quality });
 });
 
 app.post('/api/profiles', requireAdminSession, (req, res) => {
@@ -2551,7 +2566,13 @@ function cleanupSession(id, keepFiles) {
   }
 }
 
-function startFfmpeg(id, filePath, sessionDir, seekTime, startSegNum, audioStreamIndex) {
+const QUALITY_PRESETS = {
+  low:  { vaapiQp: 32, maxrate: '2M', bufsize: '4M', crf: 28 },
+  auto: { vaapiQp: 22, maxrate: '4M', bufsize: '8M', crf: 23 },
+  high: { vaapiQp: 18, maxrate: '8M', bufsize: '16M', crf: 18 },
+};
+
+function startFfmpeg(id, filePath, sessionDir, seekTime, startSegNum, audioStreamIndex, quality) {
   // Kill existing process but keep files (segments already produced are still valid)
   if (transcodeSessions[id]) {
     try { transcodeSessions[id].process.kill('SIGTERM'); } catch {}
@@ -2560,6 +2581,7 @@ function startFfmpeg(id, filePath, sessionDir, seekTime, startSegNum, audioStrea
   }
 
   const mode = getStreamMode(filePath);
+  const preset = QUALITY_PRESETS[quality] || QUALITY_PRESETS.auto;
   const ffmpegArgs = ['-hide_banner', '-loglevel', 'error', '-threads', '0'];
   if (seekTime > 0) ffmpegArgs.push('-ss', String(seekTime));
   ffmpegArgs.push('-i', filePath);
@@ -2587,14 +2609,14 @@ function startFfmpeg(id, filePath, sessionDir, seekTime, startSegNum, audioStrea
       ffmpegArgs.push(
         '-vaapi_device', '/dev/dri/renderD128',
         '-vf', 'format=nv12,hwupload',
-        '-c:v', 'h264_vaapi', '-qp', '22', '-maxrate', '4M', '-bufsize', '8M',
+        '-c:v', 'h264_vaapi', '-qp', String(preset.vaapiQp), '-maxrate', preset.maxrate, '-bufsize', preset.bufsize,
       );
     } else {
       // 8-bit source: full hardware decode + encode pipeline (fastest)
       ffmpegArgs.splice(ffmpegArgs.indexOf('-i'), 0,
         '-hwaccel', 'vaapi', '-hwaccel_device', '/dev/dri/renderD128', '-hwaccel_output_format', 'vaapi',
       );
-      ffmpegArgs.push('-c:v', 'h264_vaapi', '-qp', '22', '-maxrate', '4M', '-bufsize', '8M');
+      ffmpegArgs.push('-c:v', 'h264_vaapi', '-qp', String(preset.vaapiQp), '-maxrate', preset.maxrate, '-bufsize', preset.bufsize);
     }
     ffmpegArgs.push(
       '-c:a', 'aac', '-ac', '2', '-b:a', '192k',
@@ -2602,8 +2624,8 @@ function startFfmpeg(id, filePath, sessionDir, seekTime, startSegNum, audioStrea
     );
   } else {
     ffmpegArgs.push(
-      '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23',
-      '-maxrate', '4M', '-bufsize', '8M',
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', String(preset.crf),
+      '-maxrate', preset.maxrate, '-bufsize', preset.bufsize,
       '-pix_fmt', 'yuv420p',
       '-c:a', 'aac', '-ac', '2', '-b:a', '192k',
       '-af', 'aresample=async=1:first_pts=0',
@@ -2640,6 +2662,8 @@ app.get('/hls/:id/master.m3u8', requireAuth, ensureLibrary, async (req, res) => 
 
   const startTime = parseFloat(req.query.start) || 0;
   const audioTrack = req.query.audio !== undefined ? parseInt(req.query.audio, 10) : null;
+  const rawQuality = req.query.quality;
+  const quality = QUALITY_PRESETS[rawQuality] ? rawQuality : 'auto';
   const sessionDir = path.join(TRANSCODE_DIR, id);
 
   // Ensure session dir stays within transcode directory
@@ -2650,11 +2674,12 @@ app.get('/hls/:id/master.m3u8', requireAuth, ensureLibrary, async (req, res) => 
   const m3u8Path = path.join(sessionDir, 'stream.m3u8');
   const duration = await probeDurationAsync(filePath);
 
-  // Reuse existing session if same seek offset and same audio track
+  // Reuse existing session if same seek offset, same audio track, and same quality
   if (transcodeSessions[id]) {
     const sameSeek = (transcodeSessions[id].seekOffset || 0) === startTime;
     const sameAudio = (transcodeSessions[id].audioTrack || null) === audioTrack;
-    if (sameSeek && sameAudio && fs.existsSync(m3u8Path) && fs.statSync(m3u8Path).size > 0) {
+    const sameQuality = (transcodeSessions[id].quality || 'auto') === quality;
+    if (sameSeek && sameAudio && sameQuality && fs.existsSync(m3u8Path) && fs.statSync(m3u8Path).size > 0) {
       // Verify m3u8 actually has segment data (not just a header from a killed session)
       try {
         const content = fs.readFileSync(m3u8Path, 'utf-8');
@@ -2704,13 +2729,14 @@ app.get('/hls/:id/master.m3u8', requireAuth, ensureLibrary, async (req, res) => 
   if (!fs.existsSync(sessionDir)) fs.mkdirSync(sessionDir, { recursive: true });
 
   const mode = getStreamMode(filePath);
-  console.log(`[HLS] Starting ${mode} for ${id.slice(0,8)} at ${startTime.toFixed(1)}s${audioTrack !== null ? ` audio:${audioTrack}` : ''}`);
-  startFfmpeg(id, filePath, sessionDir, startTime, 0, audioTrack);
+  console.log(`[HLS] Starting ${mode} for ${id.slice(0,8)} at ${startTime.toFixed(1)}s${audioTrack !== null ? ` audio:${audioTrack}` : ''} quality:${quality}`);
+  startFfmpeg(id, filePath, sessionDir, startTime, 0, audioTrack, quality);
 
-  // Store the seek offset and audio track on the session
+  // Store the seek offset, audio track, and quality on the session
   if (transcodeSessions[id]) {
     transcodeSessions[id].seekOffset = startTime;
     transcodeSessions[id].audioTrack = audioTrack;
+    transcodeSessions[id].quality = quality;
   }
 
   // Wait for ffmpeg to produce its m3u8 with real segment durations

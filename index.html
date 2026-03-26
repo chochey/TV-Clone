@@ -337,8 +337,8 @@ video::cue{background:rgba(0,0,0,.8);color:#fff;font-size:clamp(1.6rem, 3.5vw, 2
 .ctrl-divider{width:1px;height:18px;background:rgba(255,255,255,.12);margin:0 2px}
 .time-display{font-size:.75rem;color:var(--text-secondary);margin-left:6px;font-variant-numeric:tabular-nums}
 .ep-info{font-size:.7rem;color:var(--text-muted);margin-left:4px;white-space:nowrap}
-.speed-menu,.skip-menu,.sub-menu,.audio-menu,.boost-menu{position:absolute;bottom:100%;right:0;background:var(--bg-secondary);border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:6px 0;min-width:120px;box-shadow:0 8px 32px rgba(0,0,0,.5);display:none;z-index:20}
-.speed-menu.open,.skip-menu.open,.sub-menu.open,.audio-menu.open,.boost-menu.open{display:block}
+.speed-menu,.skip-menu,.sub-menu,.audio-menu,.boost-menu,.quality-menu{position:absolute;bottom:100%;right:0;background:var(--bg-secondary);border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:6px 0;min-width:120px;box-shadow:0 8px 32px rgba(0,0,0,.5);display:none;z-index:20}
+.speed-menu.open,.skip-menu.open,.sub-menu.open,.audio-menu.open,.boost-menu.open,.quality-menu.open{display:block}
 .sub-menu{min-width:200px;max-height:60vh;overflow-y:auto}
 .sub-menu::-webkit-scrollbar{width:6px}
 .sub-menu::-webkit-scrollbar-track{background:transparent}
@@ -613,6 +613,8 @@ video::cue{background:rgba(0,0,0,.8);color:#fff;font-size:clamp(1.6rem, 3.5vw, 2
         <div class="ctrl-divider"></div>
         <div class="ctrl-btn-wrap"><button class="ctrl-btn" onclick="toggleMenu('subMenu',event)" id="subBtn" title="Subtitles" style="font-size:.72rem;font-weight:700">CC</button><div class="sub-menu" id="subMenu"><div class="menu-option active" onclick="setSub(-1)">Off</div></div></div>
         <div class="ctrl-divider"></div>
+        <div class="ctrl-btn-wrap"><button class="ctrl-btn" onclick="toggleMenu('qualityMenu',event)" id="qualityBtn" title="Quality" style="font-size:.72rem;font-weight:700">Auto</button><div class="quality-menu" id="qualityMenu"><div class="menu-option" onclick="setQuality('low')">Low</div><div class="menu-option active" onclick="setQuality('auto')">Auto</div><div class="menu-option" onclick="setQuality('high')">High</div></div></div>
+        <div class="ctrl-divider"></div>
         <div class="volume-wrapper"><button class="ctrl-btn" id="volumeBtn" onclick="toggleMute()">&#128266;</button><input class="volume-slider" type="range" min="0" max="1" step="0.05" value="1" id="volumeSlider" oninput="setVol(this.value)"></div>
         <div class="ctrl-btn-wrap"><button class="ctrl-btn" onclick="toggleMenu('boostMenu',event)" id="boostBtn" title="Audio Boost" style="font-size:1rem">&#128266;+</button><div class="boost-menu" id="boostMenu"><div class="boost-menu-head"><span>Audio Boost</span><span id="boostLevel">1.0x</span></div><input class="boost-slider" type="range" min="1" max="3" step="0.1" value="1" id="boostSlider" oninput="setBoost(this.value)"><div class="boost-hint" id="boostHint">Boost quiet audio up to 3x when needed.</div></div></div>
         <button class="ctrl-btn" onclick="togglePiP()" title="PiP" id="pipBtn">&#128247;</button>
@@ -630,6 +632,7 @@ video::cue{background:rgba(0,0,0,.8);color:#fff;font-size:clamp(1.6rem, 3.5vw, 2
 let library=[],currentView='home',currentMedia=null,controlsTimeout=null,progressSaveInterval=null;
 let folderConfig=[],activeProfile=null,profileQueue=[];
 let skipInterval=10,playbackSpeed=1,watchFilter='all';
+let _currentQuality='auto'; // 'low', 'auto', 'high'
 let dismissedItems={continueWatching:{},recentlyAdded:{}};
 let currentRole='user'; // 'admin' or 'user'
 let currentPermissions=[]; // ['canDownload','canScan','canRestart']
@@ -690,6 +693,8 @@ async function checkExistingSession(){
       activeProfile=data.profileId;
       currentRole=data.role||'user';
       currentPermissions=data.permissions||[];
+      _currentQuality=data.quality||'auto';
+      updateQualityUI();
       return true;
     }
   }catch{}
@@ -1873,8 +1878,33 @@ function setAudioTrack(streamIndex){
   if(currentMedia){
     const currentTime=V.currentTime+(window._hlsSeekOffset||0);
     const audioParam=streamIndex!==null?'&audio='+streamIndex:'';
-    const hlsUrl='/hls/'+currentMedia.id+'/master.m3u8?start='+currentTime+audioParam;
+    const hlsUrl='/hls/'+currentMedia.id+'/master.m3u8?start='+currentTime+audioParam+'&quality='+_currentQuality;
     window._hlsLoad(hlsUrl);
+  }
+  closeMenus();
+}
+
+// Quality preset selection
+function updateQualityUI(){
+  const btn=document.getElementById('qualityBtn');
+  const labels={low:'Low',auto:'Auto',high:'High'};
+  if(btn)btn.textContent=labels[_currentQuality]||'Auto';
+  const opts=document.querySelectorAll('#qualityMenu .menu-option');
+  const order=['low','auto','high'];
+  opts.forEach((e,i)=>e.classList.toggle('active',order[i]===_currentQuality));
+}
+
+async function setQuality(preset){
+  if(preset===_currentQuality){closeMenus();return;}
+  _currentQuality=preset;
+  updateQualityUI();
+  // Save preference to profile
+  try{await fetch('/api/me/quality',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({quality:preset})});}catch(e){console.error('[Quality] Save error:',e);}
+  // Restart HLS with new quality — keep current playback position
+  if(currentMedia&&currentMedia.streamMode&&currentMedia.streamMode!=='direct'&&typeof window._hlsLoad==='function'){
+    const currentTime=V.currentTime+(window._hlsSeekOffset||0);
+    const audioParam=_currentAudioTrack!=null?'&audio='+_currentAudioTrack:'';
+    window._hlsLoad('/hls/'+currentMedia.id+'/master.m3u8?start='+currentTime+audioParam+'&quality='+preset);
   }
   closeMenus();
 }
@@ -2034,7 +2064,7 @@ async function autoDetectIntro(){
 }
 
 function toggleMenu(id,e){e.stopPropagation();const m=document.getElementById(id);const o=m.classList.contains('open');closeMenus();if(!o)m.classList.add('open');}
-function closeMenus(){document.querySelectorAll('.speed-menu,.skip-menu,.sub-menu,.audio-menu,.boost-menu').forEach(m=>m.classList.remove('open'));}
+function closeMenus(){document.querySelectorAll('.speed-menu,.skip-menu,.sub-menu,.audio-menu,.boost-menu,.quality-menu').forEach(m=>m.classList.remove('open'));}
 document.addEventListener('click',e=>{if(!e.target.closest('.ctrl-btn-wrap'))closeMenus();});
 
 async function togglePiP(){try{if(document.pictureInPictureElement)await document.exitPictureInPicture();else if(V.requestPictureInPicture)await V.requestPictureInPicture();}catch{}}
@@ -2083,7 +2113,8 @@ async function playMedia(id){
     return;
   }
 
-  const hlsUrl='/hls/'+item.id+'/master.m3u8'+(startTime?'?start='+startTime:'');
+  const qualityParam='&quality='+_currentQuality;
+  const hlsUrl='/hls/'+item.id+'/master.m3u8?start='+startTime+qualityParam;
 
   if(typeof Hls!=='undefined'&&Hls.isSupported()){
     window._hlsSeekOffset=startTime;
@@ -2287,7 +2318,7 @@ function seekCommit(){
     // For HLS: restart ffmpeg from seek position and reload stream
     window._hlsSeekOffset=_seekTarget;
     _hlsSeekPending=true;
-    window._hlsLoad('/hls/'+currentMedia.id+'/master.m3u8?start='+_seekTarget);
+    window._hlsLoad('/hls/'+currentMedia.id+'/master.m3u8?start='+_seekTarget+'&quality='+_currentQuality);
   } else {
     // Direct play: just set currentTime
     if(V.duration)V.currentTime=_seekTarget;
@@ -2378,7 +2409,7 @@ V.addEventListener('waiting',()=>{
       const currentTime=Math.round(V.currentTime+(window._hlsSeekOffset||0));
       const audioParam=_currentAudioTrack!=null?'&audio='+_currentAudioTrack:'';
       window._hlsSeekOffset=currentTime;
-      window._hlsLoad('/hls/'+currentMedia.id+'/master.m3u8?start='+currentTime+audioParam);
+      window._hlsLoad('/hls/'+currentMedia.id+'/master.m3u8?start='+currentTime+audioParam+'&quality='+_currentQuality);
     }
   },5000);
 });
@@ -2412,7 +2443,7 @@ function showControls(){modal.classList.add('controls-visible');clearTimeout(con
 const _isTouch='ontouchstart' in window;
 document.getElementById('videoWrapper').addEventListener('click',function(e){
   if(!_isTouch)return; // desktop uses mousemove
-  if(e.target.closest('.player-controls,.player-top-bar,.sub-menu,.audio-menu,.boost-menu,.speed-menu,.skip-menu'))return;
+  if(e.target.closest('.player-controls,.player-top-bar,.sub-menu,.audio-menu,.boost-menu,.speed-menu,.skip-menu,.quality-menu'))return;
   e.stopPropagation(); // prevent togglePlay on mobile
   if(modal.classList.contains('controls-visible')){
     modal.classList.remove('controls-visible');clearTimeout(controlsTimeout);
