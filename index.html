@@ -529,6 +529,7 @@ video::cue{background:rgba(0,0,0,.8);color:#fff;font-size:clamp(1.6rem, 3.5vw, 2
       <div id="systemSection" class="system-section">
       <div class="nav-label">System</div>
       <button class="nav-item" id="navDownloads" data-view="downloads" onclick="nav('downloads',this)"><span class="nav-icon">&#11015;</span> Downloads</button>
+      <button class="nav-item" id="navLogs" data-view="logs" onclick="nav('logs',this)"><span class="nav-icon">&#128203;</span> Logs</button>
       <button class="nav-item" id="navSettings" data-view="settings" onclick="nav('settings',this)"><span class="nav-icon">&#9881;&#65039;</span> Media Folders</button>
       <button class="nav-item" id="navScan" onclick="scanLibrary(event)"><span class="nav-icon">&#128269;</span> Scan Library</button>
       <button class="nav-item" id="navRestart" onclick="restartServer()"><span class="nav-icon">&#128260;</span> Restart Server</button>
@@ -669,10 +670,12 @@ function updateSystemVisibility(){
   const showSettings=isAdmin; // settings/folders always admin-only
   const showScan=isAdmin||currentPermissions.includes('canScan');
   const showRestart=isAdmin||currentPermissions.includes('canRestart');
-  const showSystem=showDownloads||showSettings||showScan||showRestart;
+  const showLogs=isAdmin;
+  const showSystem=showDownloads||showSettings||showScan||showRestart||showLogs;
   const el=document.getElementById('systemSection');
   if(el){showSystem?el.classList.add('visible'):el.classList.remove('visible');}
   const nd=document.getElementById('navDownloads');if(nd)nd.style.display=showDownloads?'':'none';
+  const nl=document.getElementById('navLogs');if(nl)nl.style.display=showLogs?'':'none';
   const ns=document.getElementById('navSettings');if(ns)ns.style.display=showSettings?'':'none';
   const nsc=document.getElementById('navScan');if(nsc)nsc.style.display=showScan?'':'none';
   const nr=document.getElementById('navRestart');if(nr)nr.style.display=showRestart?'':'none';
@@ -1069,6 +1072,7 @@ function renderView(){
     case 'history':renderHistory();return;
     case 'settings':if(currentRole!=='admin'){nav('home',document.querySelector('[data-view="home"]'));return;}renderSettings();return;
     case 'downloads':if(!hasPerm('canDownload')){nav('home',document.querySelector('[data-view="home"]'));return;}renderDownloads();return;
+    case 'logs':if(currentRole!=='admin'){nav('home',document.querySelector('[data-view="home"]'));return;}renderLogs();return;
     case 'showDetail':a.innerHTML=renderShowDetail(currentShowName);break;
     default:
       if(currentView.startsWith('custom_')){
@@ -1590,7 +1594,7 @@ async function renderSettings(){
 
   const sysh=renderSysStats();
   const cph=`<div id="corruptedSection">${renderCorruptedSection()}</div>`;
-  const tsh=`<div id="transcodeSection">${renderTranscodeSection()}</div>`;
+  const tsh=``;
 
   // Accounts section (admin only)
   let acctHtml='';
@@ -1666,11 +1670,10 @@ function startSettingsRefresh(){
   clearInterval(window._settingsInterval);
   window._settingsInterval=setInterval(async()=>{
     if(currentView!=='settings'){clearInterval(window._settingsInterval);return;}
-    await Promise.all([fetchSpriteProgress(),fetchSysStats(),fetchCorrupted(),fetchNowWatching()]);
+    await Promise.all([fetchSpriteProgress(),fetchSysStats(),fetchCorrupted()]);
     updateSpriteProgress();
     updateSysStats();
     updateCorruptedSection();
-    updateTranscodeSection();
   },3000);
 }
 
@@ -2535,6 +2538,83 @@ function dlStatusLabel(state){
 }
 function dlFormatSpeed(bps){if(bps<=0)return '';if(bps<1024)return bps+' B/s';if(bps<1048576)return(bps/1024).toFixed(1)+' KB/s';return(bps/1048576).toFixed(1)+' MB/s';}
 function dlFormatEta(s){if(s<=0||s>=8640000)return '';const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sec=s%60;return(h?h+'h ':'')+(m?m+'m ':'')+(sec&&!h?sec+'s':'');}
+
+async function renderLogs(){
+  const a=document.getElementById('contentArea');
+  a.innerHTML=`<div class="dl-page">
+    <h2 style="font-size:1.3rem;font-weight:700;margin-bottom:4px">Logs</h2>
+    <p style="color:var(--text-muted);font-size:.82rem;margin-bottom:16px">Activity across all profiles</p>
+    <div class="dl-tabs" style="margin-bottom:16px">
+      <button class="filter-btn active" id="logsTabNow" onclick="logsTab('now',this)">Now Watching</button>
+      <button class="filter-btn" id="logsTabHistory" onclick="logsTab('history',this)">Watch History</button>
+    </div>
+    <div id="logsContent"><div style="text-align:center;padding:60px;color:var(--text-muted)">Loading...</div></div>
+  </div>`;
+  _logsCurrentTab='now';
+  await logsRenderTab('now');
+  clearInterval(window._logsInterval);
+  window._logsInterval=setInterval(async()=>{
+    if(currentView!=='logs'){clearInterval(window._logsInterval);return;}
+    if(_logsCurrentTab==='now')await logsRenderTab('now');
+  },5000);
+}
+
+let _logsCurrentTab='now';
+async function logsTab(tab,btn){
+  document.querySelectorAll('#logsTabNow,#logsTabHistory').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  _logsCurrentTab=tab;
+  await logsRenderTab(tab);
+}
+
+async function logsRenderTab(tab){
+  const el=document.getElementById('logsContent');
+  if(!el)return;
+  if(tab==='now'){
+    let viewers=[];
+    try{const r=await fetch('/api/now-watching',{credentials:'same-origin'});if(r.ok)viewers=await r.json();}catch{}
+    if(viewers.length===0){
+      el.innerHTML=`<div style="text-align:center;padding:60px;color:var(--text-muted);font-size:.9rem">Nobody is watching anything right now.</div>`;
+      return;
+    }
+    el.innerHTML=`<div style="display:flex;flex-direction:column;gap:10px">${viewers.map(v=>{
+      const pct=v.duration?Math.round(v.currentTime/v.duration*100):0;
+      const cur=Math.floor(v.currentTime/60)+':'+String(Math.floor(v.currentTime%60)).padStart(2,'0');
+      const dur=Math.floor(v.duration/60)+':'+String(Math.floor(v.duration%60)).padStart(2,'0');
+      return `<div class="history-item" style="display:flex;align-items:center;gap:14px;padding:14px;background:var(--bg-card);border-radius:10px">
+        <div style="width:38px;height:38px;border-radius:50%;background:var(--accent-glow);display:flex;align-items:center;justify-content:center;font-size:1.1rem;font-weight:700;color:var(--accent);flex-shrink:0">${v.profileName.charAt(0).toUpperCase()}</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${v.title}</div>
+          <div style="font-size:.78rem;color:var(--text-muted);margin-top:2px">${v.profileName} &bull; ${cur} / ${dur} (${pct}%)</div>
+          <div style="margin-top:6px;height:3px;background:rgba(255,255,255,.1);border-radius:2px"><div style="height:3px;background:var(--accent);border-radius:2px;width:${pct}%"></div></div>
+        </div>
+        <span style="font-size:.7rem;padding:3px 8px;border-radius:99px;background:rgba(var(--accent-rgb),.15);color:var(--accent);white-space:nowrap">LIVE</span>
+      </div>`;
+    }).join('')}</div>`;
+  } else {
+    let logs=[];
+    try{const r=await fetch('/api/admin/logs',{credentials:'same-origin'});if(r.ok)logs=await r.json();}catch{}
+    if(logs.length===0){
+      el.innerHTML=`<div style="text-align:center;padding:60px;color:var(--text-muted);font-size:.9rem">No watch history yet.</div>`;
+      return;
+    }
+    el.innerHTML=`<div style="display:flex;flex-direction:column;gap:6px">${logs.map(e=>{
+      const d=new Date(e.timestamp);
+      const dateStr=d.toLocaleDateString()+' '+d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+      const pct=e.percent||0;
+      const watchedBadge=e.watched?`<span style="font-size:.68rem;padding:2px 7px;border-radius:99px;background:rgba(80,200,120,.15);color:#50c878;white-space:nowrap">Watched</span>`
+        :(pct>0?`<span style="font-size:.68rem;padding:2px 7px;border-radius:99px;background:rgba(255,255,255,.08);color:var(--text-muted);white-space:nowrap">${pct}%</span>`:'');
+      return `<div style="display:flex;align-items:center;gap:12px;padding:12px 14px;background:var(--bg-card);border-radius:8px">
+        <div style="width:32px;height:32px;border-radius:50%;background:var(--accent-glow);display:flex;align-items:center;justify-content:center;font-size:.9rem;font-weight:700;color:var(--accent);flex-shrink:0">${e.profileName.charAt(0).toUpperCase()}</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:600;font-size:.9rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${e.title}</div>
+          <div style="font-size:.75rem;color:var(--text-muted);margin-top:1px">${e.profileName} &bull; ${dateStr}</div>
+        </div>
+        ${watchedBadge}
+      </div>`;
+    }).join('')}</div>`;
+  }
+}
 
 async function renderDownloads(){
   const a=document.getElementById('contentArea');

@@ -2392,6 +2392,30 @@ app.get('/api/now-watching', requireAdminSession, (_req, res) => {
   res.json(active);
 });
 
+// GET /api/admin/logs — combined watch history for all profiles
+app.get('/api/admin/logs', requireAdminSession, (_req, res) => {
+  const entries = [];
+  for (const profile of config.profiles) {
+    const data = loadProfileData(profile.id);
+    for (const h of (data.history || [])) {
+      const prog = data.progress[h.id];
+      entries.push({
+        profileId: profile.id,
+        profileName: profile.name || profile.id,
+        id: h.id,
+        title: h.title || h.id,
+        timestamp: h.timestamp,
+        currentTime: prog?.currentTime || 0,
+        duration: prog?.duration || 0,
+        percent: prog?.percent || 0,
+        watched: !!data.watched[h.id],
+      });
+    }
+  }
+  entries.sort((a, b) => b.timestamp - a.timestamp);
+  res.json(entries);
+});
+
 // System stats API
 let _prevCpu = null;
 app.get('/api/system/stats', requireAdminSession, (_req, res) => {
