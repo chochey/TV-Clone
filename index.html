@@ -636,7 +636,19 @@ let currentPermissions=[]; // ['canDownload','canScan','canRestart']
 function hasPerm(p){return currentRole==='admin'||currentPermissions.includes(p);}
 // Admin auth is handled via HttpOnly cookie — no token in JS needed
 function adminHeaders(){return{'Content-Type':'application/json'};}
-function adminFetch(url,opts={}){opts.credentials='same-origin';return fetch(url,opts);}
+async function adminFetch(url,opts={}){
+  opts.credentials='same-origin';
+  const r=await fetch(url,opts);
+  if(r.status===403){
+    // adminSession cookie is stale (server restarted) — force full re-login
+    await fetch('/api/logout',{method:'POST',credentials:'same-origin'});
+    currentProfile=null;currentSession=null;
+    document.getElementById('mainApp').style.display='none';
+    document.getElementById('profileScreen').style.display='flex';
+    showToast('Session expired — please log in again');
+  }
+  return r;
+}
 
 function updateSystemVisibility(){
   const isAdmin=currentRole==='admin';
