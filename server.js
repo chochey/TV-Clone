@@ -3064,8 +3064,9 @@ app.post('/api/scan', requirePermission('canScan'), async (_req, res) => {
   scanRunning = false;
 });
 
-// ── Media Organizer logs endpoint ───────────────────────────────────────
-const ORGANIZER_LOG = process.env.ORGANIZER_LOG || '/home/blue/Desktop/Repos/Media-Organizer/media-organizer.log';
+// ── Media Organizer ──────────────────────────────────────────────────────
+const ORGANIZER_LOG     = process.env.ORGANIZER_LOG     || '/home/blue/Desktop/Repos/TV-Clone-prod/media-organizer/media-organizer.log';
+const ORGANIZER_SERVICE = process.env.ORGANIZER_SERVICE || 'tvclone-organizer.service';
 
 app.get('/api/organizer/logs', requireAdminSession, async (req, res) => {
   const lines = parseInt(req.query.lines) || 200;
@@ -3092,6 +3093,38 @@ app.get('/api/organizer/logs', requireAdminSession, async (req, res) => {
     if (err.code === 'ENOENT') return res.json({ ok: false, error: 'Log file not found' });
     res.json({ ok: false, error: err.message });
   }
+});
+
+// Organizer service control — uses sudo rules in /etc/sudoers.d/tvclone-organizer
+function organizerServiceCmd(action) {
+  return new Promise((resolve) => {
+    const proc = spawn('sudo', ['systemctl', action, ORGANIZER_SERVICE]);
+    let stderr = '';
+    proc.stderr.on('data', d => stderr += d);
+    proc.on('close', code => resolve({ ok: code === 0, code, stderr: stderr.trim() }));
+    proc.on('error', err => resolve({ ok: false, code: -1, stderr: err.message }));
+  });
+}
+
+app.get('/api/organizer/status', requireAdminSession, async (_req, res) => {
+  const result = await organizerServiceCmd('status');
+  const active = result.code === 0;
+  res.json({ ok: true, active, code: result.code });
+});
+
+app.post('/api/organizer/start', requireAdminSession, async (_req, res) => {
+  const result = await organizerServiceCmd('start');
+  res.json({ ok: result.ok, error: result.ok ? undefined : result.stderr });
+});
+
+app.post('/api/organizer/stop', requireAdminSession, async (_req, res) => {
+  const result = await organizerServiceCmd('stop');
+  res.json({ ok: result.ok, error: result.ok ? undefined : result.stderr });
+});
+
+app.post('/api/organizer/restart', requireAdminSession, async (_req, res) => {
+  const result = await organizerServiceCmd('restart');
+  res.json({ ok: result.ok, error: result.ok ? undefined : result.stderr });
 });
 
 // ── Restart endpoint ────────────────────────────────────────────────────
