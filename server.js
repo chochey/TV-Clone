@@ -1336,12 +1336,13 @@ app.post('/api/profiles/:id/verify-pin', requireAuth, (req, res) => {
 // Helper: extract profile from request, validating against session if available
 function getRequestProfile(req) {
   const session = getSession(req);
-  const requested = req.query.profile || req.body?.profile || 'default';
+  const sessionProfileId = session?.profileId || 'default';
+  const requested = req.query.profile || req.body?.profile || sessionProfileId;
   // If logged in, enforce that users can only access their own profile data
   if (session && session.role !== 'admin' && requested !== session.profileId) {
     return null; // unauthorized
   }
-  return session ? (requested || session.profileId) : requested;
+  return session ? (requested || sessionProfileId) : requested;
 }
 
 app.get('/api/library', requireAuth, (req, res) => {

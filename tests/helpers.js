@@ -76,10 +76,10 @@ async function showControls(page) {
   await page.waitForTimeout(500);
 }
 
-// Make an API call using the browser's session
+// Make an API call using the browser's session (credentials: include sends cookies)
 async function apiCall(page, path) {
   return page.evaluate(async (url) => {
-    const res = await fetch(url);
+    const res = await fetch(url, { credentials: 'include' });
     return { status: res.status, data: await res.json() };
   }, path);
 }

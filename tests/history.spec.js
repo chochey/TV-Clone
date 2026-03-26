@@ -31,7 +31,7 @@ test.describe('Watch History', () => {
   test('history API returns items', async ({ page }) => {
     await loginAsUser(page);
     const result = await page.evaluate(async () => {
-      const res = await fetch('/api/history');
+      const res = await fetch('/api/history', { credentials: 'include' });
       return { status: res.status, data: await res.json() };
     });
     expect(result.status).toBe(200);

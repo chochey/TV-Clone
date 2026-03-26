@@ -32,9 +32,10 @@ test.describe('Queue / Up Next', () => {
 
     // Add an item via API first
     await page.evaluate(async () => {
-      const lib = await (await fetch('/api/library')).json();
+      const lib = await (await fetch('/api/library', { credentials: 'include' })).json();
       await fetch('/api/queue/add', {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: lib[0].id }),
       });
@@ -54,9 +55,10 @@ test.describe('Queue / Up Next', () => {
 
     // Ensure queue has an item
     await page.evaluate(async () => {
-      const lib = await (await fetch('/api/library')).json();
+      const lib = await (await fetch('/api/library', { credentials: 'include' })).json();
       await fetch('/api/queue/add', {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: lib[0].id }),
       });
@@ -79,10 +81,11 @@ test.describe('Queue / Up Next', () => {
 
     // Add item to queue
     await page.evaluate(async () => {
-      const lib = await (await fetch('/api/library')).json();
+      const lib = await (await fetch('/api/library', { credentials: 'include' })).json();
       if (lib.length > 1) {
         await fetch('/api/queue/add', {
           method: 'POST',
+          credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ id: lib[1].id }),
         });

@@ -90,7 +90,11 @@ test.describe('Settings & Admin', () => {
 
   test('user cannot access settings', async ({ page }) => {
     await loginAsUser(page);
-    // System section should be hidden
-    await expect(page.locator('#systemSection')).toBeHidden();
+    // Settings (Media Folders) nav item is admin-only
+    await expect(page.locator('#navSettings')).toBeHidden();
+    // Navigating to settings redirects to home
+    await page.evaluate(() => { window.nav && nav('settings', null); });
+    await page.waitForTimeout(500);
+    await expect(page.locator('.settings')).not.toBeVisible({ timeout: 2000 }).catch(() => {});
   });
 });

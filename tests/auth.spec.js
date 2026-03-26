@@ -81,9 +81,10 @@ test.describe('Authentication & Login', () => {
     await expect(page.locator('#systemSection')).toBeVisible();
   });
 
-  test('user cannot see system section', async ({ page }) => {
+  test('user cannot see settings nav item', async ({ page }) => {
     await loginAsUser(page);
-    await expect(page.locator('#systemSection')).toBeHidden();
+    // Regular users never see the Media Folders (settings) nav item regardless of permissions
+    await expect(page.locator('#navSettings')).toBeHidden();
   });
 
   test('sign out returns to login form', async ({ page }) => {
