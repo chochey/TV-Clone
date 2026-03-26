@@ -2560,11 +2560,43 @@ async function renderLogs(){
 }
 
 let _logsCurrentTab='now';
+let _logsCache=[];
+let _logsFilterUser='all';
+let _logsFilterStatus='all';
+let _logsSearch='';
+
 async function logsTab(tab,btn){
   document.querySelectorAll('#logsTabNow,#logsTabHistory').forEach(b=>b.classList.remove('active'));
   btn.classList.add('active');
   _logsCurrentTab=tab;
   await logsRenderTab(tab);
+}
+
+function logsApplyFilters(){
+  let data=_logsCache;
+  if(_logsFilterUser!=='all') data=data.filter(e=>e.profileId===_logsFilterUser);
+  if(_logsFilterStatus==='watched') data=data.filter(e=>e.watched);
+  if(_logsFilterStatus==='inprogress') data=data.filter(e=>!e.watched&&e.percent>0&&e.percent<95);
+  if(_logsSearch) data=data.filter(e=>e.title.toLowerCase().includes(_logsSearch)||e.profileName.toLowerCase().includes(_logsSearch));
+  const el=document.getElementById('logsResults');
+  if(!el)return;
+  if(data.length===0){el.innerHTML=`<div style="text-align:center;padding:40px;color:var(--text-muted);font-size:.9rem">No results.</div>`;return;}
+  el.innerHTML=data.map(e=>{
+    const d=new Date(e.timestamp);
+    const dateStr=d.toLocaleDateString()+' '+d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+    const pct=e.percent||0;
+    const watchedBadge=e.watched
+      ?`<span style="font-size:.68rem;padding:2px 7px;border-radius:99px;background:rgba(80,200,120,.15);color:#50c878;white-space:nowrap">Watched</span>`
+      :(pct>0?`<span style="font-size:.68rem;padding:2px 7px;border-radius:99px;background:rgba(255,255,255,.08);color:var(--text-muted);white-space:nowrap">${pct}%</span>`:'');
+    return `<div style="display:flex;align-items:center;gap:12px;padding:12px 14px;background:var(--bg-card);border-radius:8px">
+      <div style="width:32px;height:32px;border-radius:50%;background:var(--accent-glow);display:flex;align-items:center;justify-content:center;font-size:.9rem;font-weight:700;color:var(--accent);flex-shrink:0">${e.profileName.charAt(0).toUpperCase()}</div>
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:600;font-size:.9rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${e.title}</div>
+        <div style="font-size:.75rem;color:var(--text-muted);margin-top:1px">${e.profileName} &bull; ${dateStr}</div>
+      </div>
+      ${watchedBadge}
+    </div>`;
+  }).join('');
 }
 
 async function logsRenderTab(tab){
@@ -2581,7 +2613,7 @@ async function logsRenderTab(tab){
       const pct=v.duration?Math.round(v.currentTime/v.duration*100):0;
       const cur=Math.floor(v.currentTime/60)+':'+String(Math.floor(v.currentTime%60)).padStart(2,'0');
       const dur=Math.floor(v.duration/60)+':'+String(Math.floor(v.duration%60)).padStart(2,'0');
-      return `<div class="history-item" style="display:flex;align-items:center;gap:14px;padding:14px;background:var(--bg-card);border-radius:10px">
+      return `<div style="display:flex;align-items:center;gap:14px;padding:14px;background:var(--bg-card);border-radius:10px">
         <div style="width:38px;height:38px;border-radius:50%;background:var(--accent-glow);display:flex;align-items:center;justify-content:center;font-size:1.1rem;font-weight:700;color:var(--accent);flex-shrink:0">${v.profileName.charAt(0).toUpperCase()}</div>
         <div style="flex:1;min-width:0">
           <div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${v.title}</div>
@@ -2592,27 +2624,27 @@ async function logsRenderTab(tab){
       </div>`;
     }).join('')}</div>`;
   } else {
-    let logs=[];
-    try{const r=await fetch('/api/admin/logs',{credentials:'same-origin'});if(r.ok)logs=await r.json();}catch{}
-    if(logs.length===0){
+    try{const r=await fetch('/api/admin/logs',{credentials:'same-origin'});if(r.ok)_logsCache=await r.json();}catch{}
+    if(_logsCache.length===0){
       el.innerHTML=`<div style="text-align:center;padding:60px;color:var(--text-muted);font-size:.9rem">No watch history yet.</div>`;
       return;
     }
-    el.innerHTML=`<div style="display:flex;flex-direction:column;gap:6px">${logs.map(e=>{
-      const d=new Date(e.timestamp);
-      const dateStr=d.toLocaleDateString()+' '+d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
-      const pct=e.percent||0;
-      const watchedBadge=e.watched?`<span style="font-size:.68rem;padding:2px 7px;border-radius:99px;background:rgba(80,200,120,.15);color:#50c878;white-space:nowrap">Watched</span>`
-        :(pct>0?`<span style="font-size:.68rem;padding:2px 7px;border-radius:99px;background:rgba(255,255,255,.08);color:var(--text-muted);white-space:nowrap">${pct}%</span>`:'');
-      return `<div style="display:flex;align-items:center;gap:12px;padding:12px 14px;background:var(--bg-card);border-radius:8px">
-        <div style="width:32px;height:32px;border-radius:50%;background:var(--accent-glow);display:flex;align-items:center;justify-content:center;font-size:.9rem;font-weight:700;color:var(--accent);flex-shrink:0">${e.profileName.charAt(0).toUpperCase()}</div>
-        <div style="flex:1;min-width:0">
-          <div style="font-weight:600;font-size:.9rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${e.title}</div>
-          <div style="font-size:.75rem;color:var(--text-muted);margin-top:1px">${e.profileName} &bull; ${dateStr}</div>
-        </div>
-        ${watchedBadge}
-      </div>`;
-    }).join('')}</div>`;
+    // Build unique user list for filter
+    const users=[...new Map(_logsCache.map(e=>[e.profileId,e.profileName])).entries()];
+    const userOpts=`<option value="all">All Users</option>`+users.map(([id,name])=>`<option value="${id}"${_logsFilterUser===id?' selected':''}>${name}</option>`).join('');
+    el.innerHTML=`
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;align-items:center">
+        <input class="form-input" type="text" placeholder="Search title or user..." value="${_logsSearch}" oninput="_logsSearch=this.value.toLowerCase();logsApplyFilters()" style="flex:1;min-width:160px;max-width:280px;padding:6px 10px;font-size:.82rem">
+        <select class="sort-select" onchange="_logsFilterUser=this.value;logsApplyFilters()">${userOpts}</select>
+        <select class="sort-select" onchange="_logsFilterStatus=this.value;logsApplyFilters()">
+          <option value="all"${_logsFilterStatus==='all'?' selected':''}>All Status</option>
+          <option value="watched"${_logsFilterStatus==='watched'?' selected':''}>Watched</option>
+          <option value="inprogress"${_logsFilterStatus==='inprogress'?' selected':''}>In Progress</option>
+        </select>
+        <span style="font-size:.78rem;color:var(--text-muted)">${_logsCache.length} entries</span>
+      </div>
+      <div id="logsResults" style="display:flex;flex-direction:column;gap:6px"></div>`;
+    logsApplyFilters();
   }
 }
 
