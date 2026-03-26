@@ -1930,7 +1930,11 @@ async function setQuality(preset){
   _currentQuality=preset;
   updateQualityUI();
   // Save preference to profile
-  try{await fetch('/api/me/quality',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({quality:preset})});}catch(e){console.error('[Quality] Save error:',e);}
+  try{
+    const r=await fetch('/api/me/quality',{method:'PUT',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({quality:preset})});
+    if(r.ok){const labels={low:'Low',auto:'Auto',high:'High'};showToast('Quality set to '+labels[preset]);}
+    else{showToast('Failed to save quality');_currentQuality=preset==='low'?'auto':preset==='auto'?'high':'low';updateQualityUI();}
+  }catch(e){console.error('[Quality] Save error:',e);}
   // Restart HLS with new quality — keep current playback position
   if(currentMedia&&currentMedia.streamMode&&currentMedia.streamMode!=='direct'&&typeof window._hlsLoad==='function'){
     const currentTime=V.currentTime+(window._hlsSeekOffset||0);

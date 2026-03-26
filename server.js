@@ -1227,6 +1227,9 @@ app.post('/api/login', (req, res) => {
     return res.status(403).json({ error: 'Invalid username or password' });
   }
 
+  // Successful login — reset rate limit counter
+  loginAttempts[ip].count = 0;
+
   const role = profile.role || 'user';
   const permissions = role === 'admin' ? [...VALID_PERMISSIONS] : (profile.permissions || []);
   const token = createSession(profile.id, role, permissions);
@@ -1432,6 +1435,10 @@ app.post('/api/progress', requireAuth, (req, res) => {
 
   // Auto-mark as watched if above threshold
   if (percent > AUTO_WATCHED_PERCENT) data.watched[id] = true;
+
+  // Clear dismissals when user actively watches something — they clearly want to see it again
+  if (data.dismissed?.continueWatching?.[id]) delete data.dismissed.continueWatching[id];
+  if (data.dismissed?.recentlyAdded?.[id]) delete data.dismissed.recentlyAdded[id];
 
   // Update history — use cached library to avoid triggering a full rescan
   const item = (libraryCache || []).find(m => m.id === id);
