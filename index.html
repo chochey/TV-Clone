@@ -670,7 +670,7 @@ function updateSystemVisibility(){
   const showSettings=isAdmin; // settings/folders always admin-only
   const showScan=isAdmin||currentPermissions.includes('canScan');
   const showRestart=isAdmin||currentPermissions.includes('canRestart');
-  const showLogs=isAdmin;
+  const showLogs=isAdmin||currentPermissions.includes('canLogs');
   const showSystem=showDownloads||showSettings||showScan||showRestart||showLogs;
   const el=document.getElementById('systemSection');
   if(el){showSystem?el.classList.add('visible'):el.classList.remove('visible');}
@@ -835,6 +835,7 @@ function createProfile(){
         <div style="display:flex;align-items:center;gap:10px;cursor:pointer" onclick="document.getElementById('permDownload').click()"><input type="checkbox" id="permDownload" style="width:18px;height:18px;flex-shrink:0;accent-color:var(--accent)" onclick="event.stopPropagation()"><span style="font-size:.85rem;color:var(--text-primary);text-transform:none;letter-spacing:0;font-weight:400">Downloads — search &amp; manage torrents</span></div>
         <div style="display:flex;align-items:center;gap:10px;cursor:pointer" onclick="document.getElementById('permScan').click()"><input type="checkbox" id="permScan" style="width:18px;height:18px;flex-shrink:0;accent-color:var(--accent)" onclick="event.stopPropagation()"><span style="font-size:.85rem;color:var(--text-primary);text-transform:none;letter-spacing:0;font-weight:400">Scan Library — trigger media rescans</span></div>
         <div style="display:flex;align-items:center;gap:10px;cursor:pointer" onclick="document.getElementById('permRestart').click()"><input type="checkbox" id="permRestart" style="width:18px;height:18px;flex-shrink:0;accent-color:var(--accent)" onclick="event.stopPropagation()"><span style="font-size:.85rem;color:var(--text-primary);text-transform:none;letter-spacing:0;font-weight:400">Restart Server</span></div>
+        <div style="display:flex;align-items:center;gap:10px;cursor:pointer" onclick="document.getElementById('permLogs').click()"><input type="checkbox" id="permLogs" style="width:18px;height:18px;flex-shrink:0;accent-color:var(--accent)" onclick="event.stopPropagation()"><span style="font-size:.85rem;color:var(--text-primary);text-transform:none;letter-spacing:0;font-weight:400">Logs — view watch activity &amp; now watching</span></div>
       </div>
     </div>
     <div class="modal-field">
@@ -868,6 +869,7 @@ function getSelectedPermissions(){
   if(document.getElementById('permDownload')?.checked) perms.push('canDownload');
   if(document.getElementById('permScan')?.checked) perms.push('canScan');
   if(document.getElementById('permRestart')?.checked) perms.push('canRestart');
+  if(document.getElementById('permLogs')?.checked) perms.push('canLogs');
   return perms;
 }
 
@@ -920,6 +922,7 @@ async function editAccount(profileId){
         <div style="display:flex;align-items:center;gap:10px;cursor:pointer" onclick="document.getElementById('permDownload').click()"><input type="checkbox" id="permDownload" style="width:18px;height:18px;flex-shrink:0;accent-color:var(--accent)" onclick="event.stopPropagation()"${perms.includes('canDownload')?' checked':''}><span style="font-size:.85rem;color:var(--text-primary);text-transform:none;letter-spacing:0;font-weight:400">Downloads — search &amp; manage torrents</span></div>
         <div style="display:flex;align-items:center;gap:10px;cursor:pointer" onclick="document.getElementById('permScan').click()"><input type="checkbox" id="permScan" style="width:18px;height:18px;flex-shrink:0;accent-color:var(--accent)" onclick="event.stopPropagation()"${perms.includes('canScan')?' checked':''}><span style="font-size:.85rem;color:var(--text-primary);text-transform:none;letter-spacing:0;font-weight:400">Scan Library — trigger media rescans</span></div>
         <div style="display:flex;align-items:center;gap:10px;cursor:pointer" onclick="document.getElementById('permRestart').click()"><input type="checkbox" id="permRestart" style="width:18px;height:18px;flex-shrink:0;accent-color:var(--accent)" onclick="event.stopPropagation()"${perms.includes('canRestart')?' checked':''}><span style="font-size:.85rem;color:var(--text-primary);text-transform:none;letter-spacing:0;font-weight:400">Restart Server</span></div>
+        <div style="display:flex;align-items:center;gap:10px;cursor:pointer" onclick="document.getElementById('permLogs').click()"><input type="checkbox" id="permLogs" style="width:18px;height:18px;flex-shrink:0;accent-color:var(--accent)" onclick="event.stopPropagation()"${perms.includes('canLogs')?' checked':''}><span style="font-size:.85rem;color:var(--text-primary);text-transform:none;letter-spacing:0;font-weight:400">Logs — view watch activity &amp; now watching</span></div>
       </div>
     </div>
     <div class="modal-field">
@@ -1072,7 +1075,7 @@ function renderView(){
     case 'history':renderHistory();return;
     case 'settings':if(currentRole!=='admin'){nav('home',document.querySelector('[data-view="home"]'));return;}renderSettings();return;
     case 'downloads':if(!hasPerm('canDownload')){nav('home',document.querySelector('[data-view="home"]'));return;}renderDownloads();return;
-    case 'logs':if(currentRole!=='admin'){nav('home',document.querySelector('[data-view="home"]'));return;}renderLogs();return;
+    case 'logs':if(currentRole!=='admin'&&!hasPerm('canLogs')){nav('home',document.querySelector('[data-view="home"]'));return;}renderLogs();return;
     case 'showDetail':a.innerHTML=renderShowDetail(currentShowName);break;
     default:
       if(currentView.startsWith('custom_')){
@@ -1610,6 +1613,7 @@ async function renderSettings(){
         if(perms.includes('canDownload'))permTags.push('<span style="background:rgba(59,130,246,.2);color:#60a5fa;padding:2px 6px;border-radius:4px;font-size:.65rem;font-weight:600">DL</span>');
         if(perms.includes('canScan'))permTags.push('<span style="background:rgba(16,185,129,.2);color:#34d399;padding:2px 6px;border-radius:4px;font-size:.65rem;font-weight:600">SCAN</span>');
         if(perms.includes('canRestart'))permTags.push('<span style="background:rgba(245,158,11,.2);color:#fbbf24;padding:2px 6px;border-radius:4px;font-size:.65rem;font-weight:600">RST</span>');
+        if(perms.includes('canLogs'))permTags.push('<span style="background:rgba(168,85,247,.2);color:#c084fc;padding:2px 6px;border-radius:4px;font-size:.65rem;font-weight:600">LOGS</span>');
         roleBadge='<span style="background:rgba(255,255,255,.1);color:var(--text-secondary);padding:2px 8px;border-radius:4px;font-size:.7rem;font-weight:700">USER</span>'+(permTags.length?' '+permTags.join(' '):'');
       }
       const lockIcon=p.hasPassword?'&#128274;':'<span style="color:var(--text-muted)">None</span>';
