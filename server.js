@@ -1418,6 +1418,17 @@ app.post('/api/progress', requireAuth, (req, res) => {
   const percent = duration > 0 ? Math.round((currentTime / duration) * 100) : 0;
   data.progress[id] = { currentTime: currentTime || 0, duration: duration || 0, percent, updatedAt: Date.now() };
 
+  // Track who is watching what right now
+  const prof = config.profiles.find(p => p.id === profileId);
+  nowWatching[profileId] = {
+    profileName: prof?.name || profileId,
+    id,
+    title: (libraryCache || []).find(m => m.id === id)?.title || path.basename(fileIndex[id] || id),
+    currentTime: currentTime || 0,
+    duration: duration || 0,
+    updatedAt: Date.now(),
+  };
+
   // Auto-mark as watched if above threshold
   if (percent > AUTO_WATCHED_PERCENT) data.watched[id] = true;
 
@@ -2070,6 +2081,7 @@ function waitForTranscodeIdle(timeoutMs = 10 * 60 * 1000) {
 const spriteJobs = {}; // id -> { done, thumbId, totalSheets, duration }
 const spriteQueue = { total: 0, completed: 0, current: '', running: false };
 let lastPlaybackAt = 0; // timestamp of last segment/stream request — used to pause sprite gen during playback
+const nowWatching = {}; // profileId -> { profileName, id, title, currentTime, duration, updatedAt }
 let spriteGenEnabled = true; // can be toggled via /api/sprites/pause and /api/sprites/resume
 
 function getThumbId(filePath) {
@@ -2365,6 +2377,13 @@ app.delete('/api/corrupted/:id', requireAdminSession, (req, res) => {
   res.json({ ok: true });
 });
 
+// GET /api/now-watching — who is actively watching (progress ping within last 60s)
+app.get('/api/now-watching', requireAdminSession, (_req, res) => {
+  const cutoff = Date.now() - 60000;
+  const active = Object.values(nowWatching).filter(w => w.updatedAt >= cutoff);
+  res.json(active);
+});
+
 // System stats API
 let _prevCpu = null;
 app.get('/api/system/stats', requireAdminSession, (_req, res) => {
@@ -2652,6 +2671,7 @@ function startFfmpeg(id, filePath, sessionDir, seekTime, startSegNum, audioStrea
     timeout: setTimeout(() => cleanupSession(id), TRANSCODE_TIMEOUT_MS),
     startSeg: startSegNum,
     lastRestartAt: Date.now(),
+    startedAt: Date.now(),
   };
 }
 
@@ -2732,11 +2752,18 @@ app.get('/hls/:id/master.m3u8', requireAuth, ensureLibrary, async (req, res) => 
   console.log(`[HLS] Starting ${mode} for ${id.slice(0,8)} at ${startTime.toFixed(1)}s${audioTrack !== null ? ` audio:${audioTrack}` : ''} quality:${quality}`);
   startFfmpeg(id, filePath, sessionDir, startTime, 0, audioTrack, quality);
 
-  // Store the seek offset, audio track, and quality on the session
+  // Store the seek offset, audio track, quality, and viewer info on the session
   if (transcodeSessions[id]) {
     transcodeSessions[id].seekOffset = startTime;
     transcodeSessions[id].audioTrack = audioTrack;
     transcodeSessions[id].quality = quality;
+    transcodeSessions[id].filePath = filePath;
+    const sess = getSession(req);
+    if (sess) {
+      transcodeSessions[id].profileId = sess.profileId;
+      const prof = config.profiles.find(p => p.id === sess.profileId);
+      transcodeSessions[id].profileName = prof?.name || sess.profileId;
+    }
   }
 
   // Wait for ffmpeg to produce its m3u8 with real segment durations

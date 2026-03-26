@@ -276,6 +276,16 @@ select,input{font-family:inherit}
 .corrupted-item-title{font-size:.85rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .corrupted-item-reason{font-size:.75rem;color:#e5484d;margin-top:2px;font-family:monospace;word-break:break-all}
 .corrupted-item-date{font-size:.72rem;color:var(--text-muted);margin-top:2px}
+.transcode-section{background:var(--bg-card);border-radius:10px;padding:16px 20px;margin-bottom:20px}
+.transcode-section-title{font-size:.9rem;font-weight:700;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;gap:8px}
+.transcode-badge{font-size:.7rem;padding:2px 8px;border-radius:10px;font-weight:600}
+.transcode-badge.active{background:rgba(16,185,129,.15);color:#34d399}
+.transcode-badge.idle{background:rgba(255,255,255,.08);color:var(--text-muted)}
+.transcode-list{display:flex;flex-direction:column;gap:6px;margin-top:8px}
+.transcode-item{display:flex;align-items:center;gap:10px;padding:10px 12px;background:rgba(99,102,241,.07);border:1px solid rgba(99,102,241,.18);border-radius:8px}
+.transcode-item-body{flex:1;min-width:0}
+.transcode-item-file{font-size:.85rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.transcode-item-meta{font-size:.75rem;color:var(--text-secondary);margin-top:2px}
 .sys-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:20px}
 .sys-card{background:var(--bg-card);border-radius:10px;padding:16px}
 .sys-card-title{font-size:.75rem;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;font-weight:600}
@@ -1462,6 +1472,25 @@ let spriteProgress=null;
 async function fetchSpriteProgress(){try{spriteProgress=await(await fetch('/api/sprites/progress')).json();}catch{spriteProgress=null;}}
 let corruptedData=null;
 async function fetchCorrupted(){try{corruptedData=await(await adminFetch('/api/corrupted')).json();}catch{corruptedData=null;}}
+let nowWatchingData=null;
+async function fetchNowWatching(){try{nowWatchingData=await(await adminFetch('/api/now-watching')).json();}catch{nowWatchingData=null;}}
+function fmtProgress(cur,dur){if(!dur)return '';const pct=Math.round(cur/dur*100);const m=Math.floor(cur/60),s=Math.floor(cur%60);return `${m}:${String(s).padStart(2,'0')} / ${Math.floor(dur/60)}:${String(Math.floor(dur%60)).padStart(2,'0')} (${pct}%)`;}
+function renderTranscodeSection(){
+  const viewers=nowWatchingData||[];
+  const count=viewers.length;
+  const badge=count>0?`<span class="transcode-badge active">${count} watching</span>`:`<span class="transcode-badge idle">Nobody</span>`;
+  let list='';
+  if(count>0){
+    const items=viewers.map(w=>`<div class="transcode-item"><div class="transcode-item-body"><div class="transcode-item-file">${esc(w.title)}</div><div class="transcode-item-meta">${esc(w.profileName)}${w.duration?' · '+fmtProgress(w.currentTime,w.duration):''}</div></div></div>`).join('');
+    list=`<div class="transcode-list">${items}</div>`;
+  }
+  return `<div class="transcode-section"><div class="transcode-section-title"><span>Now Watching</span>${badge}</div>${count===0?'<div style="font-size:.8rem;color:var(--text-muted)">Nobody is watching anything right now.</div>':list}</div>`;
+}
+function updateTranscodeSection(){
+  const el=document.getElementById('transcodeSection');
+  if(!el)return;
+  el.outerHTML=`<div id="transcodeSection">${renderTranscodeSection()}</div>`;
+}
 function fmtDate(ms){const d=new Date(ms);return d.toLocaleDateString()+(': ')+d.toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'});}
 function renderCorruptedSection(){
   if(!corruptedData)return '';
@@ -1516,7 +1545,7 @@ function renderSysStats(){
   return html;
 }
 async function renderSettings(){
-  await Promise.all([fetchConfig(),fetchStats(),fetchSpriteProgress(),fetchSysStats(),fetchCorrupted()]);
+  await Promise.all([fetchConfig(),fetchStats(),fetchSpriteProgress(),fetchSysStats(),fetchCorrupted(),fetchNowWatching()]);
   const a=document.getElementById('contentArea');
 
   let fh='';
@@ -1561,6 +1590,7 @@ async function renderSettings(){
 
   const sysh=renderSysStats();
   const cph=`<div id="corruptedSection">${renderCorruptedSection()}</div>`;
+  const tsh=`<div id="transcodeSection">${renderTranscodeSection()}</div>`;
 
   // Accounts section (admin only)
   let acctHtml='';
@@ -1592,7 +1622,7 @@ async function renderSettings(){
   let dtOpts='<option value="movie">Movies</option><option value="show">TV Shows</option><option value="auto">Auto-detect</option>';
   for(const t of existingTypes){if(t!=='movie'&&t!=='show'&&t!=='auto')dtOpts+=`<option value="${esc(t)}">${customTypeLabel(t)}</option>`;}
 
-  a.innerHTML=`<div class="settings"><h1 class="settings-title">Media Folders</h1><p class="settings-subtitle">Link folders from anywhere on this computer. Use movie, show, auto, or type a custom category (e.g. anime).</p><div id="settingsAlert" class="alert"></div>${fh}<div class="add-folder-section"><h3>&#10010; Link a New Folder</h3><div class="form-row"><div class="form-group grow"><label class="form-label">Folder path</label><input class="form-input" type="text" id="addFolderPath" placeholder="/path/to/movies" oninput="onPathInput(this.value)"></div><div class="form-group"><label class="form-label">Type</label><input class="form-input" type="text" id="addFolderType" list="folderTypeList" value="auto" placeholder="movie, show, anime..." style="width:140px"><datalist id="folderTypeList">${dtOpts}</datalist></div><div class="form-group"><label class="form-label">Label</label><input class="form-input" type="text" id="addFolderLabel" placeholder="My Movies" style="width:140px"></div></div><div id="folderBrowser"></div><div style="display:flex;gap:8px;margin-top:4px"><button class="btn btn-primary btn-sm" onclick="addFolder()">&#10010; Link Folder</button><button class="btn btn-secondary btn-sm" onclick="toggleBrowser()">&#128194; Browse</button></div></div>${sh}${sph}${cph}${sysh}${acctHtml}</div>`;
+  a.innerHTML=`<div class="settings"><h1 class="settings-title">Media Folders</h1><p class="settings-subtitle">Link folders from anywhere on this computer. Use movie, show, auto, or type a custom category (e.g. anime).</p><div id="settingsAlert" class="alert"></div>${fh}<div class="add-folder-section"><h3>&#10010; Link a New Folder</h3><div class="form-row"><div class="form-group grow"><label class="form-label">Folder path</label><input class="form-input" type="text" id="addFolderPath" placeholder="/path/to/movies" oninput="onPathInput(this.value)"></div><div class="form-group"><label class="form-label">Type</label><input class="form-input" type="text" id="addFolderType" list="folderTypeList" value="auto" placeholder="movie, show, anime..." style="width:140px"><datalist id="folderTypeList">${dtOpts}</datalist></div><div class="form-group"><label class="form-label">Label</label><input class="form-input" type="text" id="addFolderLabel" placeholder="My Movies" style="width:140px"></div></div><div id="folderBrowser"></div><div style="display:flex;gap:8px;margin-top:4px"><button class="btn btn-primary btn-sm" onclick="addFolder()">&#10010; Link Folder</button><button class="btn btn-secondary btn-sm" onclick="toggleBrowser()">&#128194; Browse</button></div></div>${sh}${sph}${tsh}${cph}${sysh}${acctHtml}</div>`;
   // Auto-refresh sprite progress + system stats
   startSettingsRefresh();
   if(folderConfig.length===0)toggleBrowser();
@@ -1636,10 +1666,11 @@ function startSettingsRefresh(){
   clearInterval(window._settingsInterval);
   window._settingsInterval=setInterval(async()=>{
     if(currentView!=='settings'){clearInterval(window._settingsInterval);return;}
-    await Promise.all([fetchSpriteProgress(),fetchSysStats(),fetchCorrupted()]);
+    await Promise.all([fetchSpriteProgress(),fetchSysStats(),fetchCorrupted(),fetchNowWatching()]);
     updateSpriteProgress();
     updateSysStats();
     updateCorruptedSection();
+    updateTranscodeSection();
   },3000);
 }
 
