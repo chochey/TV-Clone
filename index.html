@@ -2120,6 +2120,10 @@ async function playMedia(id){
   // Trigger sprite sheet generation in background
   if(typeof _loadSprites==='function')_loadSprites(id);
 
+  // Restore saved volume
+  const savedVol=parseFloat(localStorage.getItem('playerVolume'));
+  if(!isNaN(savedVol)){V.volume=Math.max(0,Math.min(1,savedVol));V.muted=savedVol===0;}
+
   // Fully reset video element
   if(hlsInstance){hlsInstance.destroy();hlsInstance=null;}
   V.removeAttribute('src');
@@ -2224,12 +2228,13 @@ async function closePlayer(){
 }
 
 function togglePlay(e){if(e&&e.target.closest('.player-controls,.player-top-bar'))return;V.paused?V.play():V.pause();}
-function toggleMute(){V.muted=!V.muted;updateVolumeUI();syncAudioBoostGain();}
 function setVol(v){
   const next=Math.max(0,Math.min(1,Number(v)||0));
   V.volume=next;V.muted=next===0;
+  localStorage.setItem('playerVolume',next);
   updateVolumeUI();syncAudioBoostGain();
 }
+function toggleMute(){V.muted=!V.muted;if(!V.muted)localStorage.setItem('playerVolume',V.volume);updateVolumeUI();syncAudioBoostGain();}
 function toggleFS(){document.fullscreenElement?document.exitFullscreen().catch(()=>{}):modal.requestFullscreen().catch(()=>{});}
 
 // Click vs double-click on video wrapper (manual detection for reliability)
