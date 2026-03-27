@@ -154,8 +154,9 @@ function saveJSONSync(filePath, data) {
   fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
 }
 
-// Admin token — generated fresh each startup, required for dangerous endpoints
-const adminToken = crypto.randomBytes(24).toString('hex');
+// Admin tokens — per-session, generated at login and stored in the session map.
+// Invalidated automatically when the session expires or the user logs out.
+const adminTokens = new Map(); // adminToken -> sessionToken
 
 let config = loadJSON(CONFIG_FILE, DEFAULT_CONFIG);
 if (!config.profiles || config.profiles.length === 0) {
@@ -226,6 +227,18 @@ function createSession(profileId, role, permissions) {
   sessions.set(token, { profileId, role, permissions: permissions || [], createdAt: Date.now() });
   persistSessions();
   return token;
+}
+
+function createAdminToken(sessionToken) {
+  const aToken = crypto.randomBytes(24).toString('hex');
+  adminTokens.set(aToken, sessionToken);
+  return aToken;
+}
+
+function revokeAdminToken(sessionToken) {
+  for (const [aToken, sToken] of adminTokens) {
+    if (sToken === sessionToken) { adminTokens.delete(aToken); break; }
+  }
 }
 
 function getSession(req) {
@@ -1278,7 +1291,8 @@ app.post('/api/login', (req, res) => {
   const token = createSession(profile.id, role, permissions);
   res.cookie(COOKIE_NAME, token, { httpOnly: true, secure: COOKIE_SECURE, sameSite: 'strict', maxAge: SESSION_MAX_AGE });
   if (role === 'admin' || permissions.includes('canDownload') || permissions.includes('canScan') || permissions.includes('canRestart')) {
-    res.cookie(ADMIN_COOKIE_NAME, adminToken, { httpOnly: true, secure: COOKIE_SECURE, sameSite: 'strict', maxAge: SESSION_MAX_AGE });
+    const aToken = createAdminToken(token);
+    res.cookie(ADMIN_COOKIE_NAME, aToken, { httpOnly: true, secure: COOKIE_SECURE, sameSite: 'strict', maxAge: SESSION_MAX_AGE });
   }
   res.json({ ok: true, role, profileId: profile.id, name: profile.name, permissions });
 });
@@ -1286,7 +1300,7 @@ app.post('/api/login', (req, res) => {
 app.post('/api/logout', (_req, res) => {
   const cookieHeader = _req.headers.cookie || '';
   const match = cookieHeader.match(new RegExp(`${COOKIE_NAME}=([a-f0-9]{64})`));
-  if (match) { sessions.delete(match[1]); persistSessions(); }
+  if (match) { revokeAdminToken(match[1]); sessions.delete(match[1]); persistSessions(); }
   res.clearCookie(COOKIE_NAME);
   res.clearCookie(ADMIN_COOKIE_NAME);
   res.json({ ok: true });
@@ -1382,13 +1396,14 @@ app.post('/api/profiles/:id/verify-pin', requireAuth, (req, res) => {
 // Helper: extract profile from request, validating against session if available
 function getRequestProfile(req) {
   const session = getSession(req);
-  const sessionProfileId = session?.profileId || 'default';
+  if (!session) return null; // unauthenticated — no profile access
+  const sessionProfileId = session.profileId || 'default';
   const requested = req.query.profile || req.body?.profile || sessionProfileId;
-  // If logged in, enforce that users can only access their own profile data
-  if (session && session.role !== 'admin' && requested !== session.profileId) {
-    return null; // unauthorized
+  // Non-admins can only access their own profile
+  if (session.role !== 'admin' && requested !== session.profileId) {
+    return null;
   }
-  return session ? (requested || sessionProfileId) : requested;
+  return requested || sessionProfileId;
 }
 
 app.get('/api/library', requireAuth, (req, res) => {
@@ -1913,13 +1928,14 @@ app.get('/api/stats', requireAuth, (_req, res) => {
 // ── Config APIs (folders) ────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════
 
-// Admin auth: token is embedded in the page at load time, required for dangerous operations
+// Admin auth: per-session token validated against adminTokens map; also verifies linked session is still active
 function requireAdmin(req, res, next) {
-  // Check admin cookie first, then header (no query param to avoid token leakage in logs/history)
   const cookieHeader = req.headers.cookie || '';
   const adminMatch = cookieHeader.match(new RegExp(`${ADMIN_COOKIE_NAME}=([a-f0-9]{48})`));
   const token = adminMatch ? adminMatch[1] : req.headers['x-admin-token'];
-  if (token !== adminToken) return res.status(403).json({ error: 'Unauthorized' });
+  if (!token) return res.status(403).json({ error: 'Unauthorized' });
+  const sessionToken = adminTokens.get(token);
+  if (!sessionToken || !sessions.has(sessionToken)) return res.status(403).json({ error: 'Unauthorized' });
   next();
 }
 
@@ -2633,7 +2649,13 @@ app.get('/subtitle/embedded/:fileId/:streamIndex', requireAuth, ensureLibrary, (
   if (!filePath || !fs.existsSync(filePath)) return res.status(404).send('File not found');
 
   const streamIdx = parseInt(req.params.streamIndex);
-  if (isNaN(streamIdx)) return res.status(400).send('Invalid stream index');
+  if (isNaN(streamIdx) || streamIdx < 0) return res.status(400).send('Invalid stream index');
+
+  // Validate index is a known subtitle stream for this file
+  const knownSubs = subProbeCache[filePath];
+  if (!knownSubs || !knownSubs.some(s => s.index === streamIdx)) {
+    return res.status(400).send('Invalid stream index');
+  }
 
   // Extract subtitle to VTT via ffmpeg
   const proc = spawn('ffmpeg', [
