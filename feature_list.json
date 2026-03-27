@@ -386,21 +386,21 @@
       "category": "security",
       "priority": "critical",
       "description": "IDOR on profile data — unauthenticated requests can pass ?profile=<id> to read any user's watch history, progress, queue, and dismissed items. Fix: return null from getRequestProfile() when no session exists.",
-      "passes": false
+      "passes": true
     },
     {
       "id": "sec-002",
       "category": "security",
       "priority": "medium",
       "description": "Static admin token cannot be revoked per-user — single token shared across all admins, valid until server restart. If intercepted before logout it remains usable.",
-      "passes": false
+      "passes": true
     },
     {
       "id": "sec-003",
       "category": "security",
       "priority": "medium",
       "description": "Subtitle stream index unbounded — /subtitle/embedded/:fileId/:streamIndex accepts any integer with no upper bound, allowing extraction of non-subtitle streams (audio/video) via ffmpeg.",
-      "passes": false
+      "passes": true
     },
     {
       "id": "sec-004",
