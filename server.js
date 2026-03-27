@@ -1946,7 +1946,7 @@ function requirePermission(permission) {
     const cookieHeader = req.headers.cookie || '';
     const adminMatch = cookieHeader.match(new RegExp(`${ADMIN_COOKIE_NAME}=([a-f0-9]{48})`));
     const token = adminMatch ? adminMatch[1] : req.headers['x-admin-token'];
-    if (token !== adminToken) return res.status(403).json({ error: 'Unauthorized' });
+    if (!token || !adminTokens.has(token) || !sessions.has(adminTokens.get(token))) return res.status(403).json({ error: 'Unauthorized' });
     // Check session for permission
     const session = getSession(req);
     if (!session) return res.status(401).json({ error: 'Login required' });
