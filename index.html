@@ -1599,6 +1599,34 @@ async function renderSettings(){
   const cph=`<div id="corruptedSection">${renderCorruptedSection()}</div>`;
   const tsh=``;
 
+  // Docker container controls
+  let dockerStatus={qbittorrent:'unknown',gluetun:'unknown'};
+  try{const r=await adminFetch('/api/docker/status');if(r.ok)dockerStatus=await r.json();}catch{}
+  function dockerBadge(s){
+    if(s==='running')return`<span style="background:#1a3a1a;color:#4caf50;border:1px solid #4caf50;border-radius:20px;padding:2px 9px;font-size:.72rem;font-weight:600">● running</span>`;
+    if(s==='exited'||s==='stopped')return`<span style="background:#3a1a1a;color:#f44336;border:1px solid #f44336;border-radius:20px;padding:2px 9px;font-size:.72rem;font-weight:600">● stopped</span>`;
+    return`<span style="background:rgba(255,255,255,.07);color:var(--text-muted);border-radius:20px;padding:2px 9px;font-size:.72rem">● ${s}</span>`;
+  }
+  function dockerBtns(name,s){
+    const running=s==='running';
+    return running
+      ?`<button class="btn btn-sm" onclick="dockerAction('stop','${name}')" style="font-size:.75rem;padding:5px 11px;background:#c0392b">Stop</button><button class="btn btn-sm" onclick="dockerAction('restart','${name}')" style="font-size:.75rem;padding:5px 11px">Restart</button>`
+      :`<button class="btn btn-sm" onclick="dockerAction('start','${name}')" style="font-size:.75rem;padding:5px 11px;background:#27ae60">Start</button>`;
+  }
+  const dockerh=`<h3 style="font-size:1rem;font-weight:700;margin:28px 0 12px">Docker Containers</h3>
+  <div style="display:flex;flex-direction:column;gap:8px" id="dockerSection">
+    <div style="display:flex;align-items:center;gap:12px;padding:12px 16px;background:var(--bg-card);border-radius:10px;border:1px solid rgba(255,255,255,.06)">
+      <div style="font-size:1.3rem">&#127758;</div>
+      <div style="flex:1"><div style="font-weight:600;font-size:.9rem">gluetun</div><div style="font-size:.75rem;color:var(--text-muted)">VPN tunnel</div></div>
+      ${dockerBadge(dockerStatus.gluetun)}<div style="display:flex;gap:6px">${dockerBtns('gluetun',dockerStatus.gluetun)}</div>
+    </div>
+    <div style="display:flex;align-items:center;gap:12px;padding:12px 16px;background:var(--bg-card);border-radius:10px;border:1px solid rgba(255,255,255,.06)">
+      <div style="font-size:1.3rem">&#127987;</div>
+      <div style="flex:1"><div style="font-weight:600;font-size:.9rem">qbittorrent</div><div style="font-size:.75rem;color:var(--text-muted)">Torrent client (via gluetun)</div></div>
+      ${dockerBadge(dockerStatus.qbittorrent)}<div style="display:flex;gap:6px">${dockerBtns('qbittorrent',dockerStatus.qbittorrent)}</div>
+    </div>
+  </div>`;
+
   // Accounts section (admin only)
   let acctHtml='';
   if(currentRole==='admin'){
@@ -1630,7 +1658,7 @@ async function renderSettings(){
   let dtOpts='<option value="movie">Movies</option><option value="show">TV Shows</option><option value="auto">Auto-detect</option>';
   for(const t of existingTypes){if(t!=='movie'&&t!=='show'&&t!=='auto')dtOpts+=`<option value="${esc(t)}">${customTypeLabel(t)}</option>`;}
 
-  a.innerHTML=`<div class="settings"><h1 class="settings-title">Media Folders</h1><p class="settings-subtitle">Link folders from anywhere on this computer. Use movie, show, auto, or type a custom category (e.g. anime).</p><div id="settingsAlert" class="alert"></div>${fh}<div class="add-folder-section"><h3>&#10010; Link a New Folder</h3><div class="form-row"><div class="form-group grow"><label class="form-label">Folder path</label><input class="form-input" type="text" id="addFolderPath" placeholder="/path/to/movies" oninput="onPathInput(this.value)"></div><div class="form-group"><label class="form-label">Type</label><input class="form-input" type="text" id="addFolderType" list="folderTypeList" value="auto" placeholder="movie, show, anime..." style="width:140px"><datalist id="folderTypeList">${dtOpts}</datalist></div><div class="form-group"><label class="form-label">Label</label><input class="form-input" type="text" id="addFolderLabel" placeholder="My Movies" style="width:140px"></div></div><div id="folderBrowser"></div><div style="display:flex;gap:8px;margin-top:4px"><button class="btn btn-primary btn-sm" onclick="addFolder()">&#10010; Link Folder</button><button class="btn btn-secondary btn-sm" onclick="toggleBrowser()">&#128194; Browse</button></div></div>${sh}${sph}${tsh}${cph}${sysh}${acctHtml}</div>`;
+  a.innerHTML=`<div class="settings"><h1 class="settings-title">Media Folders</h1><p class="settings-subtitle">Link folders from anywhere on this computer. Use movie, show, auto, or type a custom category (e.g. anime).</p><div id="settingsAlert" class="alert"></div>${fh}<div class="add-folder-section"><h3>&#10010; Link a New Folder</h3><div class="form-row"><div class="form-group grow"><label class="form-label">Folder path</label><input class="form-input" type="text" id="addFolderPath" placeholder="/path/to/movies" oninput="onPathInput(this.value)"></div><div class="form-group"><label class="form-label">Type</label><input class="form-input" type="text" id="addFolderType" list="folderTypeList" value="auto" placeholder="movie, show, anime..." style="width:140px"><datalist id="folderTypeList">${dtOpts}</datalist></div><div class="form-group"><label class="form-label">Label</label><input class="form-input" type="text" id="addFolderLabel" placeholder="My Movies" style="width:140px"></div></div><div id="folderBrowser"></div><div style="display:flex;gap:8px;margin-top:4px"><button class="btn btn-primary btn-sm" onclick="addFolder()">&#10010; Link Folder</button><button class="btn btn-secondary btn-sm" onclick="toggleBrowser()">&#128194; Browse</button></div></div>${sh}${sph}${tsh}${cph}${sysh}${dockerh}${acctHtml}</div>`;
   // Auto-refresh sprite progress + system stats
   startSettingsRefresh();
   if(folderConfig.length===0)toggleBrowser();
@@ -2911,6 +2939,15 @@ function dlClearSearch(){
   if(btn){btn.disabled=false;btn.textContent='Search';}
 }
 function dlSwitchTab(tab){dlActiveTab=tab;renderDownloads();}
+
+async function dockerAction(action,container){
+  const section=document.getElementById('dockerSection');
+  if(section)section.style.opacity='0.5';
+  try{await adminFetch('/api/docker/'+action+'/'+container,{method:'POST'});}catch{}
+  // Wait for container to settle then re-render settings
+  await new Promise(r=>setTimeout(r,2000));
+  renderSettings();
+}
 
 async function orgServiceAction(action){
   try{

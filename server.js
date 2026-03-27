@@ -3325,6 +3325,46 @@ app.post('/api/organizer/restart', requireAdminSession, async (_req, res) => {
   res.json({ ok: result.ok, error: result.ok ? undefined : result.stderr });
 });
 
+// ── Docker container control (qBittorrent / Gluetun) ─────────────────────
+const ALLOWED_CONTAINERS = new Set(['qbittorrent', 'gluetun']);
+const ALLOWED_DOCKER_ACTIONS = new Set(['start', 'stop', 'restart']);
+
+function dockerCmd(action, container) {
+  return new Promise((resolve) => {
+    if (!ALLOWED_CONTAINERS.has(container) || !ALLOWED_DOCKER_ACTIONS.has(action)) {
+      return resolve({ ok: false, stderr: 'Invalid container or action' });
+    }
+    const proc = spawn('docker', [action, container]);
+    let stderr = '';
+    proc.stderr.on('data', d => stderr += d);
+    proc.on('close', code => resolve({ ok: code === 0, code, stderr: stderr.trim() }));
+    proc.on('error', err => resolve({ ok: false, code: -1, stderr: err.message }));
+  });
+}
+
+app.get('/api/docker/status', requireAdminSession, async (_req, res) => {
+  const results = {};
+  for (const name of ALLOWED_CONTAINERS) {
+    await new Promise(resolve => {
+      const proc = spawn('docker', ['inspect', '--format', '{{.State.Status}}', name]);
+      let out = '';
+      proc.stdout.on('data', d => out += d);
+      proc.on('close', code => {
+        results[name] = code === 0 ? out.trim() : 'unknown';
+        resolve();
+      });
+      proc.on('error', () => { results[name] = 'unknown'; resolve(); });
+    });
+  }
+  res.json(results);
+});
+
+app.post('/api/docker/:action/:container', requireAdminSession, async (req, res) => {
+  const { action, container } = req.params;
+  const result = await dockerCmd(action, container);
+  res.json({ ok: result.ok, error: result.ok ? undefined : result.stderr });
+});
+
 // ── Restart endpoint ────────────────────────────────────────────────────
 app.post('/api/restart', requirePermission('canRestart'), (_req, res) => {
   res.json({ ok: true });
