@@ -530,6 +530,7 @@ video::cue{background:rgba(0,0,0,.8);color:#fff;font-size:clamp(1.6rem, 3.5vw, 2
       <div class="nav-label">System</div>
       <button class="nav-item" id="navDownloads" data-view="downloads" onclick="nav('downloads',this)"><span class="nav-icon">&#11015;</span> Downloads</button>
       <button class="nav-item" id="navLogs" data-view="logs" onclick="nav('logs',this)"><span class="nav-icon">&#128203;</span> Logs</button>
+      <button class="nav-item" id="navOrgLogs" data-view="orglogs" onclick="nav('orglogs',this)"><span class="nav-icon">&#128194;</span> Organizer Logs</button>
       <button class="nav-item" id="navSettings" data-view="settings" onclick="nav('settings',this)"><span class="nav-icon">&#9881;&#65039;</span> Media Folders</button>
       <button class="nav-item" id="navScan" onclick="scanLibrary(event)"><span class="nav-icon">&#128269;</span> Scan Library</button>
       <button class="nav-item" id="navRestart" onclick="restartServer()"><span class="nav-icon">&#128260;</span> Restart Server</button>
@@ -671,11 +672,12 @@ function updateSystemVisibility(){
   const showScan=isAdmin||currentPermissions.includes('canScan');
   const showRestart=isAdmin||currentPermissions.includes('canRestart');
   const showLogs=isAdmin||currentPermissions.includes('canLogs');
-  const showSystem=showDownloads||showSettings||showScan||showRestart||showLogs;
+  const showSystem=showDownloads||showSettings||showScan||showRestart||showLogs||isAdmin;
   const el=document.getElementById('systemSection');
   if(el){showSystem?el.classList.add('visible'):el.classList.remove('visible');}
   const nd=document.getElementById('navDownloads');if(nd)nd.style.display=showDownloads?'':'none';
   const nl=document.getElementById('navLogs');if(nl)nl.style.display=showLogs?'':'none';
+  const nol=document.getElementById('navOrgLogs');if(nol)nol.style.display=isAdmin?'':'none';
   const ns=document.getElementById('navSettings');if(ns)ns.style.display=showSettings?'':'none';
   const nsc=document.getElementById('navScan');if(nsc)nsc.style.display=showScan?'':'none';
   const nr=document.getElementById('navRestart');if(nr)nr.style.display=showRestart?'':'none';
@@ -1076,6 +1078,7 @@ function renderView(){
     case 'settings':if(currentRole!=='admin'){nav('home',document.querySelector('[data-view="home"]'));return;}renderSettings();return;
     case 'downloads':if(!hasPerm('canDownload')){nav('home',document.querySelector('[data-view="home"]'));return;}renderDownloads();return;
     case 'logs':if(currentRole!=='admin'&&!hasPerm('canLogs')){nav('home',document.querySelector('[data-view="home"]'));return;}renderLogs();return;
+    case 'orglogs':if(currentRole!=='admin'){nav('home',document.querySelector('[data-view="home"]'));return;}renderOrgLogsPage();return;
     case 'showDetail':a.innerHTML=renderShowDetail(currentShowName);break;
     default:
       if(currentView.startsWith('custom_')){
@@ -2764,14 +2767,7 @@ async function logsRenderTab(tab){
 async function renderDownloads(){
   const a=document.getElementById('contentArea');
   a.innerHTML=`<div class="dl-page"><h2 style="font-size:1.3rem;font-weight:700;margin-bottom:4px">Downloads</h2><p style="color:var(--text-muted);font-size:.82rem;margin-bottom:12px">Search and download torrents via qBittorrent</p><div id="dlContent"><div style="text-align:center;padding:60px"><span class="dl-spinner" style="width:32px;height:32px;border-width:3px"></span><p style="color:var(--text-muted);margin-top:16px;font-size:.85rem">Connecting to qBittorrent...</p></div></div></div>`;
-  // If on logs tab, skip qBT check entirely
-  if(dlActiveTab==='logs'){
-    const a2=document.getElementById('dlContent');
-    const tabs=`<div class="dl-tabs"><button class="filter-btn" onclick="dlSwitchTab('search')">Search</button><button class="filter-btn" onclick="dlSwitchTab('active')">Active Downloads</button><button class="filter-btn active" onclick="dlSwitchTab('logs')">Organizer Logs</button></div>`;
-    a2.innerHTML=tabs+'<div id="dlTabContent"></div>';
-    renderOrgLogs();
-    return;
-  }
+  if(dlActiveTab==='logs')dlActiveTab='search';
   // Check if qBT is configured and reachable
   try{
     const r=await fetch('/api/qbt/status');
@@ -2792,10 +2788,9 @@ async function renderDownloads(){
     if(currentView!=='downloads')return;
     const a2=document.getElementById('dlContent');
     if(!a2)return;
-    const tabs=`<div class="dl-tabs"><button class="filter-btn ${dlActiveTab==='search'?'active':''}" onclick="dlSwitchTab('search')">Search</button><button class="filter-btn ${dlActiveTab==='active'?'active':''}" onclick="dlSwitchTab('active')">Active Downloads <span id="dlCount">(${dlTorrents.length})</span></button><button class="filter-btn ${dlActiveTab==='logs'?'active':''}" onclick="dlSwitchTab('logs')">Organizer Logs</button></div>`;
+    const tabs=`<div class="dl-tabs"><button class="filter-btn ${dlActiveTab==='search'?'active':''}" onclick="dlSwitchTab('search')">Search</button><button class="filter-btn ${dlActiveTab==='active'?'active':''}" onclick="dlSwitchTab('active')">Active Downloads <span id="dlCount">(${dlTorrents.length})</span></button></div>`;
     a2.innerHTML=tabs+'<div id="dlTabContent"></div>';
     if(dlActiveTab==='search')renderDlSearch();
-    else if(dlActiveTab==='logs')renderOrgLogs();
     else renderDlActive();
     startDlRefresh();
   });
@@ -2956,6 +2951,16 @@ async function orgServiceAction(action){
     renderOrgLogs();
   }catch{renderOrgLogs();}
 }
+async function renderOrgLogsPage(){
+  const a=document.getElementById('contentArea');
+  a.innerHTML=`<div class="dl-page">
+    <h2 style="font-size:1.3rem;font-weight:700;margin-bottom:4px">Organizer Logs</h2>
+    <p style="color:var(--text-muted);font-size:.82rem;margin-bottom:12px">Media organizer activity — moves, matches, errors and scans</p>
+    <div id="dlTabContent"></div>
+  </div>`;
+  renderOrgLogs();
+}
+
 async function renderOrgLogs(){
   const c=document.getElementById('dlTabContent');
   if(!c)return;
