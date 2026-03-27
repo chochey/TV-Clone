@@ -1070,13 +1070,14 @@ function loadLibraryCache() {
 function invalidateLibrary() {
   libraryCache = null;
   // Immediately rebuild cache so next request doesn't wait
-  try { scanLibrary(); } catch {}
+  try { scanLibrary('invalidate'); } catch {}
   // Queue sprite generation for any new items after rescan
   setTimeout(() => { try { queueAllSpriteGen(); } catch {} }, 3000);
 }
 
-function scanLibrary() {
+function scanLibrary(trigger) {
   if (libraryCache) return libraryCache;
+  const _scanStart = Date.now();
   const library = [];
   fileIndex = {};
   subtitleIndex = {};
@@ -1166,6 +1167,7 @@ function scanLibrary() {
 
   libraryCache = library.sort((a, b) => a.title.localeCompare(b.title, undefined, { numeric: true }));
   saveLibraryCache();
+  recordScan({ count: libraryCache.length, durationMs: Date.now() - _scanStart, trigger: trigger || 'startup' });
   return libraryCache;
 }
 
@@ -1199,12 +1201,50 @@ app.get('/api/profiles', (_req, res) => {
 
 // ── Auth: Login / Logout ────────────────────────────────────────────────
 const loginAttempts = {}; // ip -> { count, lastAttempt }
+const loginLog = []; // { timestamp, profileName, username, ip, success, reason }
+const MAX_LOGIN_LOG = 500;
+
+function recordLogin({ profileName, username, ip, success, reason }) {
+  loginLog.unshift({ timestamp: Date.now(), profileName: profileName || null, username: username || null, ip, success, reason: reason || null });
+  if (loginLog.length > MAX_LOGIN_LOG) loginLog.pop();
+}
+
+// ── Scan log ──────────────────────────────────────────────────────────────
+const scanLog = []; // { timestamp, count, durationMs, trigger }
+const MAX_SCAN_LOG = 200;
+
+function recordScan({ count, durationMs, trigger }) {
+  scanLog.unshift({ timestamp: Date.now(), count, durationMs, trigger: trigger || 'manual' });
+  if (scanLog.length > MAX_SCAN_LOG) scanLog.pop();
+}
+
+// ── Stream session log ────────────────────────────────────────────────────
+const streamLog = []; // { timestamp, id, title, profileName, mode, codec, quality, seekTime }
+const MAX_STREAM_LOG = 500;
+
+function recordStream({ id, title, profileName, mode, codec, quality, seekTime }) {
+  streamLog.unshift({ timestamp: Date.now(), id, title: title || id, profileName: profileName || null, mode, codec: codec || null, quality, seekTime });
+  if (streamLog.length > MAX_STREAM_LOG) streamLog.pop();
+}
+
+// ── Error log ─────────────────────────────────────────────────────────────
+const errorLog = []; // { timestamp, context, message }
+const MAX_ERROR_LOG = 300;
+
+function recordError(context, message) {
+  errorLog.unshift({ timestamp: Date.now(), context, message });
+  if (errorLog.length > MAX_ERROR_LOG) errorLog.pop();
+}
+
 app.post('/api/login', (req, res) => {
   const ip = req.ip;
   const now = Date.now();
   if (!loginAttempts[ip]) loginAttempts[ip] = { count: 0, lastAttempt: 0 };
   if (now - loginAttempts[ip].lastAttempt > LOGIN_RATE_WINDOW_MS) loginAttempts[ip].count = 0;
-  if (loginAttempts[ip].count >= LOGIN_MAX_ATTEMPTS) return res.status(429).json({ error: 'Too many attempts. Try again in 5 minutes.' });
+  if (loginAttempts[ip].count >= LOGIN_MAX_ATTEMPTS) {
+    recordLogin({ username: req.body?.username, ip, success: false, reason: 'Rate limited' });
+    return res.status(429).json({ error: 'Too many attempts. Try again in 5 minutes.' });
+  }
 
   const { username, password, profileId } = req.body;
   // Support both username-based login (new) and profileId-based login (legacy/internal)
@@ -1217,6 +1257,7 @@ app.post('/api/login', (req, res) => {
   if (!profile) {
     loginAttempts[ip].count++;
     loginAttempts[ip].lastAttempt = now;
+    recordLogin({ username, ip, success: false, reason: 'Unknown user' });
     return res.status(403).json({ error: 'Invalid username or password' });
   }
 
@@ -1224,11 +1265,13 @@ app.post('/api/login', (req, res) => {
 
   if (!verifyPassword(password || '', profile.password || '')) {
     loginAttempts[ip].count++;
+    recordLogin({ profileName: profile.name, username, ip, success: false, reason: 'Wrong password' });
     return res.status(403).json({ error: 'Invalid username or password' });
   }
 
   // Successful login — reset rate limit counter
   loginAttempts[ip].count = 0;
+  recordLogin({ profileName: profile.name, username, ip, success: true });
 
   const role = profile.role || 'user';
   const permissions = role === 'admin' ? [...VALID_PERMISSIONS] : (profile.permissions || []);
@@ -2416,6 +2459,26 @@ app.get('/api/admin/logs', requireAdminSession, (_req, res) => {
   res.json(entries);
 });
 
+// GET /api/admin/login-logs — recent login attempts
+app.get('/api/admin/login-logs', requireAdminSession, (_req, res) => {
+  res.json(loginLog);
+});
+
+// GET /api/admin/scan-logs — library scan history
+app.get('/api/admin/scan-logs', requireAdminSession, (_req, res) => {
+  res.json(scanLog);
+});
+
+// GET /api/admin/stream-logs — HLS session starts
+app.get('/api/admin/stream-logs', requireAdminSession, (_req, res) => {
+  res.json(streamLog);
+});
+
+// GET /api/admin/error-logs — server/ffmpeg errors
+app.get('/api/admin/error-logs', requireAdminSession, (_req, res) => {
+  res.json(errorLog);
+});
+
 // System stats API
 let _prevCpu = null;
 app.get('/api/system/stats', requireAdminSession, (_req, res) => {
@@ -2692,10 +2755,17 @@ function startFfmpeg(id, filePath, sessionDir, seekTime, startSegNum, audioStrea
   );
 
   const proc = spawn('ffmpeg', ffmpegArgs);
-  proc.stderr.on('data', d => console.error(`[transcode ${id.slice(0,8)}] ${d.toString().trim()}`));
+  let _ffmpegStderr = '';
+  proc.stderr.on('data', d => {
+    const msg = d.toString().trim();
+    _ffmpegStderr = msg; // keep last stderr line
+    console.error(`[transcode ${id.slice(0,8)}] ${msg}`);
+  });
   proc.on('close', code => {
-    if (code !== 0 && code !== 255 && code !== null)
+    if (code !== 0 && code !== 255 && code !== null) {
       console.error(`[transcode ${id.slice(0,8)}] exited ${code}`);
+      recordError(`transcode:${id.slice(0,8)}`, _ffmpegStderr || `FFmpeg exited ${code}`);
+    }
   });
 
   transcodeSessions[id] = {
@@ -2791,11 +2861,24 @@ app.get('/hls/:id/master.m3u8', requireAuth, ensureLibrary, async (req, res) => 
     transcodeSessions[id].quality = quality;
     transcodeSessions[id].filePath = filePath;
     const sess = getSession(req);
+    let profileName = null;
     if (sess) {
       transcodeSessions[id].profileId = sess.profileId;
       const prof = config.profiles.find(p => p.id === sess.profileId);
-      transcodeSessions[id].profileName = prof?.name || sess.profileId;
+      profileName = prof?.name || sess.profileId;
+      transcodeSessions[id].profileName = profileName;
     }
+    // Record stream session for logs
+    const libItem = libraryCache ? libraryCache.find(i => i.id === id) : null;
+    recordStream({
+      id,
+      title: libItem?.title || path.basename(filePath),
+      profileName,
+      mode,
+      codec: probeCache[filePath] || null,
+      quality,
+      seekTime: startTime,
+    });
   }
 
   // Wait for ffmpeg to produce its m3u8 with real segment durations
@@ -3142,7 +3225,7 @@ app.post('/api/scan', requirePermission('canScan'), async (_req, res) => {
     await backgroundOmdbFetch();
     // Re-scan to pick up new metadata
     invalidateLibrary();
-    scanLibrary();
+    scanLibrary('file-watcher');
     notifyClients('library-updated');
     console.log('  [scan] Complete');
   } catch (err) { console.error('  [scan] Error:', err.message); }

@@ -294,21 +294,21 @@
       "category": "sprites",
       "priority": "high",
       "description": "Corrupted file detection — if ffprobe fails on a file, skip sprite gen and flag it in the admin panel rather than silently failing",
-      "passes": false
+      "passes": true
     },
     {
       "id": "new-002",
       "category": "admin",
       "priority": "high",
       "description": "Corrupted/unreadable files list in admin panel showing files that failed ffprobe or sprite gen",
-      "passes": false
+      "passes": true
     },
     {
       "id": "new-003",
       "category": "playback",
       "priority": "high",
       "description": "Transcoding quality presets — let user pick quality level (e.g. low/medium/high) instead of fixed QP 22",
-      "passes": false
+      "passes": true
     },
     {
       "id": "new-004",
@@ -357,7 +357,7 @@
       "category": "admin",
       "priority": "low",
       "description": "Transcode session viewer in admin — see what is currently being transcoded and by whom",
-      "passes": false
+      "passes": true
     },
     {
       "id": "new-011",

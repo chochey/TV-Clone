@@ -2551,6 +2551,10 @@ async function renderLogs(){
     <div class="dl-tabs" style="margin-bottom:16px">
       <button class="filter-btn active" id="logsTabNow" onclick="logsTab('now',this)">Now Watching</button>
       <button class="filter-btn" id="logsTabHistory" onclick="logsTab('history',this)">Watch History</button>
+      <button class="filter-btn" id="logsTabLogins" onclick="logsTab('logins',this)">Login Logs</button>
+      <button class="filter-btn" id="logsTabStreams" onclick="logsTab('streams',this)">Streams</button>
+      <button class="filter-btn" id="logsTabScans" onclick="logsTab('scans',this)">Scans</button>
+      <button class="filter-btn" id="logsTabErrors" onclick="logsTab('errors',this)">Errors</button>
     </div>
     <div id="logsContent"><div style="text-align:center;padding:60px;color:var(--text-muted)">Loading...</div></div>
   </div>`;
@@ -2570,7 +2574,7 @@ let _logsFilterStatus='all';
 let _logsSearch='';
 
 async function logsTab(tab,btn){
-  document.querySelectorAll('#logsTabNow,#logsTabHistory').forEach(b=>b.classList.remove('active'));
+  document.querySelectorAll('#logsTabNow,#logsTabHistory,#logsTabLogins,#logsTabStreams,#logsTabScans,#logsTabErrors').forEach(b=>b.classList.remove('active'));
   btn.classList.add('active');
   _logsCurrentTab=tab;
   await logsRenderTab(tab);
@@ -2649,6 +2653,83 @@ async function logsRenderTab(tab){
       </div>
       <div id="logsResults" style="display:flex;flex-direction:column;gap:6px"></div>`;
     logsApplyFilters();
+  } else {
+    // Login Logs tab
+    let loginLogs=[];
+    try{const r=await fetch('/api/admin/login-logs',{credentials:'same-origin'});if(r.ok)loginLogs=await r.json();}catch{}
+    if(loginLogs.length===0){
+      el.innerHTML=`<div style="text-align:center;padding:60px;color:var(--text-muted);font-size:.9rem">No login attempts recorded yet.</div>`;
+      return;
+    }
+    el.innerHTML=`<div style="display:flex;flex-direction:column;gap:6px">${loginLogs.map(e=>{
+      const d=new Date(e.timestamp);
+      const dateStr=d.toLocaleDateString()+' '+d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+      const badge=e.success
+        ?`<span style="font-size:.68rem;padding:2px 8px;border-radius:99px;background:rgba(80,200,120,.15);color:#50c878;white-space:nowrap">Success</span>`
+        :`<span style="font-size:.68rem;padding:2px 8px;border-radius:99px;background:rgba(220,80,80,.15);color:#e05252;white-space:nowrap">${e.reason||'Failed'}</span>`;
+      const label=e.profileName||e.username||'Unknown';
+      const initials=label.charAt(0).toUpperCase();
+      return `<div style="display:flex;align-items:center;gap:12px;padding:12px 14px;background:var(--bg-card);border-radius:8px">
+        <div style="width:32px;height:32px;border-radius:50%;background:${e.success?'var(--accent-glow)':'rgba(220,80,80,.15)'};display:flex;align-items:center;justify-content:center;font-size:.9rem;font-weight:700;color:${e.success?'var(--accent)':'#e05252'};flex-shrink:0">${initials}</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:600;font-size:.9rem">${label}</div>
+          <div style="font-size:.75rem;color:var(--text-muted);margin-top:1px">${e.ip||''} &bull; ${dateStr}</div>
+        </div>
+        ${badge}
+      </div>`;
+    }).join('')}</div>`;
+  } else if(tab==='streams'){
+    let logs=[];
+    try{const r=await fetch('/api/admin/stream-logs',{credentials:'same-origin'});if(r.ok)logs=await r.json();}catch{}
+    if(logs.length===0){el.innerHTML=`<div style="text-align:center;padding:60px;color:var(--text-muted);font-size:.9rem">No stream sessions recorded yet.</div>`;return;}
+    const modeColor={direct:'#50c878',remux:'#7eb8f7',transcode:'#f7b731'};
+    el.innerHTML=`<div style="display:flex;flex-direction:column;gap:6px">${logs.map(e=>{
+      const d=new Date(e.timestamp);
+      const dateStr=d.toLocaleDateString()+' '+d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+      const col=modeColor[e.mode]||'var(--text-muted)';
+      const modeBadge=`<span style="font-size:.68rem;padding:2px 8px;border-radius:99px;background:rgba(255,255,255,.07);color:${col};white-space:nowrap;text-transform:uppercase">${e.mode}</span>`;
+      const seek=e.seekTime>0?` @ ${Math.floor(e.seekTime/60)}:${String(Math.floor(e.seekTime%60)).padStart(2,'0')}`:' @ start';
+      return `<div style="display:flex;align-items:center;gap:12px;padding:12px 14px;background:var(--bg-card);border-radius:8px">
+        <div style="width:32px;height:32px;border-radius:50%;background:var(--accent-glow);display:flex;align-items:center;justify-content:center;font-size:.85rem;flex-shrink:0">&#9654;</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:600;font-size:.9rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${e.title}</div>
+          <div style="font-size:.75rem;color:var(--text-muted);margin-top:1px">${e.profileName||'Unknown'} &bull; ${e.codec||'?'} &bull; q:${e.quality}${seek} &bull; ${dateStr}</div>
+        </div>
+        ${modeBadge}
+      </div>`;
+    }).join('')}</div>`;
+  } else if(tab==='scans'){
+    let logs=[];
+    try{const r=await fetch('/api/admin/scan-logs',{credentials:'same-origin'});if(r.ok)logs=await r.json();}catch{}
+    if(logs.length===0){el.innerHTML=`<div style="text-align:center;padding:60px;color:var(--text-muted);font-size:.9rem">No scans recorded yet.</div>`;return;}
+    el.innerHTML=`<div style="display:flex;flex-direction:column;gap:6px">${logs.map(e=>{
+      const d=new Date(e.timestamp);
+      const dateStr=d.toLocaleDateString()+' '+d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+      const dur=e.durationMs<1000?e.durationMs+'ms':(e.durationMs/1000).toFixed(1)+'s';
+      const triggerLabel={startup:'Startup',invalidate:'Config change','file-watcher':'File change',manual:'Manual'}[e.trigger]||e.trigger;
+      return `<div style="display:flex;align-items:center;gap:12px;padding:12px 14px;background:var(--bg-card);border-radius:8px">
+        <div style="width:32px;height:32px;border-radius:50%;background:rgba(255,255,255,.07);display:flex;align-items:center;justify-content:center;font-size:.85rem;flex-shrink:0">&#128269;</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:600;font-size:.9rem">${e.count.toLocaleString()} files &bull; ${dur}</div>
+          <div style="font-size:.75rem;color:var(--text-muted);margin-top:1px">${triggerLabel} &bull; ${dateStr}</div>
+        </div>
+      </div>`;
+    }).join('')}</div>`;
+  } else if(tab==='errors'){
+    let logs=[];
+    try{const r=await fetch('/api/admin/error-logs',{credentials:'same-origin'});if(r.ok)logs=await r.json();}catch{}
+    if(logs.length===0){el.innerHTML=`<div style="text-align:center;padding:60px;color:var(--text-muted);font-size:.9rem">No errors recorded. <span style="color:#50c878">&#10003;</span></div>`;return;}
+    el.innerHTML=`<div style="display:flex;flex-direction:column;gap:6px">${logs.map(e=>{
+      const d=new Date(e.timestamp);
+      const dateStr=d.toLocaleDateString()+' '+d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+      return `<div style="display:flex;align-items:flex-start;gap:12px;padding:12px 14px;background:var(--bg-card);border-radius:8px">
+        <div style="width:32px;height:32px;border-radius:50%;background:rgba(220,80,80,.15);display:flex;align-items:center;justify-content:center;font-size:.9rem;flex-shrink:0;margin-top:1px">&#9888;</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:.72rem;color:var(--text-muted);margin-bottom:3px">${e.context} &bull; ${dateStr}</div>
+          <div style="font-size:.85rem;color:#e05252;word-break:break-all;font-family:monospace">${e.message}</div>
+        </div>
+      </div>`;
+    }).join('')}</div>`;
   }
 }
 
