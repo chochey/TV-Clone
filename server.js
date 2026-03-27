@@ -1928,29 +1928,37 @@ app.get('/api/stats', requireAuth, (_req, res) => {
 // ── Config APIs (folders) ────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════
 
-// Admin auth: per-session token validated against adminTokens map; also verifies linked session is still active
-function requireAdmin(req, res, next) {
+// Validate admin token cookie — re-registers it against the current session if the server
+// restarted and wiped adminTokens (avoids forcing a re-login on every server restart)
+function resolveAdminToken(req) {
   const cookieHeader = req.headers.cookie || '';
   const adminMatch = cookieHeader.match(new RegExp(`${ADMIN_COOKIE_NAME}=([a-f0-9]{48})`));
-  const token = adminMatch ? adminMatch[1] : req.headers['x-admin-token'];
-  if (!token) return res.status(403).json({ error: 'Unauthorized' });
-  const sessionToken = adminTokens.get(token);
-  if (!sessionToken || !sessions.has(sessionToken)) return res.status(403).json({ error: 'Unauthorized' });
+  const aToken = adminMatch ? adminMatch[1] : req.headers['x-admin-token'];
+  if (!aToken) return false;
+  // Happy path — token is already registered
+  if (adminTokens.has(aToken) && sessions.has(adminTokens.get(aToken))) return true;
+  // Server restarted: adminTokens wiped but session cookie is still valid — re-register
+  const session = getSession(req);
+  if (session) { adminTokens.set(aToken, /* session token */ (() => {
+    const cookieMatch = cookieHeader.match(new RegExp(`${COOKIE_NAME}=([a-f0-9]{64})`));
+    return cookieMatch ? cookieMatch[1] : null;
+  })()); return adminTokens.has(aToken) && !!adminTokens.get(aToken); }
+  return false;
+}
+
+// Admin auth: per-session token validated against adminTokens map
+function requireAdmin(req, res, next) {
+  if (!resolveAdminToken(req)) return res.status(403).json({ error: 'Unauthorized' });
   next();
 }
 
 // Permission-based auth: checks admin token AND that session has a specific permission (or is admin)
 function requirePermission(permission) {
   return (req, res, next) => {
-    // Must have admin token cookie (set at login for users with any elevated permissions)
-    const cookieHeader = req.headers.cookie || '';
-    const adminMatch = cookieHeader.match(new RegExp(`${ADMIN_COOKIE_NAME}=([a-f0-9]{48})`));
-    const token = adminMatch ? adminMatch[1] : req.headers['x-admin-token'];
-    if (!token || !adminTokens.has(token) || !sessions.has(adminTokens.get(token))) return res.status(403).json({ error: 'Unauthorized' });
-    // Check session for permission
+    if (!resolveAdminToken(req)) return res.status(403).json({ error: 'Unauthorized' });
     const session = getSession(req);
     if (!session) return res.status(401).json({ error: 'Login required' });
-    if (session.role === 'admin') return next(); // admins can do everything
+    if (session.role === 'admin') return next();
     if (session.permissions && session.permissions.includes(permission)) return next();
     return res.status(403).json({ error: 'Permission denied' });
   };
