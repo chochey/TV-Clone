@@ -379,6 +379,42 @@
       "priority": "medium",
       "description": "Dismiss from Recently Added — X button on items in the recently added row to hide them from that list per-profile",
       "passes": true
+    },
+
+    {
+      "id": "sec-001",
+      "category": "security",
+      "priority": "critical",
+      "description": "IDOR on profile data — unauthenticated requests can pass ?profile=<id> to read any user's watch history, progress, queue, and dismissed items. Fix: return null from getRequestProfile() when no session exists.",
+      "passes": false
+    },
+    {
+      "id": "sec-002",
+      "category": "security",
+      "priority": "medium",
+      "description": "Static admin token cannot be revoked per-user — single token shared across all admins, valid until server restart. If intercepted before logout it remains usable.",
+      "passes": false
+    },
+    {
+      "id": "sec-003",
+      "category": "security",
+      "priority": "medium",
+      "description": "Subtitle stream index unbounded — /subtitle/embedded/:fileId/:streamIndex accepts any integer with no upper bound, allowing extraction of non-subtitle streams (audio/video) via ffmpeg.",
+      "passes": false
+    },
+    {
+      "id": "sec-004",
+      "category": "security",
+      "priority": "low",
+      "description": "No rate limiting on CPU-intensive authenticated endpoints — library scan, sprite generation, and intro detection can be spammed by any logged-in user causing DoS.",
+      "passes": false
+    },
+    {
+      "id": "sec-005",
+      "category": "security",
+      "priority": "low",
+      "description": "Admin browse endpoint symlink escape — /api/browse blocklist checks string prefixes but does not resolve symlinks, allowing an admin to traverse outside blocked directories via symlinked paths.",
+      "passes": false
     }
   ]
 }
