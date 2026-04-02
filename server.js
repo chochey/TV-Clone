@@ -1504,6 +1504,13 @@ app.get('/api/library', requireAuth, (req, res) => {
     return res.json({ items, page, limit, total, totalPages });
   }
 
+  // ETag for conditional requests (home page polls frequently)
+  const profileVersion = Object.keys(profileData.progress).length + '-' + Object.keys(profileData.watched).length;
+  const cacheTag = (libraryCache ? libraryCache.length : 0) + '-' + profileVersion;
+  const etag = '"lib-' + crypto.createHash('md5').update(cacheTag).digest('hex').slice(0, 12) + '"';
+  res.set('ETag', etag);
+  if (req.headers['if-none-match'] === etag) return res.status(304).end();
+
   res.json(result);
 });
 
