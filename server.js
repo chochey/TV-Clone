@@ -1413,7 +1413,7 @@ app.get('/api/library', requireAuth, (req, res) => {
   const profileData = loadProfileData(profileId);
 
   // Slim response: exclude heavy fields not needed for browsing
-  const result = lib.map(item => {
+  let result = lib.map(item => {
     const omdb = getOmdbForItem(item);
     return {
       id: item.id,
@@ -1444,6 +1444,63 @@ app.get('/api/library', requireAuth, (req, res) => {
       omdbPosterUrl: omdb?.omdbPosterUrl || omdb?.posterUrl,
     };
   });
+
+  // --- Filtering ---
+  const typeFilter = req.query.type;
+  if (typeFilter) result = result.filter(i => i.type === typeFilter);
+
+  const watchFilter = req.query.filter;
+  if (watchFilter === 'watched') result = result.filter(i => i.watched);
+  else if (watchFilter === 'unwatched') result = result.filter(i => !i.watched);
+
+  const search = req.query.search;
+  if (search) {
+    const q = search.toLowerCase();
+    result = result.filter(i =>
+      (i.title && i.title.toLowerCase().includes(q)) ||
+      (i.showName && i.showName.toLowerCase().includes(q)) ||
+      (i.filename && i.filename.toLowerCase().includes(q)) ||
+      (i.genre && i.genre.toLowerCase().includes(q))
+    );
+  }
+
+  // --- Sorting ---
+  const sort = req.query.sort;
+  if (sort) {
+    const collator = new Intl.Collator(undefined, { sensitivity: 'base', numeric: true });
+    switch (sort) {
+      case 'title-asc':
+        result.sort((a, b) => collator.compare(a.title || '', b.title || ''));
+        break;
+      case 'title-desc':
+        result.sort((a, b) => collator.compare(b.title || '', a.title || ''));
+        break;
+      case 'year-desc':
+        result.sort((a, b) => (b.year || 0) - (a.year || 0));
+        break;
+      case 'year-asc':
+        result.sort((a, b) => (a.year || 0) - (b.year || 0));
+        break;
+      case 'recent':
+        result.sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0));
+        break;
+      case 'rating-desc':
+        result.sort((a, b) => (parseFloat(b.imdbRating) || 0) - (parseFloat(a.imdbRating) || 0));
+        break;
+    }
+  }
+
+  // --- Pagination (backward-compatible) ---
+  const pageParam = req.query.page;
+  if (pageParam && parseInt(pageParam, 10) >= 1) {
+    const page = parseInt(pageParam, 10);
+    const limit = Math.min(parseInt(req.query.limit, 10) || 60, 200);
+    const total = result.length;
+    const totalPages = Math.ceil(total / limit);
+    const start = (page - 1) * limit;
+    const items = result.slice(start, start + limit);
+    return res.json({ items, page, limit, total, totalPages });
+  }
 
   res.json(result);
 });
@@ -2179,7 +2236,7 @@ function extractFrame(filePath, timestamp, outFile) {
     const timeout = setTimeout(() => {
       proc.kill();
       resolve(false);
-    }, 60000); // 60s max per frame
+    }, 5 * 60 * 1000); // 5min max per frame (large files with slow seeking need more time)
     proc.on('close', (code) => { clearTimeout(timeout); resolve(code === 0); });
     proc.on('error', () => { clearTimeout(timeout); resolve(false); });
   });
@@ -2840,6 +2897,7 @@ app.get('/hls/:id/master.m3u8', requireAuth, ensureLibrary, async (req, res) => 
           transcodeSessions[id].timeout = setTimeout(() => cleanupSession(id), TRANSCODE_TIMEOUT_MS);
           res.set({
             'Content-Type': 'application/vnd.apple.mpegurl', 'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no',
             'X-Total-Duration': String(duration), 'X-Seek-Offset': String(transcodeSessions[id].seekOffset || 0),
           });
           return res.sendFile(m3u8Path);
@@ -2918,11 +2976,13 @@ app.get('/hls/:id/master.m3u8', requireAuth, ensureLibrary, async (req, res) => 
     try {
       if (fs.existsSync(m3u8Path) && fs.statSync(m3u8Path).size > 0) {
         const content = fs.readFileSync(m3u8Path, 'utf-8');
-        // Wait until at least one EXTINF entry exists (ffmpeg has written a real segment)
-        if (content.includes('#EXTINF:')) {
+        // Wait until at least 2 segments exist so the player has a buffer on startup
+        const segCount = (content.match(/#EXTINF:/g) || []).length;
+        if (segCount >= 2) {
           clearInterval(poll);
           res.set({
             'Content-Type': 'application/vnd.apple.mpegurl', 'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no',
             'X-Total-Duration': String(duration), 'X-Seek-Offset': String(startTime),
           });
           return res.sendFile(m3u8Path);
@@ -2970,7 +3030,7 @@ app.get('/hls/:id/:segment', requireAuth, (req, res) => {
       const st = fs.statSync(segPath);
       if (st.size > 0) {
         const ct = segName.endsWith('.m3u8') ? 'application/vnd.apple.mpegurl' : 'video/mp2t';
-        res.set({ 'Content-Type': ct, 'Cache-Control': 'no-cache' });
+        res.set({ 'Content-Type': ct, 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no' });
         return res.sendFile(segPath);
       }
     } catch {}
@@ -2996,7 +3056,7 @@ app.get('/hls/:id/:segment', requireAuth, (req, res) => {
         clearTimeout(timeout);
         try { watcher.close(); } catch {}
         const ct = segName.endsWith('.m3u8') ? 'application/vnd.apple.mpegurl' : 'video/mp2t';
-        res.set({ 'Content-Type': ct, 'Cache-Control': 'no-cache' });
+        res.set({ 'Content-Type': ct, 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no' });
         return res.sendFile(segPath);
       }
     } catch {}
