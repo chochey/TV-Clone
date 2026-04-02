@@ -173,6 +173,7 @@ select,input{font-family:inherit}
 /* Grid */
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:18px 12px}
 .grid .card{width:100%}
+.card-rating{position:absolute;top:6px;right:6px;background:rgba(0,0,0,.75);color:#f5c518;padding:2px 6px;border-radius:4px;font-size:.7rem;font-weight:700}
 
 /* Show detail page */
 .show-detail{padding:32px 40px}
@@ -1208,7 +1209,7 @@ function card(item){
   const poster=posterSrc?`<img src="${posterSrc}" alt="${esc(item.title)}" loading="lazy">`:`<div class="card-placeholder">&#127916;</div>`;
   const prog=item.progress.percent>0?`<div class="card-progress"><div class="card-progress-fill" style="width:${item.progress.percent}%"></div></div>`:'';
   const watched=item.watched?`<div class="card-watched-badge">✓</div>`:'';
-  const ratingBadge=item.imdbRating?`<div style="position:absolute;top:6px;right:6px;background:rgba(0,0,0,.75);color:#f5c518;padding:2px 6px;border-radius:4px;font-size:.7rem;font-weight:700">★ ${item.imdbRating}</div>`:'';
+  const ratingBadge=item.imdbRating?`<div class="card-rating">★ ${item.imdbRating}</div>`:'';
   const genres=item.genre?`<div class="card-year" style="color:var(--text-muted);font-size:.7rem">${item.genre}</div>`:item.genres&&item.genres.length?`<div class="genre-tags">${item.genres.map(g=>`<span class="genre-tag">${esc(g)}</span>`).join('')}</div>`:'';
   const typeLabel=item.type==='movie'?'Movie':item.type==='show'?'TV Show':customTypeLabel(item.type);
   return `<div class="card" onclick='playMedia("${item.id}")'><div class="card-poster">${poster}${prog}${watched}${ratingBadge}<div class="card-actions"><button class="card-action-btn" onclick="event.stopPropagation();toggleWatched('${item.id}',${!item.watched})" title="${item.watched?'Mark unwatched':'Mark watched'}">&#128065;</button><button class="card-action-btn" onclick="event.stopPropagation();addToQueue('${item.id}')" title="Add to queue">+Q</button></div><div class="card-overlay"><div class="play-icon">&#9654;</div></div></div><div class="card-info"><div class="card-title">${esc(item.title)}</div>${item.year?`<div class="card-year">${item.year}</div>`:''}<span class="card-type ${item.type}">${typeLabel}</span>${genres}</div></div>`;
@@ -1527,7 +1528,7 @@ function handleSearch(){
     const seasons=new Set(s.items.map(i=>i.epInfo?i.epInfo.season:0).filter(n=>n>0));
     const meta=seasons.size?`${seasons.size} season${seasons.size>1?'s':''}, ${ep} ep${ep>1?'s':''}`:`${ep} episode${ep>1?'s':''}`;
     const poster=s.poster?`<img src="${s.poster}" loading="lazy">`:`<div class="card-placeholder">&#128250;</div>`;
-    const ratingBadge=s.imdbRating?`<div style="position:absolute;top:6px;right:6px;background:rgba(0,0,0,.75);color:#f5c518;padding:2px 6px;border-radius:4px;font-size:.7rem;font-weight:700">★ ${s.imdbRating}</div>`:'';
+    const ratingBadge=s.imdbRating?`<div class="card-rating">★ ${s.imdbRating}</div>`:'';
     const genres=s.genre?`<div class="card-year" style="color:var(--text-muted);font-size:.7rem">${s.genre}</div>`:'';
     const tLabel=s.type==='show'?'TV Show':customTypeLabel(s.type);
     return `<div class="card" onclick="openShow('${escAttr(s.name)}','${escAttr(s.type)}')"><div class="card-poster">${poster}${ratingBadge}<div class="card-overlay"><div class="play-icon">&#9654;</div></div></div><div class="card-info"><div class="card-title">${esc(s.name)}</div><div class="card-year">${meta}</div>${s.year?`<div class="card-year">${s.year}</div>`:''}<span class="card-type ${s.type}">${tLabel}</span>${genres}</div></div>`;
