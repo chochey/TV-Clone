@@ -29,6 +29,8 @@ const PROBE_CACHE_FILE = path.join(DATA_DIR, 'probe_cache.json');
 const CORRUPTED_FILES_FILE = path.join(DATA_DIR, 'corrupted_files.json');
 const OMDB_CACHE_FILE = path.join(DATA_DIR, 'omdb_cache.json');
 const OMDB_POSTER_DIR = path.join(DATA_DIR, 'posters');
+const SUBTITLE_CACHE_DIR = path.join(DATA_DIR, 'subtitle_cache');
+if (!fs.existsSync(SUBTITLE_CACHE_DIR)) fs.mkdirSync(SUBTITLE_CACHE_DIR, { recursive: true });
 const OMDB_API_KEY = process.env.OMDB_API_KEY || '';
 const OMDB_BASE_URL = 'https://www.omdbapi.com/';
 const QBT_BASE = process.env.QBT_URL || 'http://localhost:8080';
@@ -2692,8 +2694,13 @@ app.get('/subtitle/:id', requireAuth, ensureLibrary, (req, res) => {
   const sub = subtitleIndex[req.params.id];
   if (!sub || !fs.existsSync(sub.absPath)) return res.status(404).send('Not found');
 
-  // If .srt, convert to .vtt on the fly (browsers need WebVTT)
+  // If .srt, convert to .vtt (browsers need WebVTT) — cache the conversion
   if (sub.format === 'srt') {
+    const cacheFile = path.join(SUBTITLE_CACHE_DIR, req.params.id + '.vtt');
+    if (fs.existsSync(cacheFile)) {
+      res.set('Cache-Control', 'public, max-age=604800');
+      return res.sendFile(cacheFile);
+    }
     const content = fs.readFileSync(sub.absPath, 'utf-8');
     const vtt = 'WEBVTT\n\n' + content
       .replace(/\r\n/g, '\n')
@@ -2701,9 +2708,14 @@ app.get('/subtitle/:id', requireAuth, ensureLibrary, (req, res) => {
       .replace(/\{\\[^}]*\}/g, '')          // Strip SSA/ASS style tags like {\an8}, {\i1}, {\b1}
       .replace(/<font[^>]*>|<\/font>/gi, ''); // Strip HTML font tags
     res.set('Content-Type', 'text/vtt; charset=utf-8');
+    res.set('Cache-Control', 'public, max-age=604800');
     res.send(vtt);
+    // Write cache asynchronously (temp + rename)
+    const tmpFile = cacheFile + '.tmp';
+    fs.writeFile(tmpFile, vtt, () => { fs.rename(tmpFile, cacheFile, () => {}); });
   } else {
     res.set('Content-Type', 'text/vtt; charset=utf-8');
+    res.set('Cache-Control', 'public, max-age=604800');
     res.sendFile(sub.absPath);
   }
 });
@@ -2722,6 +2734,13 @@ app.get('/subtitle/embedded/:fileId/:streamIndex', requireAuth, ensureLibrary, (
     return res.status(400).send('Invalid stream index');
   }
 
+  // Check cache first
+  const cacheFile = path.join(SUBTITLE_CACHE_DIR, req.params.fileId + '_' + streamIdx + '.vtt');
+  if (fs.existsSync(cacheFile)) {
+    res.set('Cache-Control', 'public, max-age=604800');
+    return res.sendFile(cacheFile);
+  }
+
   // Extract subtitle to VTT via ffmpeg
   const proc = spawn('ffmpeg', [
     '-hide_banner', '-loglevel', 'error',
@@ -2730,11 +2749,23 @@ app.get('/subtitle/embedded/:fileId/:streamIndex', requireAuth, ensureLibrary, (
     '-f', 'webvtt', '-',
   ]);
 
-  res.set('Content-Type', 'text/vtt; charset=utf-8');
-  res.set('Cache-Control', 'public, max-age=3600');
-  proc.stdout.pipe(res);
+  const chunks = [];
+  proc.stdout.on('data', chunk => chunks.push(chunk));
   proc.stderr.on('data', d => console.error(`[sub-extract] ${d.toString().trim()}`));
-  proc.on('error', () => res.status(500).send('Extraction failed'));
+  proc.on('error', () => { if (!res.headersSent) res.status(500).send('Extraction failed'); });
+  proc.on('close', code => {
+    if (code === 0 && chunks.length > 0) {
+      const data = Buffer.concat(chunks);
+      res.set('Content-Type', 'text/vtt; charset=utf-8');
+      res.set('Cache-Control', 'public, max-age=604800');
+      res.end(data);
+      // Write cache asynchronously (temp + rename)
+      const tmpFile = cacheFile + '.tmp';
+      fs.writeFile(tmpFile, data, () => { fs.rename(tmpFile, cacheFile, () => {}); });
+    } else {
+      if (!res.headersSent) res.status(500).send('Extraction failed');
+    }
+  });
 });
 
 // ══════════════════════════════════════════════════════════════════════
