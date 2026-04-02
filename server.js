@@ -2152,7 +2152,7 @@ app.get('/stream/:id', requireAuth, ensureLibrary, (req, res) => {
 app.get('/poster/:id', requireAuth, ensureLibrary, (req, res) => {
   const p = fileIndex[`poster_${req.params.id}`];
   if (!p || !fs.existsSync(p)) return res.status(404).send('Not found');
-  res.set('Cache-Control', 'public, max-age=86400');
+  res.set('Cache-Control', 'public, max-age=2592000');
   res.sendFile(p);
 });
 
@@ -2691,7 +2691,7 @@ app.get('/api/sprites/:id/:sheet', requireAuth, ensureLibrary, (req, res) => {
   const sheetNum = parseInt(req.params.sheet, 10) || 0;
   const file = spriteFilePath(thumbId, sheetNum);
   if (fs.existsSync(file)) {
-    res.set({ 'Content-Type': 'image/jpeg', 'Cache-Control': 'public, max-age=604800' });
+    res.set({ 'Content-Type': 'image/jpeg', 'Cache-Control': 'public, max-age=31536000, immutable' });
     return res.sendFile(file);
   }
   res.status(202).send('Generating');
