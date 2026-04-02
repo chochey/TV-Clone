@@ -1280,6 +1280,11 @@ async function loadNextPage(type){
     const grid=document.getElementById('pgrid-'+type);
     const title=document.getElementById('pgrid-title-'+type);
     if(!grid||!data.items)return;
+    if(data.total===0&&state.page===0){
+      grid.closest('.section').innerHTML=`<div class="empty-state"><div class="empty-icon">&#127916;</div><div class="empty-title">No ${state.label} Found</div><div class="empty-text">Link a folder or adjust your filters.</div></div>`;
+      state.done=true;
+      return;
+    }
     grid.insertAdjacentHTML('beforeend',data.items.map(card).join(''));
     state.page=data.page;
     state.total=data.total;
