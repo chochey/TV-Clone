@@ -1070,7 +1070,7 @@ function renderView(){
   const a=document.getElementById('contentArea');
   switch(currentView){
     case 'home':a.innerHTML=renderHome();break;
-    case 'movies':a.innerHTML=renderGrid('movie','Movies');break;
+    case 'movies':a.innerHTML=renderPaginatedGrid('movie','Movies');setupGridObserver('movie');break;
     case 'shows':a.innerHTML=renderShowsView();break;
     case 'continue':a.innerHTML=renderContinue();break;
     case 'queue':a.innerHTML=renderQueue();break;
@@ -1083,7 +1083,15 @@ function renderView(){
     default:
       if(currentView.startsWith('custom_')){
         const typeName=currentView.slice(7);
-        a.innerHTML=renderCustomTypeView(typeName);
+        const items=library.filter(m=>m.type===typeName);
+        const hasShows=items.some(i=>i.showName);
+        if(hasShows){
+          a.innerHTML=renderCustomTypeView(typeName);
+        }else{
+          const label=customTypeLabel(typeName);
+          a.innerHTML=renderPaginatedGrid(typeName,label);
+          setupGridObserver(typeName);
+        }
       }
       break;
   }
@@ -1242,6 +1250,55 @@ async function dismissItem(id,section,btn){
       setTimeout(()=>cardEl.remove(),260);
     }
   }catch(e){console.error('dismiss failed',e);}
+}
+
+// ── Paginated grid with infinite scroll ───────────────────────────────
+const paginationState={};
+let activeGridObserver=null;
+
+function renderPaginatedGrid(type,label){
+  if(activeGridObserver){activeGridObserver.disconnect();activeGridObserver=null;}
+  const stateKey=type+'_'+watchFilter+'_'+document.getElementById('sortSelect').value;
+  paginationState[stateKey]={page:0,total:0,loading:false,done:false,type,label};
+  return `<div class="section" id="pgrid-section-${type}"><div class="section-header"><h2 class="section-title" id="pgrid-title-${type}">${label}</h2></div><div class="grid" id="pgrid-${type}"></div><div id="pgrid-sentinel-${type}" style="height:1px"></div><div id="pgrid-loading-${type}" style="text-align:center;padding:20px;display:none;color:var(--text-muted)">Loading...</div></div>`;
+}
+
+async function loadNextPage(type){
+  const sort=document.getElementById('sortSelect').value;
+  const stateKey=type+'_'+watchFilter+'_'+sort;
+  const state=paginationState[stateKey];
+  if(!state||state.loading||state.done)return;
+  state.loading=true;
+  const loader=document.getElementById('pgrid-loading-'+type);
+  if(loader)loader.style.display='';
+  const page=state.page+1;
+  const params=new URLSearchParams({profile:activeProfile,type,page:String(page),limit:'60',sort});
+  if(watchFilter!=='all')params.set('filter',watchFilter);
+  try{
+    const res=await fetch('/api/library?'+params.toString());
+    const data=await res.json();
+    const grid=document.getElementById('pgrid-'+type);
+    const title=document.getElementById('pgrid-title-'+type);
+    if(!grid||!data.items)return;
+    grid.insertAdjacentHTML('beforeend',data.items.map(card).join(''));
+    state.page=data.page;
+    state.total=data.total;
+    state.done=data.page>=data.totalPages;
+    if(title)title.textContent=state.label+' ('+data.total+')';
+  }catch(e){console.error('loadNextPage error',e);}
+  state.loading=false;
+  if(loader)loader.style.display='none';
+}
+
+function setupGridObserver(type){
+  const sentinel=document.getElementById('pgrid-sentinel-'+type);
+  if(!sentinel)return;
+  if(activeGridObserver)activeGridObserver.disconnect();
+  activeGridObserver=new IntersectionObserver(entries=>{
+    if(entries[0].isIntersecting)loadNextPage(type);
+  },{rootMargin:'400px'});
+  activeGridObserver.observe(sentinel);
+  loadNextPage(type);
 }
 
 function renderGrid(type,label){
@@ -2217,13 +2274,23 @@ async function playMedia(id){
           liveSyncDuration:0,liveMaxLatencyDuration:Infinity,
           highBufferWatchdogPeriod:2,nudgeOffset:0.2,nudgeMaxRetry:5,enableWorker:true,
           fragLoadingTimeOut:30000,fragLoadingMaxRetry:4,fragLoadingRetryDelay:1000,
+          autoStartLoad:false,
         });
         hlsInstance.loadSource(url);
         hlsInstance.attachMedia(V);
         hlsInstance.on(Hls.Events.MANIFEST_PARSED,function(){
           if(loadId!==window._hlsLoadId)return;
           V.playbackRate=playbackSpeed;
-          V.play().catch(()=>{});
+          var segsReady=0;
+          function onFragLoaded(){
+            segsReady++;
+            if(segsReady>=2){
+              hlsInstance.off(Hls.Events.FRAG_LOADED,onFragLoaded);
+              V.play().catch(()=>{});
+            }
+          }
+          hlsInstance.on(Hls.Events.FRAG_LOADED,onFragLoaded);
+          hlsInstance.startLoad();
         });
         hlsInstance.on(Hls.Events.ERROR,(_e,data)=>{
           if(data.fatal){
