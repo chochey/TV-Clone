@@ -497,7 +497,9 @@ let subProbeCacheDirty = false;
 let probeCache = loadJSON(PROBE_CACHE_FILE, {});
 let probeCacheDirty = false;
 // Pixel format cache: filePath -> pix_fmt string (e.g. 'yuv420p', 'yuv420p10le')
-const pixFmtCache = {};
+const PIX_FMT_CACHE_FILE = path.join(DATA_DIR, 'pix_fmt_cache.json');
+let pixFmtCache = loadJSON(PIX_FMT_CACHE_FILE, {});
+let pixFmtCacheDirty = false;
 const AUDIO_PROBE_CACHE_FILE = path.join(DATA_DIR, 'audio_probe_cache.json');
 let audioProbeCache = loadJSON(AUDIO_PROBE_CACHE_FILE, {});
 let audioProbeCacheDirty = false;
@@ -628,7 +630,7 @@ function probeFileAsync(filePath) {
         const audioCodec = streams.find(s => s.codec_type === 'audio')?.codec_name || 'unknown';
         probeCache[filePath] = videoCodec;
         probeCacheDirty = true;
-        if (videoStream?.pix_fmt) pixFmtCache[filePath] = videoStream.pix_fmt;
+        if (videoStream?.pix_fmt) { pixFmtCache[filePath] = videoStream.pix_fmt; pixFmtCacheDirty = true; }
         audioProbeCache[filePath] = audioCodec;
         audioProbeCacheDirty = true;
         // Build full audio tracks list
@@ -714,6 +716,7 @@ async function backgroundProbe() {
     }
     if ((codecCount + subCount) % 100 === 0 && (codecCount + subCount) > 0) {
       if (probeCacheDirty) { saveJSON(PROBE_CACHE_FILE, probeCache); probeCacheDirty = false; }
+      if (pixFmtCacheDirty) { saveJSON(PIX_FMT_CACHE_FILE, pixFmtCache); pixFmtCacheDirty = false; }
       if (audioProbeCacheDirty) { saveJSON(AUDIO_PROBE_CACHE_FILE, audioProbeCache); audioProbeCacheDirty = false; }
       if (audioTracksCacheDirty) { saveJSON(AUDIO_TRACKS_CACHE_FILE, audioTracksCache); audioTracksCacheDirty = false; }
       if (subProbeCacheDirty) { saveJSON(SUB_PROBE_CACHE_FILE, subProbeCache); subProbeCacheDirty = false; }
@@ -721,6 +724,7 @@ async function backgroundProbe() {
     }
   }
   if (probeCacheDirty) { saveJSON(PROBE_CACHE_FILE, probeCache); probeCacheDirty = false; }
+  if (pixFmtCacheDirty) { saveJSON(PIX_FMT_CACHE_FILE, pixFmtCache); pixFmtCacheDirty = false; }
   if (audioProbeCacheDirty) { saveJSON(AUDIO_PROBE_CACHE_FILE, audioProbeCache); audioProbeCacheDirty = false; }
   if (audioTracksCacheDirty) { saveJSON(AUDIO_TRACKS_CACHE_FILE, audioTracksCache); audioTracksCacheDirty = false; }
   if (subProbeCacheDirty) { saveJSON(SUB_PROBE_CACHE_FILE, subProbeCache); subProbeCacheDirty = false; }
@@ -729,299 +733,15 @@ async function backgroundProbe() {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-// ── OMDB Metadata ────────────────────────────────────────────────────
+// ── OMDB Metadata (extracted to lib/omdb.js) ────────────────────────
 // ══════════════════════════════════════════════════════════════════════
+const omdb = require('./lib/omdb')({
+  loadJSON, saveJSON,
+  OMDB_CACHE_FILE, OMDB_API_KEY, OMDB_BASE_URL, OMDB_POSTER_DIR,
+});
+const { parseYearFromName, stripYearFromName, omdbCacheKey,
+        fetchOmdbData, saveOmdbCache, getOmdbForItem, backgroundOmdbFetch } = omdb;
 
-let omdbCache = loadJSON(OMDB_CACHE_FILE, {});
-let omdbCacheDirty = false;
-
-function omdbCacheKey(title, year) {
-  return `${(title || '').toLowerCase().trim()}|${year || ''}`;
-}
-
-function titleHash(title, year) {
-  return crypto.createHash('md5').update(`${title}|${year || ''}`).digest('hex');
-}
-
-// Parse year from a show folder name like "Firefly (2002)" or "Breaking Bad 2008"
-function parseYearFromName(name) {
-  const m = name.match(/[\(\s](\d{4})[\)\s]?/);
-  return m ? m[1] : null;
-}
-
-// Strip year from name: "Firefly (2002)" -> "Firefly"
-function stripYearFromName(name) {
-  return name.replace(/[\s\.\-_]*[\(\[]?\d{4}[\)\]]?\s*$/, '').trim();
-}
-
-function httpGet(url, maxRedirects = 3) {
-  return new Promise((resolve, reject) => {
-    if (maxRedirects <= 0) return reject(new Error('Too many redirects'));
-    const urlObj = new URL(url);
-    // Only allow http/https
-    if (!['http:', 'https:'].includes(urlObj.protocol)) {
-      return reject(new Error('Invalid protocol'));
-    }
-    const mod = url.startsWith('https') ? https : http;
-    mod.get(url, (res) => {
-      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        // Validate redirect target stays within http/https
-        try {
-          const redirectUrl = new URL(res.headers.location, url);
-          if (!['http:', 'https:'].includes(redirectUrl.protocol)) {
-            return reject(new Error('Invalid redirect protocol'));
-          }
-          return httpGet(redirectUrl.href, maxRedirects - 1).then(resolve, reject);
-        } catch {
-          return reject(new Error('Invalid redirect URL'));
-        }
-      }
-      const chunks = [];
-      res.on('data', chunk => chunks.push(chunk));
-      res.on('end', () => resolve(Buffer.concat(chunks)));
-      res.on('error', reject);
-    }).on('error', reject);
-  });
-}
-
-// Clean up title for better OMDB matching
-function normalizeTitle(title) {
-  return title
-    .replace(/\b(REMASTERED|UNRATED|EXTENDED|DIRECTORS\s*CUT|THEATRICAL|IMAX|PROPER)\b/gi, '')
-    .replace(/\b\d{3,4}p\b/gi, '')             // 1080p, 720p etc
-    .replace(/\b(brrip|bluray|x264|yify|gaz|webrip|hdtv)\b/gi, '') // release tags
-    .replace(/\[.*?\]/g, '')                     // [tags]
-    .replace(/\bm\.c\b/gi, 'M.C.')             // M.C. -> M.C.
-    .replace(/\bu n c l e\b/gi, 'U.N.C.L.E.')  // U.N.C.L.E.
-    .replace(/\bsg-1\b/gi, 'SG-1')             // SG-1
-    .replace(/- /g, ': ')                        // dashes to colons (subtitle separators)
-    .replace(/\s+/g, ' ')
-    .replace(/\s*-\s*$/, '')
-    .trim();
-}
-
-// Generate apostrophe variations for titles stripped of punctuation
-// e.g. "charlie wilsons war" -> ["charlie wilson's war"]
-// e.g. "dont mess with the zohan" -> ["don't mess with the zohan"]
-function apostropheVariations(title) {
-  const contractions = {
-    'dont': "don't", 'wont': "won't", 'cant': "can't", 'didnt': "didn't",
-    'isnt': "isn't", 'wasnt': "wasn't", 'arent': "aren't", 'werent': "weren't",
-    'wouldnt': "wouldn't", 'couldnt': "couldn't", 'shouldnt': "shouldn't",
-    'hasnt': "hasn't", 'havent': "haven't", 'hadnt': "hadn't",
-    'theyre': "they're", 'youre': "you're", 'were': "we're",
-    'im': "I'm", 'ive': "I've", 'youve': "you've", 'theyve': "they've",
-    'youll': "you'll", 'theyll': "they'll", 'well': "we'll", 'ill': "I'll",
-    'its': "it's", 'hes': "he's", 'shes': "she's", 'whos': "who's",
-    'whats': "what's", 'thats': "that's", 'theres': "there's",
-  };
-  const skip = new Set(['the','this','his','has','was','is','as','us','its','yes','plus',
-    'does','goes','makes','takes','comes','gives','lives','moves','uses','alias',
-    'christmas','campus','bus','focus','bonus','genius','status','virus','corpus',
-    'mess','less','boss','loss','miss','kiss','cross','dress','press','stress','class','glass','grass','pass']);
-  const results = [];
-  // Try contractions
-  let contracted = title;
-  for (const [from, to] of Object.entries(contractions)) {
-    contracted = contracted.replace(new RegExp('\\b' + from + '\\b', 'gi'), to);
-  }
-  if (contracted !== title) results.push(contracted);
-  // Try possessives: for each word ending in 's', try one at a time
-  // "wilsons" -> "wilson's" but NOT "demons" -> "demon's"
-  const words = title.split(/\s+/);
-  for (let i = 0; i < words.length; i++) {
-    const w = words[i];
-    if (w.length < 3 || !w.match(/s$/i) || skip.has(w.toLowerCase())) continue;
-    // Only try words that look like possessives (proper-noun-ish or followed by a noun)
-    const variant = [...words];
-    variant[i] = w.slice(0, -1) + "'s";
-    const v = variant.join(' ');
-    if (!results.includes(v)) results.push(v);
-  }
-  return results;
-}
-
-async function fetchOmdbData(title, year, type) {
-  const key = omdbCacheKey(title, year);
-  if (omdbCache[key]) return omdbCache[key];
-  if (!OMDB_API_KEY) return null;
-
-  // Normalize title for search
-  title = normalizeTitle(title);
-  const params = new URLSearchParams({ apikey: OMDB_API_KEY, t: title, plot: 'short' });
-  if (year) params.set('y', year);
-  if (type === 'show') params.set('type', 'series');
-  else if (type === 'movie') params.set('type', 'movie');
-
-  const url = `${OMDB_BASE_URL}?${params.toString()}`;
-  try {
-    const raw = await httpGet(url);
-    const data = JSON.parse(raw.toString('utf-8'));
-
-    if (data.Response === 'False' && year) {
-      // Retry without year — year might be wrong or part of the title
-      const params2 = new URLSearchParams({ apikey: OMDB_API_KEY, t: title, plot: 'short' });
-      if (type === 'show') params2.set('type', 'series');
-      else if (type === 'movie') params2.set('type', 'movie');
-      try {
-        const raw2 = await httpGet(`${OMDB_BASE_URL}?${params2.toString()}`);
-        const data2 = JSON.parse(raw2.toString('utf-8'));
-        if (data2.Response !== 'False') {
-          Object.assign(data, data2);
-          data.Response = 'True';
-        }
-      } catch {}
-    }
-    if (data.Response === 'False') {
-      // Try apostrophe variations (e.g. "wilsons" -> "wilson's", "dont" -> "don't")
-      const variations = apostropheVariations(title);
-      for (const variant of variations) {
-        try {
-          const vParams = new URLSearchParams({ apikey: OMDB_API_KEY, t: variant, plot: 'short' });
-          if (year) vParams.set('y', year);
-          if (type === 'show') vParams.set('type', 'series');
-          else if (type === 'movie') vParams.set('type', 'movie');
-          const vRaw = await httpGet(`${OMDB_BASE_URL}?${vParams.toString()}`);
-          const vData = JSON.parse(vRaw.toString('utf-8'));
-          if (vData.Response !== 'False') {
-            Object.assign(data, vData);
-            data.Response = 'True';
-            console.log(`  [omdb] Apostrophe fix: "${title}" -> "${variant}"`);
-            break;
-          }
-        } catch {}
-      }
-    }
-    if (data.Response === 'False') {
-      // Cache the miss so we don't re-fetch
-      omdbCache[key] = { _miss: true, _fetchedAt: Date.now() };
-      omdbCacheDirty = true;
-      return omdbCache[key];
-    }
-
-    const result = {
-      omdbTitle: data.Title || title,
-      omdbYear: data.Year || year,
-      plot: data.Plot || '',
-      rated: data.Rated || '',
-      genre: data.Genre || '',
-      director: data.Director || '',
-      actors: data.Actors || '',
-      imdbRating: data.imdbRating || '',
-      imdbID: data.imdbID || '',
-      runtime: data.Runtime || '',
-      posterUrl: null,
-      _fetchedAt: Date.now(),
-    };
-
-    // Download poster image locally
-    if (data.Poster && data.Poster !== 'N/A') {
-      try {
-        const hash = titleHash(title, year);
-        const posterPath = path.join(OMDB_POSTER_DIR, `${hash}.jpg`);
-        if (!fs.existsSync(posterPath)) {
-          const posterData = await httpGet(data.Poster);
-          fs.writeFileSync(posterPath, posterData);
-        }
-        result.posterUrl = `/omdb-poster/${hash}`;
-      } catch (e) {
-        console.error(`  [omdb] Failed to download poster for "${title}": ${e.message}`);
-      }
-    }
-
-    omdbCache[key] = result;
-    omdbCacheDirty = true;
-    return result;
-  } catch (e) {
-    console.error(`  [omdb] Fetch error for "${title}": ${e.message}`);
-    return null;
-  }
-}
-
-function saveOmdbCache() {
-  if (omdbCacheDirty) {
-    saveJSON(OMDB_CACHE_FILE, omdbCache);
-    omdbCacheDirty = false;
-  }
-}
-
-// Get OMDB metadata for a library item (looks up from cache only, no fetch)
-function getOmdbForItem(item) {
-  let searchTitle, searchYear;
-  if (item.type === 'show' && item.showName) {
-    searchYear = parseYearFromName(item.showName);
-    searchTitle = stripYearFromName(item.showName);
-  } else {
-    searchTitle = item.title;
-    searchYear = item.year;
-  }
-  const key = omdbCacheKey(searchTitle, searchYear);
-  const cached = omdbCache[key];
-  if (!cached || cached._miss) return null;
-  return {
-    omdbTitle: cached.omdbTitle,
-    omdbYear: cached.omdbYear,
-    plot: cached.plot,
-    rated: cached.rated,
-    genre: cached.genre,
-    director: cached.director,
-    actors: cached.actors,
-    imdbRating: cached.imdbRating,
-    imdbID: cached.imdbID,
-    runtime: cached.runtime,
-    omdbPosterUrl: cached.posterUrl,
-  };
-}
-
-// Background metadata fetch: runs after library scan, rate-limited
-let bgOmdbRunning = false;
-async function backgroundOmdbFetch() {
-  if (bgOmdbRunning) return;
-  bgOmdbRunning = true;
-  const lib = libraryCache || [];
-  let fetchCount = 0;
-
-  // Deduplicate: for shows, only fetch once per showName
-  const seen = new Set();
-
-  for (const item of lib) {
-    let searchTitle, searchYear, itemType;
-    if (item.type === 'show' && item.showName) {
-      searchYear = parseYearFromName(item.showName);
-      searchTitle = stripYearFromName(item.showName);
-      itemType = 'show';
-    } else {
-      searchTitle = item.title;
-      searchYear = item.year;
-      itemType = 'movie';
-    }
-
-    const key = omdbCacheKey(searchTitle, searchYear);
-    if (seen.has(key)) continue;
-    seen.add(key);
-
-    // Skip if already cached
-    if (omdbCache[key]) continue;
-
-    // Rate limit: 1 request per 200ms
-    await new Promise(r => setTimeout(r, 200));
-
-    await fetchOmdbData(searchTitle, searchYear, itemType);
-    fetchCount++;
-
-    // Save cache periodically
-    if (fetchCount % 25 === 0) {
-      saveOmdbCache();
-      console.log(`  [omdb] ${fetchCount} items fetched...`);
-    }
-  }
-
-  saveOmdbCache();
-  if (fetchCount > 0) {
-    console.log(`  [omdb] Background fetch complete -- ${fetchCount} new items fetched.`);
-  }
-  bgOmdbRunning = false;
-}
 
 const SKIP_DIRS = new Set(['featurettes','extras','behind the scenes','deleted scenes','interviews',
   'bonus','bonus features','samples','sample','specials','trailers','shorts']);
@@ -1922,8 +1642,7 @@ app.get('/api/metadata/:id', requireAuth, async (req, res) => {
     itemType = 'movie';
   }
 
-  const key = omdbCacheKey(searchTitle, searchYear);
-  let cached = omdbCache[key];
+  let cached = omdb.getCached(searchTitle, searchYear);
 
   // If not cached or was a miss, try fetching
   if (!cached || cached._miss) {
@@ -3319,6 +3038,14 @@ app.get('/', (_req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
 });
 app.get('/hls.min.js', (_req, res) => res.sendFile(path.join(__dirname, 'hls.min.js')));
+app.get('/app.css', (_req, res) => {
+  res.set('Cache-Control', 'public, max-age=3600');
+  res.sendFile(path.join(__dirname, 'public', 'app.css'));
+});
+app.get('/app.js', (_req, res) => {
+  res.set('Cache-Control', 'public, max-age=3600');
+  res.sendFile(path.join(__dirname, 'public', 'app.js'));
+});
 
 // ── Start server ───────────────────────────────────────────────────────
 function getLocalIP() {
