@@ -1648,7 +1648,11 @@ async function playMedia(id){
         if(hlsInstance){hlsInstance.destroy();hlsInstance=null;}
         hlsInstance=new Hls({
           maxBufferLength:30,maxMaxBufferLength:120,startFragPrefetch:true,
-          liveSyncDuration:0,liveMaxLatencyDuration:Infinity,
+          // startPosition:0 + no liveSync* keys: treat the EVENT playlist as VOD
+          // and start from the first segment. Previously liveSyncDuration:0 made
+          // HLS.js jump to the live edge, starting at whatever segment ffmpeg
+          // had produced — causing a stall while it stabilized.
+          startPosition:0,
           highBufferWatchdogPeriod:2,nudgeOffset:0.2,nudgeMaxRetry:5,enableWorker:true,
           fragLoadingTimeOut:30000,fragLoadingMaxRetry:4,fragLoadingRetryDelay:1000,
           autoStartLoad:false,
