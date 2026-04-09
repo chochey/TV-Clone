@@ -489,24 +489,57 @@ let fileIndex = {};  // id -> absolute path
 let subtitleIndex = {}; // subId -> { absPath, format }
 
 // ── Codec probing ──────────────────────────────────────────────────────
-const SUB_PROBE_CACHE_FILE = path.join(DATA_DIR, 'sub_probe_cache.json');
 const TEXT_SUB_CODECS = new Set(['subrip', 'srt', 'ass', 'ssa', 'webvtt', 'mov_text']);
-let subProbeCache = loadJSON(SUB_PROBE_CACHE_FILE, {}); // filePath -> [{index, codec, lang, title}]
-let subProbeCacheDirty = false;
 
-let probeCache = loadJSON(PROBE_CACHE_FILE, {});
-let probeCacheDirty = false;
-// Pixel format cache: filePath -> pix_fmt string (e.g. 'yuv420p', 'yuv420p10le')
+// Unified media-info store. Persisted as one file (media_info.json). The five
+// in-memory caches below are kept as thin views over this single structure so
+// call sites can stay unchanged while disk I/O is atomic and one save covers
+// everything. This eliminates the "one cache has the file, another doesn't"
+// bug class that previously bit the VAAPI 10-bit fallback path.
+const MEDIA_INFO_FILE = path.join(DATA_DIR, 'media_info.json');
+const SUB_PROBE_CACHE_FILE = path.join(DATA_DIR, 'sub_probe_cache.json');
 const PIX_FMT_CACHE_FILE = path.join(DATA_DIR, 'pix_fmt_cache.json');
-let pixFmtCache = loadJSON(PIX_FMT_CACHE_FILE, {});
-let pixFmtCacheDirty = false;
 const AUDIO_PROBE_CACHE_FILE = path.join(DATA_DIR, 'audio_probe_cache.json');
-let audioProbeCache = loadJSON(AUDIO_PROBE_CACHE_FILE, {});
-let audioProbeCacheDirty = false;
-// Full audio tracks cache: filePath -> [{ index, codec, lang, title, channels, channelLayout }]
 const AUDIO_TRACKS_CACHE_FILE = path.join(DATA_DIR, 'audio_tracks_cache.json');
-let audioTracksCache = loadJSON(AUDIO_TRACKS_CACHE_FILE, {});
-let audioTracksCacheDirty = false;
+
+let subProbeCache, probeCache, pixFmtCache, audioProbeCache, audioTracksCache;
+let mediaInfoDirty = false;
+(function loadMediaInfo() {
+  // Prefer the unified file if it exists.
+  if (fs.existsSync(MEDIA_INFO_FILE)) {
+    const m = loadJSON(MEDIA_INFO_FILE, {});
+    probeCache = m.video || {};
+    pixFmtCache = m.pixFmt || {};
+    audioProbeCache = m.audio || {};
+    audioTracksCache = m.audioTracks || {};
+    subProbeCache = m.subs || {};
+    console.log(`[Startup] Loaded unified media info (${Object.keys(probeCache).length} files)`);
+    return;
+  }
+  // Migrate from the old split cache files if present.
+  probeCache = loadJSON(PROBE_CACHE_FILE, {});
+  pixFmtCache = loadJSON(PIX_FMT_CACHE_FILE, {});
+  audioProbeCache = loadJSON(AUDIO_PROBE_CACHE_FILE, {});
+  audioTracksCache = loadJSON(AUDIO_TRACKS_CACHE_FILE, {});
+  subProbeCache = loadJSON(SUB_PROBE_CACHE_FILE, {});
+  if (Object.keys(probeCache).length > 0) {
+    console.log(`[Startup] Migrating ${Object.keys(probeCache).length} media info entries to unified store`);
+    mediaInfoDirty = true;
+    saveMediaInfo();
+  }
+})();
+
+function saveMediaInfo() {
+  if (!mediaInfoDirty) return;
+  saveJSON(MEDIA_INFO_FILE, {
+    video: probeCache,
+    pixFmt: pixFmtCache,
+    audio: audioProbeCache,
+    audioTracks: audioTracksCache,
+    subs: subProbeCache,
+  });
+  mediaInfoDirty = false;
+}
 
 // Corrupted file registry — persisted to disk, fileId -> { filePath, title, detectedAt, reason }
 let corruptedFiles = loadJSON(CORRUPTED_FILES_FILE, {});
@@ -530,11 +563,11 @@ function probeFile(filePath) {
     ], { timeout: 10000, encoding: 'utf-8' });
     const codec = JSON.parse(raw).streams?.[0]?.codec_name || 'unknown';
     probeCache[filePath] = codec;
-    probeCacheDirty = true;
+    mediaInfoDirty = true;
     return codec;
   } catch {
     probeCache[filePath] = 'unknown';
-    probeCacheDirty = true;
+    mediaInfoDirty = true;
     return 'unknown';
   }
 }
@@ -596,20 +629,13 @@ function probeDurationAsync(filePath) {
 }
 
 
+const { computeStreamMode } = require('./lib/stream-mode');
 function getStreamMode(filePath) {
-  const ext = path.extname(filePath).toLowerCase();
-  const codec = probeCache[filePath];
-  const audioCodec = audioProbeCache[filePath];
-  if (!codec) {
-    return 'unknown';
-  }
-  // H.264 + browser-native audio in .mp4 → direct play
-  const directAudio = new Set(['aac', 'mp3', 'opus']);
-  if (codec === 'h264' && ext === '.mp4' && (!audioCodec || directAudio.has(audioCodec))) return 'direct';
-  // H.264 with incompatible container or audio → remux (copy video, transcode audio)
-  if (codec === 'h264') return 'remux';
-  // Everything else (HEVC, etc.) → full transcode
-  return 'transcode';
+  return computeStreamMode({
+    ext: path.extname(filePath),
+    codec: probeCache[filePath],
+    audioCodec: audioProbeCache[filePath],
+  });
 }
 
 function probeFileAsync(filePath) {
@@ -629,10 +655,9 @@ function probeFileAsync(filePath) {
         const videoCodec = videoStream?.codec_name || 'unknown';
         const audioCodec = streams.find(s => s.codec_type === 'audio')?.codec_name || 'unknown';
         probeCache[filePath] = videoCodec;
-        probeCacheDirty = true;
-        if (videoStream?.pix_fmt) { pixFmtCache[filePath] = videoStream.pix_fmt; pixFmtCacheDirty = true; }
+        mediaInfoDirty = true;
+        if (videoStream?.pix_fmt) { pixFmtCache[filePath] = videoStream.pix_fmt; }
         audioProbeCache[filePath] = audioCodec;
-        audioProbeCacheDirty = true;
         // Build full audio tracks list
         const audioStreams = streams.filter(s => s.codec_type === 'audio');
         audioTracksCache[filePath] = audioStreams.map(s => ({
@@ -643,11 +668,10 @@ function probeFileAsync(filePath) {
           channels: s.channels || 0,
           channelLayout: s.channel_layout || '',
         }));
-        audioTracksCacheDirty = true;
         resolve(videoCodec);
       } catch {
         probeCache[filePath] = 'unknown';
-        probeCacheDirty = true;
+        mediaInfoDirty = true;
         resolve('unknown');
       }
     });
@@ -676,11 +700,11 @@ function probeSubtitlesAsync(filePath) {
           extractable: TEXT_SUB_CODECS.has(s.codec_name),
         }));
         subProbeCache[filePath] = subs;
-        subProbeCacheDirty = true;
+        mediaInfoDirty = true;
         resolve(subs);
       } catch {
         subProbeCache[filePath] = [];
-        subProbeCacheDirty = true;
+        mediaInfoDirty = true;
         resolve([]);
       }
     });
@@ -715,19 +739,11 @@ async function backgroundProbe() {
       }
     }
     if ((codecCount + subCount) % 100 === 0 && (codecCount + subCount) > 0) {
-      if (probeCacheDirty) { saveJSON(PROBE_CACHE_FILE, probeCache); probeCacheDirty = false; }
-      if (pixFmtCacheDirty) { saveJSON(PIX_FMT_CACHE_FILE, pixFmtCache); pixFmtCacheDirty = false; }
-      if (audioProbeCacheDirty) { saveJSON(AUDIO_PROBE_CACHE_FILE, audioProbeCache); audioProbeCacheDirty = false; }
-      if (audioTracksCacheDirty) { saveJSON(AUDIO_TRACKS_CACHE_FILE, audioTracksCache); audioTracksCacheDirty = false; }
-      if (subProbeCacheDirty) { saveJSON(SUB_PROBE_CACHE_FILE, subProbeCache); subProbeCacheDirty = false; }
+      saveMediaInfo();
       console.log(`  [probe] ${codecCount} codec + ${subCount} subtitle probes...`);
     }
   }
-  if (probeCacheDirty) { saveJSON(PROBE_CACHE_FILE, probeCache); probeCacheDirty = false; }
-  if (pixFmtCacheDirty) { saveJSON(PIX_FMT_CACHE_FILE, pixFmtCache); pixFmtCacheDirty = false; }
-  if (audioProbeCacheDirty) { saveJSON(AUDIO_PROBE_CACHE_FILE, audioProbeCache); audioProbeCacheDirty = false; }
-  if (audioTracksCacheDirty) { saveJSON(AUDIO_TRACKS_CACHE_FILE, audioTracksCache); audioTracksCacheDirty = false; }
-  if (subProbeCacheDirty) { saveJSON(SUB_PROBE_CACHE_FILE, subProbeCache); subProbeCacheDirty = false; }
+  saveMediaInfo();
   if (codecCount > 0 || subCount > 0) console.log(`  [probe] Complete — ${codecCount} codec + ${subCount} subtitle probes.`);
   bgProbeRunning = false;
 }
@@ -2416,7 +2432,7 @@ app.get('/api/sprites/:id/:sheet', requireAuth, ensureLibrary, (req, res) => {
   res.status(202).send('Generating');
 });
 
-app.get('/subtitle/:id', requireAuth, ensureLibrary, (req, res) => {
+app.get('/subtitle/:id', requireAuth, ensureLibrary, async (req, res) => {
   const sub = subtitleIndex[req.params.id];
   if (!sub || !fs.existsSync(sub.absPath)) return res.status(404).send('Not found');
 
@@ -2427,7 +2443,9 @@ app.get('/subtitle/:id', requireAuth, ensureLibrary, (req, res) => {
       res.set('Cache-Control', 'public, max-age=604800');
       return res.sendFile(cacheFile);
     }
-    const content = fs.readFileSync(sub.absPath, 'utf-8');
+    let content;
+    try { content = await fs.promises.readFile(sub.absPath, 'utf-8'); }
+    catch { return res.status(404).send('Not found'); }
     const vtt = 'WEBVTT\n\n' + content
       .replace(/\r\n/g, '\n')
       .replace(/(\d{2}):(\d{2}):(\d{2}),(\d{3})/g, '$1:$2:$3.$4')
@@ -3072,7 +3090,7 @@ app.post('/api/scan', requirePermission('canScan'), async (_req, res) => {
     let stale = 0;
     for (const key of Object.keys(probeCache)) { if (!currentPaths.has(key)) { delete probeCache[key]; stale++; } }
     for (const key of Object.keys(subProbeCache)) { if (!currentPaths.has(key)) { delete subProbeCache[key]; stale++; } }
-    if (stale > 0) { saveJSON(PROBE_CACHE_FILE, probeCache); saveJSON(SUB_PROBE_CACHE_FILE, subProbeCache); }
+    if (stale > 0) { mediaInfoDirty = true; saveMediaInfo(); }
     console.log(`  [scan] Library refreshed: ${library.length} files (cleaned ${stale} stale cache entries)`);
     // Background probe new files
     await backgroundProbe();
