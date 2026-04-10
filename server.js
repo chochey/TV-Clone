@@ -638,7 +638,17 @@ function getStreamMode(filePath) {
   });
 }
 
+// In-flight probe deduplication — prevents duplicate ffprobe spawns for the same file
+const _probeInflight = new Map();
+
 function probeFileAsync(filePath) {
+  if (_probeInflight.has(filePath)) return _probeInflight.get(filePath);
+  const promise = _probeFileAsyncInner(filePath).finally(() => _probeInflight.delete(filePath));
+  _probeInflight.set(filePath, promise);
+  return promise;
+}
+
+function _probeFileAsyncInner(filePath) {
   return new Promise((resolve) => {
     // Probe video, audio codecs + pixel format + full audio stream details in one call
     const proc = spawn('ffprobe', [
@@ -679,9 +689,18 @@ function probeFileAsync(filePath) {
   });
 }
 
+const _subProbeInflight = new Map();
+
 function probeSubtitlesAsync(filePath) {
+  if (subProbeCache[filePath]) return Promise.resolve(subProbeCache[filePath]);
+  if (_subProbeInflight.has(filePath)) return _subProbeInflight.get(filePath);
+  const promise = _probeSubtitlesAsyncInner(filePath).finally(() => _subProbeInflight.delete(filePath));
+  _subProbeInflight.set(filePath, promise);
+  return promise;
+}
+
+function _probeSubtitlesAsyncInner(filePath) {
   return new Promise((resolve) => {
-    if (subProbeCache[filePath]) return resolve(subProbeCache[filePath]);
     const proc = spawn('ffprobe', [
       '-v', 'error', '-select_streams', 's',
       '-show_entries', 'stream=index,codec_name:stream_tags=language,title',
