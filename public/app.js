@@ -559,7 +559,8 @@ function renderHero(item){
   const plot=item.plot?`<p class="hero-meta" style="max-width:600px;opacity:.85;margin-top:4px">${esc(item.plot)}</p>`:'';
   const rating=item.imdbRating?` · ★ ${item.imdbRating}`:'';
   const heroType=item.type==='movie'?'Movie':item.type==='show'?'TV Show':customTypeLabel(item.type);
-  return `<div class="hero"><div class="hero-bg" style="${bg}"></div><div class="hero-content"><span class="hero-tag">${heroType}</span><h1 class="hero-title">${esc(item.title)}</h1><p class="hero-meta">${item.year?item.year+' · ':''}${heroType}${rating}${item.progress.percent>0?' · '+item.progress.percent+'% watched':''}</p>${plot}<div class="hero-actions"><button class="btn btn-primary" onclick='playMedia("${item.id}")'>&#9654; ${rt}</button><button class="btn btn-secondary" onclick='addToQueue("${item.id}")'>&#128203; Queue</button></div></div></div>`;
+  const deleteBtn=currentRole==='admin'?`<button class="btn btn-danger-outline" onclick='event.stopPropagation();confirmDeleteMedia("${item.id}","${esc(item.title)}")' title="Delete from server">&#128465; Delete</button>`:'';
+  return `<div class="hero"><div class="hero-bg" style="${bg}"></div><div class="hero-content"><span class="hero-tag">${heroType}</span><h1 class="hero-title">${esc(item.title)}</h1><p class="hero-meta">${item.year?item.year+' · ':''}${heroType}${rating}${item.progress.percent>0?' · '+item.progress.percent+'% watched':''}</p>${plot}<div class="hero-actions"><button class="btn btn-primary" onclick='playMedia("${item.id}")'>&#9654; ${rt}</button><button class="btn btn-secondary" onclick='addToQueue("${item.id}")'>&#128203; Queue</button>${deleteBtn}</div></div></div>`;
 }
 
 // ── Cards ──────────────────────────────────────────────────────────────
@@ -571,7 +572,8 @@ function card(item){
   const ratingBadge=item.imdbRating?`<div class="card-rating">★ ${item.imdbRating}</div>`:'';
   const genres=item.genre?`<div class="card-year" style="color:var(--text-muted);font-size:.7rem">${item.genre}</div>`:item.genres&&item.genres.length?`<div class="genre-tags">${item.genres.map(g=>`<span class="genre-tag">${esc(g)}</span>`).join('')}</div>`:'';
   const typeLabel=item.type==='movie'?'Movie':item.type==='show'?'TV Show':customTypeLabel(item.type);
-  return `<div class="card" onclick='playMedia("${item.id}")'><div class="card-poster">${poster}${prog}${watched}${ratingBadge}<div class="card-actions"><button class="card-action-btn" onclick="event.stopPropagation();toggleWatched('${item.id}',${!item.watched})" title="${item.watched?'Mark unwatched':'Mark watched'}">&#128065;</button><button class="card-action-btn" onclick="event.stopPropagation();addToQueue('${item.id}')" title="Add to queue">+Q</button></div><div class="card-overlay"><div class="play-icon">&#9654;</div></div></div><div class="card-info"><div class="card-title">${esc(item.title)}</div>${item.year?`<div class="card-year">${item.year}</div>`:''}<span class="card-type ${item.type}">${typeLabel}</span>${genres}</div></div>`;
+  const delBtn=currentRole==='admin'?`<button class="card-action-btn card-delete-btn" onclick="event.stopPropagation();confirmDeleteMedia('${item.id}','${esc(item.title).replace(/'/g,"\\&#39;")}')" title="Delete from server">&#128465;</button>`:'';
+  return `<div class="card" data-id="${item.id}" onclick='playMedia("${item.id}")'><div class="card-poster">${poster}${prog}${watched}${ratingBadge}<div class="card-actions"><button class="card-action-btn" onclick="event.stopPropagation();toggleWatched('${item.id}',${!item.watched})" title="${item.watched?'Mark unwatched':'Mark watched'}">&#128065;</button><button class="card-action-btn" onclick="event.stopPropagation();addToQueue('${item.id}')" title="Add to queue">+Q</button>${delBtn}</div><div class="card-overlay"><div class="play-icon">&#9654;</div></div></div><div class="card-info"><div class="card-title">${esc(item.title)}</div>${item.year?`<div class="card-year">${item.year}</div>`:''}<span class="card-type ${item.type}">${typeLabel}</span>${genres}</div></div>`;
 }
 
 function carousel(title,items){
@@ -588,11 +590,47 @@ function cardDismissable(item,section){
   const genres=item.genre?`<div class="card-year" style="color:var(--text-muted);font-size:.7rem">${item.genre}</div>`:item.genres&&item.genres.length?`<div class="genre-tags">${item.genres.map(g=>`<span class="genre-tag">${esc(g)}</span>`).join('')}</div>`:'';
   const typeLabel=item.type==='movie'?'Movie':item.type==='show'?'TV Show':customTypeLabel(item.type);
   const dismissBtn=`<button class="card-dismiss-btn" onclick="event.stopPropagation();dismissItem('${item.id}','${section}',this)" title="Hide from this list">&#10005;</button>`;
-  return `<div class="card" data-id="${item.id}" onclick='playMedia("${item.id}")'><div class="card-poster">${poster}${prog}${watched}${ratingBadge}${dismissBtn}<div class="card-actions"><button class="card-action-btn" onclick="event.stopPropagation();toggleWatched('${item.id}',${!item.watched})" title="${item.watched?'Mark unwatched':'Mark watched'}">&#128065;</button><button class="card-action-btn" onclick="event.stopPropagation();addToQueue('${item.id}')" title="Add to queue">+Q</button></div><div class="card-overlay"><div class="play-icon">&#9654;</div></div></div><div class="card-info"><div class="card-title">${esc(item.title)}</div>${item.year?`<div class="card-year">${item.year}</div>`:''}<span class="card-type ${item.type}">${typeLabel}</span>${genres}</div></div>`;
+  const delBtn=currentRole==='admin'?`<button class="card-action-btn card-delete-btn" onclick="event.stopPropagation();confirmDeleteMedia('${item.id}','${esc(item.title).replace(/'/g,"\\&#39;")}')" title="Delete from server">&#128465;</button>`:'';
+  return `<div class="card" data-id="${item.id}" onclick='playMedia("${item.id}")'><div class="card-poster">${poster}${prog}${watched}${ratingBadge}${dismissBtn}<div class="card-actions"><button class="card-action-btn" onclick="event.stopPropagation();toggleWatched('${item.id}',${!item.watched})" title="${item.watched?'Mark unwatched':'Mark watched'}">&#128065;</button><button class="card-action-btn" onclick="event.stopPropagation();addToQueue('${item.id}')" title="Add to queue">+Q</button>${delBtn}</div><div class="card-overlay"><div class="play-icon">&#9654;</div></div></div><div class="card-info"><div class="card-title">${esc(item.title)}</div>${item.year?`<div class="card-year">${item.year}</div>`:''}<span class="card-type ${item.type}">${typeLabel}</span>${genres}</div></div>`;
 }
 
 function carouselWithDismiss(title,items,section){
   return `<div class="section"><div class="section-header"><h2 class="section-title">${title}</h2></div><div class="carousel-wrapper"><button class="carousel-btn left" onclick="this.parentElement.querySelector('.carousel').scrollBy({left:-400,behavior:'smooth'})">&#10094;</button><div class="carousel">${items.map(i=>cardDismissable(i,section)).join('')}</div><button class="carousel-btn right" onclick="this.parentElement.querySelector('.carousel').scrollBy({left:400,behavior:'smooth'})">&#10095;</button></div></div>`;
+}
+
+// ── Delete media from server (admin only) ─────────────────────────────
+function confirmDeleteMedia(id,title){
+  const overlay=document.createElement('div');
+  overlay.className='delete-confirm-overlay';
+  overlay.innerHTML=`<div class="delete-confirm-dialog"><h3>Delete from server?</h3><p>This will permanently delete <strong>${title}</strong> from disk and remove all associated data.</p><p style="color:var(--danger);font-size:.85rem">This cannot be undone.</p><div class="delete-confirm-actions"><button class="btn btn-secondary" id="deleteCancel">Cancel</button><button class="btn btn-danger" id="deleteConfirm">Delete</button></div></div>`;
+  document.body.appendChild(overlay);
+  requestAnimationFrame(()=>overlay.classList.add('visible'));
+  document.getElementById('deleteCancel').onclick=()=>{overlay.classList.remove('visible');setTimeout(()=>overlay.remove(),200);};
+  overlay.addEventListener('click',e=>{if(e.target===overlay){overlay.classList.remove('visible');setTimeout(()=>overlay.remove(),200);}});
+  document.getElementById('deleteConfirm').onclick=()=>deleteMedia(id,title,overlay);
+}
+
+async function deleteMedia(id,title,overlay){
+  const btn=document.getElementById('deleteConfirm');
+  btn.disabled=true;btn.textContent='Deleting...';
+  try{
+    const res=await fetch('/api/media/'+id,{method:'DELETE'});
+    const data=await res.json();
+    if(!res.ok)throw new Error(data.error||'Delete failed');
+    overlay.classList.remove('visible');setTimeout(()=>overlay.remove(),200);
+    // Remove card from DOM with animation
+    document.querySelectorAll(`.card[data-id="${id}"]`).forEach(c=>{
+      c.style.transition='opacity .3s,transform .3s';c.style.opacity='0';c.style.transform='scale(.9)';
+      setTimeout(()=>c.remove(),300);
+    });
+    // If currently playing this item, close player and go home
+    if(currentMedia&&currentMedia.id===id){currentMedia=null;closePlayer();nav('home',document.querySelector('[data-view="home"]'));}
+    // If on show detail page, re-render to update episode list
+    else if(currentView==='showDetail'){renderView();}
+  }catch(e){
+    btn.disabled=false;btn.textContent='Delete';
+    alert('Failed to delete: '+e.message);
+  }
 }
 
 async function dismissItem(id,section,btn){
@@ -780,7 +818,8 @@ function renderShowDetail(showName){
     const epRows=eps.map(ep=>{
       const epNum=ep.epInfo?`E${String(ep.epInfo.episode).padStart(2,'0')}`:'';
       const prog=ep.progress.percent||0;
-      return `<div class="episode-row" onclick='playMedia("${ep.id}")'><div class="episode-num">${epNum}</div><div class="episode-info"><div class="episode-title">${esc(ep.title)}</div><div class="episode-file">${esc(ep.filename)}</div></div><div class="episode-progress"><div class="episode-progress-fill" style="width:${prog}%"></div></div>${ep.watched?'<div class="episode-watched">✓</div>':''}</div>`;
+      const epDel=currentRole==='admin'?`<button class="episode-delete-btn" onclick="event.stopPropagation();confirmDeleteMedia('${ep.id}','${esc(ep.title)}')" title="Delete episode">&#128465;</button>`:'';
+      return `<div class="episode-row" onclick='playMedia("${ep.id}")'><div class="episode-num">${epNum}</div><div class="episode-info"><div class="episode-title">${esc(ep.title)}</div><div class="episode-file">${esc(ep.filename)}</div></div><div class="episode-progress"><div class="episode-progress-fill" style="width:${prog}%"></div></div>${ep.watched?'<div class="episode-watched">✓</div>':''}${epDel}</div>`;
     }).join('');
     return `<div class="season-section"><div class="season-title">${sNum==='0'?'Episodes':`Season ${sNum}`} (${eps.length} episodes)</div><div class="episode-list">${epRows}</div></div>`;
   }).join('');
@@ -1232,8 +1271,8 @@ function updateEpBtns(){
 function playNextEp(){const pl=getPlaylist(),i=getCurIdx();if(i<pl.length-1){saveProg();playMedia(pl[i+1].id);}}
 function playPrevEp(){const pl=getPlaylist(),i=getCurIdx();if(i>0){saveProg();playMedia(pl[i-1].id);}}
 
-function skipBack(){V.currentTime=Math.max(0,V.currentTime-skipInterval);}
-function skipFwd(){V.currentTime=Math.min(V.duration||0,V.currentTime+skipInterval);}
+function skipBack(){if(_castMedia&&_castSession){const t=(_castMedia.getEstimatedTime?_castMedia.getEstimatedTime():_castMedia.currentTime||0);castSeek(Math.max(0,t-skipInterval));return;}V.currentTime=Math.max(0,V.currentTime-skipInterval);}
+function skipFwd(){if(_castMedia&&_castSession){const t=(_castMedia.getEstimatedTime?_castMedia.getEstimatedTime():_castMedia.currentTime||0);const d=_castMedia.media?.duration||0;castSeek(Math.min(d,t+skipInterval));return;}V.currentTime=Math.min(V.duration||0,V.currentTime+skipInterval);}
 
 function setSkip(v){
   skipInterval=v;document.getElementById('skipIntervalBtn').textContent=v+'s';
@@ -1575,7 +1614,7 @@ function closeMenus(){document.querySelectorAll('.speed-menu,.skip-menu,.sub-men
 document.addEventListener('click',e=>{if(!e.target.closest('.ctrl-btn-wrap'))closeMenus();});
 
 async function togglePiP(){try{if(document.pictureInPictureElement)await document.exitPictureInPicture();else if(V.requestPictureInPicture)await V.requestPictureInPicture();}catch{}}
-if(!document.pictureInPictureEnabled){const b=document.getElementById('pipBtn');if(b)b.style.display='none';}
+if(!document.pictureInPictureEnabled&&!V.requestPictureInPicture){const b=document.getElementById('pipBtn');if(b)b.style.display='none';}
 
 async function playMedia(id){
   const item=library.find(m=>m.id===id);if(!item)return;
@@ -1695,6 +1734,13 @@ async function playMedia(id){
 }
 
 async function closePlayer(){
+  // Stop casting if active
+  if(_castSession&&_castMedia){
+    castStopProgressSync();
+    try{await cast.framework.CastContext.getInstance().endCurrentSession(true);}catch{}
+    _castSession=null;_castMedia=null;_castToken=null;
+    castShowOverlay(false);
+  }
   await saveProg();V.pause();resetUpNext();
   if(document.fullscreenElement)document.exitFullscreen().catch(()=>{});
   if(hlsInstance){hlsInstance.destroy();hlsInstance=null;}
@@ -1709,7 +1755,7 @@ async function closePlayer(){
   closeMenus();fetchLib();fetchQueue();
 }
 
-function togglePlay(e){if(e&&e.target.closest('.player-controls,.player-top-bar'))return;V.paused?V.play():V.pause();}
+function togglePlay(e){if(e&&e.target.closest('.player-controls,.player-top-bar'))return;if(_castMedia&&_castSession){castTogglePlay();return;}V.paused?V.play():V.pause();}
 function setVol(v){
   const next=Math.max(0,Math.min(1,Number(v)||0));
   V.volume=next;V.muted=next===0;
@@ -1722,10 +1768,10 @@ function toggleFS(){document.fullscreenElement?document.exitFullscreen().catch((
 // Click vs double-click on video wrapper (manual detection for reliability)
 let _clickCount=0,_clickTimer=null;
 document.getElementById('videoWrapper').addEventListener('click',function(e){
-  if(e.target.closest('.player-controls,.player-top-bar,.up-next-overlay,.skip-intro-box,.mark-intro-panel'))return;
+  if(e.target.closest('.player-controls,.player-top-bar,.up-next-overlay,.skip-intro-box,.mark-intro-panel,.cast-overlay'))return;
   _clickCount++;
   if(_clickCount===1){
-    _clickTimer=setTimeout(()=>{_clickCount=0;V.paused?V.play():V.pause();},300);
+    _clickTimer=setTimeout(()=>{_clickCount=0;if(_castMedia&&_castSession){castTogglePlay();}else{V.paused?V.play():V.pause();}},300);
   } else if(_clickCount>=2){
     clearTimeout(_clickTimer);_clickCount=0;
     toggleFS();
@@ -1835,6 +1881,8 @@ function seekCommit(){
   if(!currentMedia)return;
   // Reset dismissed flags so skip buttons can reappear after seeking
   _skipSegmentDismissed={};
+  // If casting, seek on Cast device
+  if(_castMedia&&_castSession){castSeek(_seekTarget);return;}
   const isHls=currentMedia.streamMode&&currentMedia.streamMode!=='direct';
   if(isHls&&typeof window._hlsLoad==='function'){
     // For HLS: restart ffmpeg from seek position and reload stream
@@ -1995,6 +2043,281 @@ function fmt(s){if(!s||isNaN(s))return '0:00';const h=Math.floor(s/3600),m=Math.
 function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML;}
 function escAttr(s){return s.replace(/&/g,'&amp;').replace(/'/g,'&#39;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\\/g,'\\\\');}
 function formatSize(b){if(b<1024)return b+' B';if(b<1048576)return(b/1024).toFixed(1)+' KB';if(b<1073741824)return(b/1048576).toFixed(1)+' MB';return(b/1073741824).toFixed(1)+' GB';}
+
+// ══════════════════════════════════════════════════════════════════════
+// Chromecast
+// ══════════════════════════════════════════════════════════════════════
+let _castSession=null,_castToken=null,_castMedia=null,_castProgressInterval=null;
+let _castServerInfo=null; // { lanHost, port }
+
+function castInit(){
+  if(typeof cast==='undefined'||typeof chrome==='undefined'||!chrome.cast)return;
+  const ctx=cast.framework.CastContext.getInstance();
+  ctx.setOptions({
+    receiverApplicationId:chrome.cast.media.DEFAULT_MEDIA_RECEIVER_APP_ID,
+    autoJoinPolicy:chrome.cast.AutoJoinPolicy.ORIGIN_SCOPED,
+  });
+  ctx.addEventListener(cast.framework.CastContextEventType.SESSION_STATE_CHANGED,function(e){
+    if(e.sessionState===cast.framework.SessionState.SESSION_STARTED||
+       e.sessionState===cast.framework.SessionState.SESSION_RESUMED){
+      _castSession=ctx.getCurrentSession();
+    } else if(e.sessionState===cast.framework.SessionState.SESSION_ENDED){
+      castOnDisconnect();
+    }
+  });
+  // Show cast button when device available
+  ctx.addEventListener(cast.framework.CastContextEventType.CAST_STATE_CHANGED,function(e){
+    const btn=document.getElementById('castBtn');
+    if(btn)btn.style.display=(e.castState!==cast.framework.CastState.NO_DEVICES_AVAILABLE)?'':'none';
+  });
+}
+
+// Called by __onGCastApiAvailable (set up below)
+window['__onGCastApiAvailable']=function(isAvailable){
+  if(isAvailable)castInit();
+};
+
+async function castGetServerInfo(){
+  if(_castServerInfo)return _castServerInfo;
+  try{
+    const r=await fetch('/api/server-info',{credentials:'same-origin'});
+    _castServerInfo=await r.json();
+  }catch{
+    _castServerInfo={lanHost:location.hostname,port:location.port||80};
+  }
+  return _castServerInfo;
+}
+
+function castBuildBaseUrl(){
+  const info=_castServerInfo;
+  if(!info)return location.origin;
+  // If we're already on a private IP, use current origin
+  if(/^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.)/.test(location.hostname))return location.origin;
+  // Otherwise use LAN IP for Chromecast
+  const proto=location.protocol;
+  return `${proto}//${info.lanHost}:${info.port}`;
+}
+
+async function castGetToken(){
+  try{
+    const r=await fetch('/api/cast-token',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'}});
+    const data=await r.json();
+    _castToken=data.token;
+    return _castToken;
+  }catch(e){console.error('Failed to get cast token:',e);return null;}
+}
+
+async function castToggle(){
+  const ctx=cast.framework.CastContext.getInstance();
+  const session=ctx.getCurrentSession();
+  if(session&&_castMedia){
+    // Stop casting — resume locally
+    castStopAndResume();
+    return;
+  }
+  // Start casting
+  try{
+    await ctx.requestSession();
+    _castSession=ctx.getCurrentSession();
+    if(_castSession&&currentMedia)await castStartMedia();
+  }catch(e){
+    if(e!=='cancel')console.error('Cast session error:',e);
+  }
+}
+
+async function castStartMedia(){
+  if(!_castSession||!currentMedia)return;
+  await castGetServerInfo();
+  const token=await castGetToken();
+  if(!token)return;
+
+  const base=castBuildBaseUrl();
+  const item=currentMedia;
+  let contentType,url;
+
+  if(item.streamMode==='direct'){
+    url=`${base}/stream/${item.id}?cast_token=${token}`;
+    contentType='video/mp4';
+  } else {
+    const offset=window._hlsSeekOffset||0;
+    const q='&quality='+_currentQuality;
+    url=`${base}/hls/${item.id}/master.m3u8?start=${offset}&cast_token=${token}${q}`;
+    contentType='application/x-mpegURL';
+  }
+
+  const mediaInfo=new chrome.cast.media.MediaInfo(url,contentType);
+  mediaInfo.metadata=new chrome.cast.media.GenericMediaMetadata();
+  mediaInfo.metadata.title=item.title||'';
+  if(item.episode)mediaInfo.metadata.subtitle=`S${item.season||1}E${item.episode}`;
+
+  // Start from current position
+  const request=new chrome.cast.media.LoadRequest(mediaInfo);
+  const offset=window._hlsSeekOffset||0;
+  const localPos=offset+V.currentTime;
+  if(item.streamMode==='direct'&&localPos>0)request.currentTime=localPos;
+
+  try{
+    await _castSession.loadMedia(request);
+    _castMedia=_castSession.getMediaSession();
+    // Pause local, show overlay
+    V.pause();
+    if(hlsInstance){hlsInstance.destroy();hlsInstance=null;}
+    castShowOverlay(true);
+    castStartProgressSync();
+    // Listen for Cast media status changes (for error/end detection)
+    _castMedia.addUpdateListener(castOnMediaUpdate);
+  }catch(e){
+    console.error('Cast loadMedia failed:',e);
+    // If direct play failed, retry with HLS (transcode fallback)
+    if(item.streamMode==='direct'){
+      console.log('Cast: direct play failed, falling back to HLS transcode');
+      const hlsUrl=`${base}/hls/${item.id}/master.m3u8?start=0&cast_token=${token}&quality=${_currentQuality}`;
+      const hlsInfo=new chrome.cast.media.MediaInfo(hlsUrl,'application/x-mpegURL');
+      hlsInfo.metadata=mediaInfo.metadata;
+      const hlsReq=new chrome.cast.media.LoadRequest(hlsInfo);
+      try{
+        await _castSession.loadMedia(hlsReq);
+        _castMedia=_castSession.getMediaSession();
+        V.pause();
+        castShowOverlay(true);
+        castStartProgressSync();
+        _castMedia.addUpdateListener(castOnMediaUpdate);
+      }catch(e2){
+        console.error('Cast HLS fallback also failed:',e2);
+        showToast('Failed to cast this media');
+      }
+    } else {
+      showToast('Failed to cast this media');
+    }
+  }
+}
+
+function castOnMediaUpdate(isAlive){
+  if(!isAlive||!_castMedia)return;
+  // Update local seek bar from Cast position
+  const dur=_castMedia.media?.duration||0;
+  const cur=_castMedia.getEstimatedTime?_castMedia.getEstimatedTime():_castMedia.currentTime||0;
+  if(dur>0){
+    document.getElementById('progressFilled').style.width=((cur/dur)*100)+'%';
+    document.getElementById('timeDisplay').textContent=fmt(cur)+' / '+fmt(dur);
+  }
+}
+
+function castShowOverlay(show){
+  const overlay=document.getElementById('castOverlay');
+  const wrapper=document.getElementById('videoWrapper');
+  if(show){
+    overlay.classList.add('active');
+    wrapper.style.opacity='0';
+    document.getElementById('castOverlayTitle').textContent=currentMedia?.title||'';
+    const deviceName=_castSession?.getCastDevice?.()?.friendlyName||'Chromecast';
+    document.getElementById('castOverlayDevice').textContent='Casting to '+deviceName;
+    // Hide controls not relevant during cast
+    document.getElementById('pipBtn').style.display='none';
+    document.getElementById('markIntroBtn').style.display='none';
+    document.getElementById('skipIntroBox').classList.remove('visible');
+    document.getElementById('castBtn').textContent='\u23F9'; // stop icon
+    document.getElementById('castBtn').title='Stop Casting';
+  } else {
+    overlay.classList.remove('active');
+    wrapper.style.opacity='';
+    document.getElementById('pipBtn').style.display='';
+    document.getElementById('castBtn').textContent='\uD83D\uDCE1'; // antenna icon
+    document.getElementById('castBtn').title='Cast';
+  }
+}
+
+function castStartProgressSync(){
+  clearInterval(_castProgressInterval);
+  _castProgressInterval=setInterval(async()=>{
+    if(!_castMedia||!currentMedia)return;
+    const dur=_castMedia.media?.duration||0;
+    const cur=_castMedia.getEstimatedTime?_castMedia.getEstimatedTime():_castMedia.currentTime||0;
+    if(dur>0&&cur>0){
+      try{await fetch('/api/progress',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:currentMedia.id,currentTime:cur,duration:dur,profile:activeProfile})});
+      currentMedia.progress={currentTime:cur,duration:dur,percent:Math.round((cur/dur)*100),updatedAt:Date.now()};}catch{}
+    }
+  },10000);
+}
+
+function castStopProgressSync(){
+  clearInterval(_castProgressInterval);
+  _castProgressInterval=null;
+}
+
+async function castStopAndResume(){
+  // Get current Cast position before stopping
+  let resumeTime=0;
+  if(_castMedia){
+    resumeTime=_castMedia.getEstimatedTime?_castMedia.getEstimatedTime():_castMedia.currentTime||0;
+  }
+  castStopProgressSync();
+  // Stop cast session
+  const ctx=cast.framework.CastContext.getInstance();
+  try{await ctx.endCurrentSession(true);}catch{}
+  _castSession=null;_castMedia=null;_castToken=null;
+  castShowOverlay(false);
+  // Resume locally from Cast position
+  if(currentMedia&&resumeTime>0){
+    if(currentMedia.streamMode==='direct'){
+      V.src='/stream/'+currentMedia.id;
+      V.currentTime=resumeTime;
+      V.play().catch(()=>{});
+    } else {
+      // Re-initiate HLS from cast position
+      if(window._hlsLoad){
+        window._hlsSeekOffset=resumeTime;
+        const url='/hls/'+currentMedia.id+'/master.m3u8?start='+resumeTime+'&quality='+_currentQuality;
+        window._hlsLoad(url);
+      }
+    }
+    startProgressSync();
+  }
+}
+
+function castOnDisconnect(){
+  if(!_castMedia&&!_castSession)return;
+  castStopProgressSync();
+  _castSession=null;_castMedia=null;_castToken=null;
+  castShowOverlay(false);
+  showToast('Cast disconnected');
+  // Resume locally if player is still open
+  if(currentMedia&&modal.classList.contains('active')){
+    const prog=currentMedia.progress;
+    if(prog&&prog.currentTime>0){
+      if(currentMedia.streamMode==='direct'){
+        V.src='/stream/'+currentMedia.id;
+        V.currentTime=prog.currentTime;
+        V.play().catch(()=>{});
+      } else if(window._hlsLoad){
+        window._hlsSeekOffset=prog.currentTime;
+        window._hlsLoad('/hls/'+currentMedia.id+'/master.m3u8?start='+prog.currentTime+'&quality='+_currentQuality);
+      }
+      startProgressSync();
+    }
+  }
+}
+
+// Cast play/pause controls — override togglePlay when casting
+const _origTogglePlay=typeof togglePlay==='function'?togglePlay:null;
+function castTogglePlay(){
+  if(_castMedia&&_castSession){
+    const ctrl=new chrome.cast.media.PlayOrPauseRequest();
+    if(_castMedia.playerState===chrome.cast.media.PlayerState.PLAYING){
+      _castMedia.pause(null,()=>{},()=>{});
+    } else {
+      _castMedia.play(null,()=>{},()=>{});
+    }
+    return;
+  }
+}
+
+function castSeek(time){
+  if(!_castMedia)return;
+  const req=new chrome.cast.media.SeekRequest();
+  req.currentTime=time;
+  _castMedia.seek(req,()=>{},()=>{});
+}
 
 // ══════════════════════════════════════════════════════════════════════
 // Downloads (qBittorrent)

@@ -117,6 +117,7 @@ select,input{font-family:inherit}
 .btn-primary{background:var(--accent);color:#fff}.btn-primary:hover{background:#008bbe;transform:translateY(-1px)}
 .btn-secondary{background:rgba(255,255,255,.1);color:var(--text-primary)}.btn-secondary:hover{background:rgba(255,255,255,.18)}
 .btn-danger{background:var(--danger);color:#fff}.btn-danger:hover{background:#c93c40}
+.btn-danger-outline{background:transparent;color:var(--danger);border:1px solid rgba(229,72,77,.4)}.btn-danger-outline:hover{background:rgba(229,72,77,.12);border-color:var(--danger)}
 .btn-sm{padding:6px 14px;font-size:.78rem}
 .btn-ghost{padding:6px 10px;font-size:.78rem;color:var(--text-secondary)}.btn-ghost:hover{color:var(--text-primary);background:rgba(255,255,255,.08)}
 
@@ -472,3 +473,26 @@ video::cue{background:rgba(0,0,0,.8);color:#fff;font-size:clamp(1.6rem, 3.5vw, 2
 .org-log-line.log-scan{color:var(--text-muted);font-weight:600}
 .org-log-line.log-info{color:var(--text-secondary)}
 .org-log-ts{color:var(--text-muted);margin-right:8px}
+
+/* Chromecast overlay */
+.cast-overlay{display:none;position:absolute;top:0;left:0;right:0;bottom:0;background:var(--bg-main);flex-direction:column;align-items:center;justify-content:center;z-index:10;gap:12px}
+.cast-overlay.active{display:flex}
+.cast-overlay-icon{font-size:3rem;opacity:.7}
+.cast-overlay-title{font-size:1.3rem;font-weight:600;color:var(--text-primary)}
+.cast-overlay-device{font-size:.9rem;color:var(--accent)}
+
+/* Delete confirmation overlay */
+.delete-confirm-overlay{position:fixed;inset:0;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center;z-index:9999;opacity:0;transition:opacity .2s}
+.delete-confirm-overlay.visible{opacity:1}
+.delete-confirm-dialog{background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:28px 32px;max-width:420px;width:90%}
+.delete-confirm-dialog h3{margin:0 0 12px;font-size:1.15rem;color:var(--text-primary)}
+.delete-confirm-dialog p{margin:0 0 8px;font-size:.9rem;color:var(--text-secondary);line-height:1.5}
+.delete-confirm-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:20px}
+
+/* Episode delete button */
+.episode-delete-btn{background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:.9rem;padding:4px 8px;border-radius:4px;opacity:0;transition:opacity .15s,color .15s;flex-shrink:0}
+.episode-row:hover .episode-delete-btn{opacity:1}
+.episode-delete-btn:hover{color:var(--danger);background:rgba(229,72,77,.1)}
+
+/* Card delete button */
+.card-delete-btn{color:var(--danger) !important;opacity:.85}.card-delete-btn:hover{opacity:1;background:rgba(229,72,77,.2) !important}

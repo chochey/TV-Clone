@@ -6,6 +6,7 @@
 <title>Chochey's Media Server</title>
 <script>if(location.port!=='4800'&&location.port!=='80'&&location.port!=='')document.title="Chochey's Media Server [DEV:"+location.port+']';</script>
 <script src="/hls.min.js"></script>
+<script src="https://www.gstatic.com/cv/js/sender/v1/cast_sender.js?loadCastFramework=1"></script>
 <link rel="stylesheet" href="/app.css">
 </head>
 <body>
@@ -100,6 +101,11 @@
   <div class="player-video-wrapper" id="videoWrapper">
     <video id="videoElement" preload="metadata"></video>
   </div>
+  <div class="cast-overlay" id="castOverlay">
+    <div class="cast-overlay-icon">&#128225;</div>
+    <div class="cast-overlay-title" id="castOverlayTitle"></div>
+    <div class="cast-overlay-device" id="castOverlayDevice"></div>
+  </div>
   <div class="mark-intro-panel" id="markIntroPanel">
     <h4>Mark Intro Timestamps</h4>
     <div class="mark-intro-row"><span>Start:</span><span class="time-val" id="markIntroStart">--:--</span><button class="mark-intro-btn set" onclick="markIntroPoint('start')">Set</button></div>
@@ -157,6 +163,7 @@
         <div class="volume-wrapper"><button class="ctrl-btn" id="volumeBtn" onclick="toggleMute()">&#128266;</button><input class="volume-slider" type="range" min="0" max="1" step="0.05" value="1" id="volumeSlider" oninput="setVol(this.value)"></div>
         <div class="ctrl-btn-wrap"><button class="ctrl-btn" onclick="toggleMenu('boostMenu',event)" id="boostBtn" title="Audio Boost" style="font-size:1rem">&#128266;+</button><div class="boost-menu" id="boostMenu"><div class="boost-menu-head"><span>Audio Boost</span><span id="boostLevel">1.0x</span></div><input class="boost-slider" type="range" min="1" max="3" step="0.1" value="1" id="boostSlider" oninput="setBoost(this.value)"><div class="boost-hint" id="boostHint">Boost quiet audio up to 3x when needed.</div></div></div>
         <button class="ctrl-btn" onclick="togglePiP()" title="PiP" id="pipBtn">&#128247;</button>
+        <button class="ctrl-btn" onclick="castToggle()" title="Cast" id="castBtn" style="display:none">&#128225;</button>
         <button class="ctrl-btn" onclick="toggleMarkIntro()" title="Mark Intro" id="markIntroBtn" style="font-size:.72rem;font-weight:700;display:none">INTRO</button>
         <button class="ctrl-btn" onclick="toggleFS()" title="Fullscreen">&#x26F6;</button>
       </div>
