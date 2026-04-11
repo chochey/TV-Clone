@@ -32,6 +32,11 @@ const OMDB_POSTER_DIR = path.join(DATA_DIR, 'posters');
 const SUBTITLE_CACHE_DIR = path.join(DATA_DIR, 'subtitle_cache');
 if (!fs.existsSync(SUBTITLE_CACHE_DIR)) fs.mkdirSync(SUBTITLE_CACHE_DIR, { recursive: true });
 const OMDB_API_KEY = process.env.OMDB_API_KEY || '';
+const CAST_HOST = process.env.CAST_HOST || ''; // Override LAN IP for Chromecast URLs
+
+// Cast tokens — short-lived tokens for Chromecast media access (no cookies)
+const castTokens = new Map(); // token → { profileId, role, permissions, createdAt }
+const CAST_TOKEN_TTL = 5 * 60 * 1000; // 5 minutes sliding window
 const OMDB_BASE_URL = 'https://www.omdbapi.com/';
 const QBT_BASE = process.env.QBT_URL || 'http://localhost:8080';
 const QBT_USERNAME = process.env.QBT_USER || '';
@@ -262,9 +267,19 @@ function getSession(req) {
 
 function requireAuth(req, res, next) {
   const session = getSession(req);
-  if (!session) return res.status(401).json({ error: 'Login required' });
-  req.session = session;
-  next();
+  if (session) { req.session = session; return next(); }
+  // Fallback: check for cast_token (Chromecast requests without cookies)
+  const castToken = req.query.cast_token;
+  if (castToken) {
+    const ct = castTokens.get(castToken);
+    if (ct && Date.now() - ct.createdAt < CAST_TOKEN_TTL) {
+      ct.createdAt = Date.now(); // sliding window refresh
+      req.session = { profileId: ct.profileId, role: ct.role, permissions: ct.permissions };
+      return next();
+    }
+    castTokens.delete(castToken);
+  }
+  return res.status(401).json({ error: 'Login required' });
 }
 
 function requireAdminSession(req, res, next) {
@@ -286,6 +301,10 @@ setInterval(() => {
     }
   }
   if (cleaned > 0) { console.log(`[Sessions] Cleaned ${cleaned} expired session(s), ${sessions.size} active`); persistSessions(); }
+  // Clean expired cast tokens
+  for (const [token, ct] of castTokens) {
+    if (now - ct.createdAt > CAST_TOKEN_TTL) castTokens.delete(token);
+  }
 }, SESSION_CLEANUP_INTERVAL_MS);
 
 // Middleware: ensure library is indexed before serving file-dependent routes
@@ -1082,6 +1101,33 @@ app.put('/api/me/quality', requireAuth, (req, res) => {
   res.json({ ok: true, quality });
 });
 
+// Chromecast: generate a short-lived token for media access without cookies
+app.post('/api/cast-token', requireAuth, (req, res) => {
+  const token = crypto.randomBytes(16).toString('hex');
+  castTokens.set(token, {
+    profileId: req.session.profileId,
+    role: req.session.role,
+    permissions: req.session.permissions || [],
+    createdAt: Date.now(),
+  });
+  res.json({ token });
+});
+
+// Chromecast: return server LAN IP so Cast device can reach media URLs
+app.get('/api/server-info', requireAuth, (req, res) => {
+  if (CAST_HOST) return res.json({ lanHost: CAST_HOST, port: PORT });
+  // Auto-detect first non-loopback IPv4 address
+  const interfaces = os.networkInterfaces();
+  for (const addrs of Object.values(interfaces)) {
+    for (const addr of addrs) {
+      if (addr.family === 'IPv4' && !addr.internal) {
+        return res.json({ lanHost: addr.address, port: PORT });
+      }
+    }
+  }
+  res.json({ lanHost: 'localhost', port: PORT });
+});
+
 app.post('/api/profiles', requireAdminSession, (req, res) => {
   const { name, username, pin, avatar, password, role, permissions } = req.body;
   if (!name) return res.status(400).json({ error: 'Name required' });
@@ -1522,64 +1568,156 @@ app.delete('/api/skip-segments/:id', requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
-// Auto-detect intro by comparing audio energy patterns between episodes
-// Extracts low-res PCM audio, computes per-second energy, finds common high-energy segments
-function getAudioEnergy(filePath, durationSec) {
+// ── Delete media from server (admin only) ────────────────────────────
+app.delete('/api/media/:id', requireAdminSession, async (req, res) => {
+  const id = req.params.id;
+  const filePath = fileIndex[id];
+  if (!filePath) return res.status(404).json({ error: 'Media not found' });
+
+  const item = (libraryCache || []).find(i => i.id === id);
+  const title = item?.title || path.basename(filePath);
+
+  // 1. Delete the actual media file
+  try {
+    fs.unlinkSync(filePath);
+    console.log(`[Delete] Removed file: ${filePath}`);
+  } catch (err) {
+    console.error(`[Delete] Failed to remove file: ${filePath}`, err.message);
+    return res.status(500).json({ error: 'Failed to delete file: ' + err.message });
+  }
+
+  // 2. Clean up probe/media info caches
+  delete probeCache[filePath];
+  delete pixFmtCache[filePath];
+  delete audioProbeCache[filePath];
+  delete audioTracksCache[filePath];
+  delete subProbeCache[filePath];
+  mediaInfoDirty = true;
+  saveMediaInfo();
+
+  // 3. Clean up corrupted file registry
+  if (corruptedFiles[id]) {
+    delete corruptedFiles[id];
+    saveJSON(CORRUPTED_FILES_FILE, corruptedFiles);
+  }
+
+  // 4. Clean up skip segments (per-episode and per-show)
+  if (skipSegments[id]) {
+    delete skipSegments[id];
+    saveJSON(SKIP_SEGMENTS_FILE, skipSegments);
+  }
+
+  // 5. Clean up thumbnails/sprites
+  const thumbId = getThumbId(filePath);
+  try {
+    const thumbFiles = fs.readdirSync(THUMB_DIR).filter(f => f.startsWith(thumbId));
+    for (const f of thumbFiles) {
+      try { fs.unlinkSync(path.join(THUMB_DIR, f)); } catch {}
+    }
+    if (thumbFiles.length) console.log(`[Delete] Removed ${thumbFiles.length} sprite files`);
+  } catch {}
+  delete spriteJobs[id];
+
+  // 6. Clean up subtitle cache files
+  try {
+    const subFiles = fs.readdirSync(SUBTITLE_CACHE_DIR).filter(f => f.startsWith(id));
+    for (const f of subFiles) {
+      try { fs.unlinkSync(path.join(SUBTITLE_CACHE_DIR, f)); } catch {}
+    }
+  } catch {}
+
+  // 7. Remove from all profile data
+  for (const [profileId] of profileDataCache) {
+    const data = loadProfileData(profileId);
+    let changed = false;
+    if (data.progress[id]) { delete data.progress[id]; changed = true; }
+    if (data.watched[id] !== undefined) { delete data.watched[id]; changed = true; }
+    if (data.history.some(h => h.id === id)) { data.history = data.history.filter(h => h.id !== id); changed = true; }
+    if (data.queue.includes(id)) { data.queue = data.queue.filter(q => q !== id); changed = true; }
+    if (data.dismissed?.continueWatching?.[id]) { delete data.dismissed.continueWatching[id]; changed = true; }
+    if (data.dismissed?.recentlyAdded?.[id]) { delete data.dismissed.recentlyAdded[id]; changed = true; }
+    if (changed) saveProfileData(profileId, data);
+  }
+
+  // 8. Remove from fileIndex and update library cache in-place
+  delete fileIndex[id];
+  delete fileIndex[`poster_${id}`];
+  if (libraryCache) libraryCache = libraryCache.filter(i => i.id !== id);
+  saveLibraryCache();
+
+  console.log(`[Delete] Fully cleaned up "${title}" (${id})`);
+  res.json({ ok: true, title });
+});
+
+// Auto-detect intro using Chromaprint audio fingerprinting
+// Extracts perceptual audio hashes via fpcalc, compares across episodes using Hamming distance
+const FP_RATE = 1 / 0.1238; // ~8.08 fingerprints per second (Chromaprint default)
+
+function getChromaprint(filePath, durationSec) {
   return new Promise((resolve) => {
-    // Extract mono 8kHz signed 16-bit PCM
-    const proc = spawn('ffmpeg', [
-      '-hide_banner', '-loglevel', 'error',
-      '-t', String(durationSec), '-i', filePath,
-      '-ac', '1', '-ar', '8000', '-f', 's16le', '-acodec', 'pcm_s16le', '-',
-    ]);
-    const chunks = [];
-    proc.stdout.on('data', d => chunks.push(d));
-    proc.on('close', () => {
-      const buf = Buffer.concat(chunks);
-      const samples = new Int16Array(buf.buffer, buf.byteOffset, Math.floor(buf.length / 2));
-      // Compute RMS energy per second (8000 samples per second)
-      const SAMPLES_PER_SEC = 8000;
-      const energyPerSec = [];
-      for (let i = 0; i < samples.length; i += SAMPLES_PER_SEC) {
-        const end = Math.min(i + SAMPLES_PER_SEC, samples.length);
-        let sum = 0;
-        for (let j = i; j < end; j++) sum += samples[j] * samples[j];
-        energyPerSec.push(Math.sqrt(sum / (end - i)));
-      }
-      resolve(energyPerSec);
+    const proc = spawn('fpcalc', ['-raw', '-length', String(durationSec), filePath]);
+    let out = '';
+    proc.stdout.on('data', d => out += d);
+    proc.on('close', (code) => {
+      if (code !== 0) return resolve([]);
+      const match = out.match(/FINGERPRINT=(.+)/);
+      if (!match) return resolve([]);
+      resolve(match[1].split(',').map(Number));
     });
     proc.on('error', () => resolve([]));
   });
 }
 
-// Compare energy patterns using normalized cross-correlation
-function crossCorrelateEnergy(e1, e2, winLen) {
-  if (e1.length < winLen || e2.length < winLen) return { score: 0, offset1: 0, offset2: 0 };
-  let bestScore = 0, bestOff1 = 0, bestOff2 = 0;
+// Count differing bits between two 32-bit integers
+function popcount32(x) {
+  x = x - ((x >> 1) & 0x55555555);
+  x = (x & 0x33333333) + ((x >> 2) & 0x33333333);
+  return (((x + (x >> 4)) & 0x0F0F0F0F) * 0x01010101) >> 24;
+}
 
-  for (let o1 = 0; o1 + winLen <= e1.length; o1 += 2) {
-    const w1 = e1.slice(o1, o1 + winLen);
-    const mean1 = w1.reduce((a, b) => a + b, 0) / winLen;
-    const std1 = Math.sqrt(w1.reduce((a, b) => a + (b - mean1) ** 2, 0) / winLen) || 1;
+// Find the longest common fingerprint segment between two episodes
+// Returns { start1, start2, length, score } in fingerprint indices
+function findMatchingSegment(fp1, fp2, minLenFp) {
+  const MAX_HAMMING = 10; // bits that can differ and still count as a match (out of 32)
+  const GAP_TOLERANCE = 3; // allow up to N consecutive non-matching fps before breaking a run
+  const len1 = fp1.length, len2 = fp2.length;
+  if (len1 < minLenFp || len2 < minLenFp) return null;
 
-    for (let o2 = 0; o2 + winLen <= e2.length; o2 += 2) {
-      const w2 = e2.slice(o2, o2 + winLen);
-      const mean2 = w2.reduce((a, b) => a + b, 0) / winLen;
-      const std2 = Math.sqrt(w2.reduce((a, b) => a + (b - mean2) ** 2, 0) / winLen) || 1;
+  let bestStart1 = 0, bestStart2 = 0, bestLen = 0, bestMatches = 0;
 
-      // Normalized cross-correlation
-      let ncc = 0;
-      for (let i = 0; i < winLen; i++) ncc += (w1[i] - mean1) * (w2[i] - mean2);
-      ncc /= (winLen * std1 * std2);
+  // Slide fp2 over fp1 at every offset, find runs of matching fingerprints
+  for (let shift = -(len2 - minLenFp); shift < len1 - minLenFp; shift++) {
+    const i1Start = Math.max(0, shift);
+    const i2Start = Math.max(0, -shift);
+    const overlapLen = Math.min(len1 - i1Start, len2 - i2Start);
 
-      if (ncc > bestScore) {
-        bestScore = ncc;
-        bestOff1 = o1;
-        bestOff2 = o2;
+    let runStart1 = 0, runStart2 = 0, runLen = 0, gapCount = 0, matchCount = 0;
+    for (let k = 0; k < overlapLen; k++) {
+      const hamming = popcount32(fp1[i1Start + k] ^ fp2[i2Start + k]);
+      if (hamming <= MAX_HAMMING) {
+        if (runLen === 0) { runStart1 = i1Start + k; runStart2 = i2Start + k; }
+        runLen++;
+        matchCount++;
+        gapCount = 0;
+      } else {
+        gapCount++;
+        if (gapCount <= GAP_TOLERANCE && runLen > 0) {
+          runLen++; // extend through gap
+        } else {
+          if (runLen > bestLen && matchCount > bestMatches) {
+            bestStart1 = runStart1; bestStart2 = runStart2; bestLen = runLen; bestMatches = matchCount;
+          }
+          runLen = 0; matchCount = 0; gapCount = 0;
+        }
       }
     }
+    if (runLen > bestLen && matchCount > bestMatches) {
+      bestStart1 = runStart1; bestStart2 = runStart2; bestLen = runLen; bestMatches = matchCount;
+    }
   }
-  return { score: bestScore, offset1: bestOff1, offset2: bestOff2 };
+
+  if (bestLen < minLenFp) return null;
+  return { start1: bestStart1, start2: bestStart2, length: bestLen, score: bestMatches / bestLen };
 }
 
 async function detectIntroForShow(showName) {
@@ -1596,43 +1734,52 @@ async function detectIntroForShow(showName) {
   const candidates = episodes.slice(1, 6); // skip pilot, use eps 2-6
   if (candidates.length < 2) return null;
 
-  const SCAN_DURATION = 240; // scan first 4 minutes
-  console.log(`[SkipIntro] Analyzing "${showName}" (${candidates.length} episodes)...`);
+  const SCAN_DURATION = 300; // scan first 5 minutes
+  const MIN_INTRO_SEC = 10;  // intros are at least 10 seconds
+  const minLenFp = Math.round(MIN_INTRO_SEC * FP_RATE);
 
-  const energies = [];
+  console.log(`[SkipIntro] Chromaprint analysis for "${showName}" (${candidates.length} episodes)...`);
+
+  const fingerprints = [];
   for (const ep of candidates.slice(0, 3)) {
     const fp = fileIndex[ep.id];
     if (!fp) continue;
-    const energy = await getAudioEnergy(fp, SCAN_DURATION);
-    if (energy.length > 10) energies.push(energy);
+    const chromaFp = await getChromaprint(fp, SCAN_DURATION);
+    if (chromaFp.length > minLenFp) fingerprints.push(chromaFp);
   }
-  if (energies.length < 2) return null;
+  if (fingerprints.length < 2) return null;
 
-  // Try different window sizes for intro length
-  const WINDOW_SIZES = [15, 20, 25, 30, 40, 50, 60];
-  let best = { score: 0, start: 0, end: 0 };
+  // Find matching segment between first two episodes
+  const match = findMatchingSegment(fingerprints[0], fingerprints[1], minLenFp);
+  if (!match || match.score < 0.7) {
+    console.log(`[SkipIntro] No intro detected for "${showName}" (best score: ${match ? (match.score * 100).toFixed(1) : 0}%)`);
+    return null;
+  }
 
-  for (const winLen of WINDOW_SIZES) {
-    const result = crossCorrelateEnergy(energies[0], energies[1], winLen);
-    if (result.score > best.score) {
-      // Verify with 3rd episode if available
-      let verified = energies.length < 3;
-      if (energies.length >= 3) {
-        const verify = crossCorrelateEnergy(energies[0], energies[2], winLen);
-        if (verify.score > 0.6) verified = true;
-      }
-      if (verified && result.score > 0.65) {
-        best = { score: result.score, start: result.offset1, end: result.offset1 + winLen };
-      }
+  // Use intersection with 3rd episode to tighten bounds
+  let startFp = match.start1, endFp = match.start1 + match.length;
+  if (fingerprints.length >= 3) {
+    const verify = findMatchingSegment(fingerprints[0], fingerprints[2], minLenFp);
+    if (!verify || verify.score < 0.6) {
+      console.log(`[SkipIntro] Failed 3rd-episode verification for "${showName}"`);
+      return null;
+    }
+    // Intersect the two match ranges in ep1's timeline to get tighter intro bounds
+    const vStart = verify.start1, vEnd = verify.start1 + verify.length;
+    startFp = Math.max(startFp, vStart);
+    endFp = Math.min(endFp, vEnd);
+    if (endFp - startFp < minLenFp) {
+      console.log(`[SkipIntro] Intersection too short for "${showName}"`);
+      return null;
     }
   }
 
-  if (best.score > 0.65) {
-    console.log(`[SkipIntro] Detected intro for "${showName}": ${best.start}s - ${best.end}s (confidence: ${(best.score * 100).toFixed(1)}%)`);
-    return { start: best.start, end: best.end };
-  }
-  console.log(`[SkipIntro] No intro detected for "${showName}" (best score: ${(best.score * 100).toFixed(1)}%)`);
-  return null;
+  // Convert fingerprint indices to seconds
+  const start = Math.round(startFp / FP_RATE);
+  const end = Math.round(endFp / FP_RATE);
+
+  console.log(`[SkipIntro] Detected intro for "${showName}": ${start}s - ${end}s (confidence: ${(match.score * 100).toFixed(1)}%, ${match.length} fp matched)`);
+  return { start, end };
 }
 
 // API to trigger intro detection for a show
