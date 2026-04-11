@@ -3261,7 +3261,7 @@ app.post('/api/scan', requirePermission('canScan'), async (_req, res) => {
     // Background probe new files
     await backgroundProbe();
     // Background OMDB fetch
-    await backgroundOmdbFetch();
+    await backgroundOmdbFetch(library);
     // Re-scan to pick up new metadata
     invalidateLibrary();
     scanLibrary('file-watcher');
