@@ -2537,29 +2537,12 @@ app.post('/api/qbt/torrents/delete', requirePermission('canDownload'), requireQb
 });
 
 // ── File watchers ──────────────────────────────────────────────────────
-let watchers = [];
-
-function setupWatchers() {
-  // Close existing watchers
-  watchers.forEach(w => { try { w.close(); } catch {} });
-  watchers = [];
-
-  for (const folder of config.folders) {
-    if (!fs.existsSync(folder.path)) continue;
-    try {
-      const watcher = fs.watch(folder.path, { persistent: false, recursive: true }, (eventType, filename) => {
-        if (!filename) return;
-        const ext = path.extname(filename).toLowerCase();
-        if (SUPPORTED_EXT.includes(ext)) {
-          // Debounce: longer delay to avoid constant rescans during bulk conversion
-          clearTimeout(watcher._debounce);
-          watcher._debounce = setTimeout(() => { invalidateLibrary(); notifyClients('library-updated'); }, FILE_WATCHER_DEBOUNCE_MS);
-        }
-      });
-      watchers.push(watcher);
-    } catch { /* can't watch this folder */ }
-  }
-}
+const { setup: setupWatchers } = require('./lib/file-watchers')({
+  getFolders: () => config.folders,
+  supportedExt: SUPPORTED_EXT,
+  debounceMs: FILE_WATCHER_DEBOUNCE_MS,
+  onChange: () => { invalidateLibrary(); notifyClients('library-updated'); },
+});
 
 // ── Serve frontend ─────────────────────────────────────────────────────
 app.get('/', (_req, res) => {
