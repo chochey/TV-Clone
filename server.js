@@ -2605,28 +2605,9 @@ app.get('/hls/:id/:segment', requireAuth, (req, res) => {
 // ── Server-Sent Events for live updates ──────────────────────────────
 // ══════════════════════════════════════════════════════════════════════
 
-let sseClients = [];
-
-app.get('/api/events', requireAuth, (req, res) => {
-  if (sseClients.length >= SSE_MAX_CLIENTS) return res.status(503).send('Too many connections');
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
-    'Connection': 'keep-alive',
-  });
-  res.write('data: connected\n\n');
-  // Heartbeat to keep connection alive through proxies/load balancers
-  const heartbeat = setInterval(() => {
-    try { res.write(':heartbeat\n\n'); } catch { clearInterval(heartbeat); }
-  }, SSE_HEARTBEAT_MS);
-  sseClients.push(res);
-  req.on('close', () => { clearInterval(heartbeat); sseClients = sseClients.filter(c => c !== res); });
-});
-
-function notifyClients(event, data) {
-  const msg = `event: ${event}\ndata: ${JSON.stringify(data || {})}\n\n`;
-  sseClients.forEach(c => { try { c.write(msg); } catch {} });
-}
+const sse = require('./lib/sse')({ maxClients: SSE_MAX_CLIENTS, heartbeatMs: SSE_HEARTBEAT_MS });
+const notifyClients = sse.notify;
+app.get('/api/events', requireAuth, sse.handler);
 
 // ══════════════════════════════════════════════════════════════════════
 // ── qBittorrent Proxy (lib/qbt.js) ───────────────────────────────────
