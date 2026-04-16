@@ -1791,84 +1791,20 @@ app.get('/api/sprites/:id/:sheet', requireAuth, ensureLibrary, (req, res) => {
   res.status(202).send('Generating');
 });
 
-app.get('/subtitle/:id', requireAuth, ensureLibrary, async (req, res) => {
-  const sub = subtitleIndex[req.params.id];
-  if (!sub || !fs.existsSync(sub.absPath)) return res.status(404).send('Not found');
+const subtitles = require('./lib/subtitles')({ SUBTITLE_CACHE_DIR });
 
-  // If .srt, convert to .vtt (browsers need WebVTT) — cache the conversion
-  if (sub.format === 'srt') {
-    const cacheFile = path.join(SUBTITLE_CACHE_DIR, req.params.id + '.vtt');
-    if (fs.existsSync(cacheFile)) {
-      res.set('Cache-Control', 'public, max-age=604800');
-      return res.sendFile(cacheFile);
-    }
-    let content;
-    try { content = await fs.promises.readFile(sub.absPath, 'utf-8'); }
-    catch { return res.status(404).send('Not found'); }
-    const vtt = 'WEBVTT\n\n' + content
-      .replace(/\r\n/g, '\n')
-      .replace(/(\d{2}):(\d{2}):(\d{2}),(\d{3})/g, '$1:$2:$3.$4')
-      .replace(/\{\\[^}]*\}/g, '')          // Strip SSA/ASS style tags like {\an8}, {\i1}, {\b1}
-      .replace(/<font[^>]*>|<\/font>/gi, ''); // Strip HTML font tags
-    res.set('Content-Type', 'text/vtt; charset=utf-8');
-    res.set('Cache-Control', 'public, max-age=604800');
-    res.send(vtt);
-    // Write cache asynchronously (temp + rename)
-    const tmpFile = cacheFile + '.tmp';
-    fs.writeFile(tmpFile, vtt, () => { fs.rename(tmpFile, cacheFile, () => {}); });
-  } else {
-    res.set('Content-Type', 'text/vtt; charset=utf-8');
-    res.set('Cache-Control', 'public, max-age=604800');
-    res.sendFile(sub.absPath);
-  }
+app.get('/subtitle/:id', requireAuth, ensureLibrary, (req, res) => {
+  subtitles.serveExternal(subtitleIndex[req.params.id], req.params.id, res);
 });
 
-// ── Embedded subtitle extraction ─────────────────────────────────────
 app.get('/subtitle/embedded/:fileId/:streamIndex', requireAuth, ensureLibrary, (req, res) => {
   const filePath = fileIndex[req.params.fileId];
-  if (!filePath || !fs.existsSync(filePath)) return res.status(404).send('File not found');
-
-  const streamIdx = parseInt(req.params.streamIndex);
-  if (isNaN(streamIdx) || streamIdx < 0) return res.status(400).send('Invalid stream index');
-
-  // Validate index is a known subtitle stream for this file
-  const knownSubs = subProbeCache[filePath];
-  if (!knownSubs || !knownSubs.some(s => s.index === streamIdx)) {
-    return res.status(400).send('Invalid stream index');
-  }
-
-  // Check cache first
-  const cacheFile = path.join(SUBTITLE_CACHE_DIR, req.params.fileId + '_' + streamIdx + '.vtt');
-  if (fs.existsSync(cacheFile)) {
-    res.set('Cache-Control', 'public, max-age=604800');
-    return res.sendFile(cacheFile);
-  }
-
-  // Extract subtitle to VTT via ffmpeg
-  const proc = spawn('ffmpeg', [
-    '-hide_banner', '-loglevel', 'error',
-    '-i', filePath,
-    '-map', `0:${streamIdx}`,
-    '-f', 'webvtt', '-',
-  ]);
-
-  const chunks = [];
-  proc.stdout.on('data', chunk => chunks.push(chunk));
-  proc.stderr.on('data', d => console.error(`[sub-extract] ${d.toString().trim()}`));
-  proc.on('error', () => { if (!res.headersSent) res.status(500).send('Extraction failed'); });
-  proc.on('close', code => {
-    if (code === 0 && chunks.length > 0) {
-      const data = Buffer.concat(chunks);
-      res.set('Content-Type', 'text/vtt; charset=utf-8');
-      res.set('Cache-Control', 'public, max-age=604800');
-      res.end(data);
-      // Write cache asynchronously (temp + rename)
-      const tmpFile = cacheFile + '.tmp';
-      fs.writeFile(tmpFile, data, () => { fs.rename(tmpFile, cacheFile, () => {}); });
-    } else {
-      if (!res.headersSent) res.status(500).send('Extraction failed');
-    }
-  });
+  subtitles.serveEmbedded({
+    filePath,
+    fileId: req.params.fileId,
+    streamIdx: parseInt(req.params.streamIndex),
+    knownSubs: subProbeCache[filePath],
+  }, res);
 });
 
 // ══════════════════════════════════════════════════════════════════════
