@@ -176,54 +176,9 @@ const { loadProfileData, saveProfileData, cache: profileDataCache, sanitizeProfi
 // ── Library scanner ──────────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════
 
-function findPosterInDir(dirPath, baseName) {
-  const searchDirs = [path.join(dirPath, 'posters'), dirPath];
-  for (const dir of searchDirs) {
-    if (!fs.existsSync(dir)) continue;
-    for (const ext of POSTER_EXT) {
-      const p = path.join(dir, baseName + ext);
-      if (fs.existsSync(p)) return p;
-    }
-  }
-  return null;
-}
-
-function findSubtitles(dirPath, baseName) {
-  const subs = [];
-  // Search: video directory, plus common subtitle subdirectories
-  const searchDirs = [dirPath];
-  try {
-    for (const entry of fs.readdirSync(dirPath, { withFileTypes: true })) {
-      if (entry.isDirectory() && /^(subs?|subtitles?)$/i.test(entry.name)) {
-        searchDirs.push(path.join(dirPath, entry.name));
-      }
-    }
-  } catch {}
-
-  const baseNameLower = baseName.toLowerCase();
-  for (const dir of searchDirs) {
-    if (!fs.existsSync(dir)) continue;
-    let files;
-    try { files = fs.readdirSync(dir); } catch { continue; }
-    for (const f of files) {
-      const ext = path.extname(f).toLowerCase();
-      if (!SUBTITLE_EXT.includes(ext)) continue;
-      const subBase = path.parse(f).name.toLowerCase();
-
-      // Match: exact name, name.lang, OR if only one video in dir pick up all subs
-      const nameMatch = subBase === baseNameLower || subBase.startsWith(baseNameLower + '.');
-      const isSubDir = dir !== dirPath; // subs in a subdirectory likely belong to the video
-
-      if (nameMatch || isSubDir) {
-        const label = detectSubLanguage(f, baseName);
-        const absPath = path.join(dir, f);
-        const subId = crypto.createHash('sha256').update(absPath).digest('hex').slice(0, 16);
-        subs.push({ id: subId, label, filename: f, absPath, format: ext.slice(1) });
-      }
-    }
-  }
-  return subs;
-}
+const { findPosterInDir: _findPoster, findSubtitles: _findSubs } = require('./lib/fs-helpers');
+const findPosterInDir = (dir, baseName) => _findPoster(dir, baseName, POSTER_EXT);
+const findSubtitles = (dir, baseName) => _findSubs(dir, baseName, SUBTITLE_EXT);
 
 let fileIndex = {};  // id -> absolute path
 let subtitleIndex = {}; // subId -> { absPath, format }
