@@ -602,7 +602,8 @@ function carouselWithDismiss(title,items,section){
 function confirmDeleteMedia(id,title){
   const overlay=document.createElement('div');
   overlay.className='delete-confirm-overlay';
-  overlay.innerHTML=`<div class="delete-confirm-dialog"><h3>Delete from server?</h3><p>This will permanently delete <strong>${title}</strong> from disk and remove all associated data.</p><p style="color:var(--danger);font-size:.85rem">This cannot be undone.</p><div class="delete-confirm-actions"><button class="btn btn-secondary" id="deleteCancel">Cancel</button><button class="btn btn-danger" id="deleteConfirm">Delete</button></div></div>`;
+  overlay.innerHTML=`<div class="delete-confirm-dialog"><h3>Delete from server?</h3><p>This will permanently delete <strong id="deleteTitle"></strong> from disk and remove all associated data.</p><p style="color:var(--danger);font-size:.85rem">This cannot be undone.</p><div class="delete-confirm-actions"><button class="btn btn-secondary" id="deleteCancel">Cancel</button><button class="btn btn-danger" id="deleteConfirm">Delete</button></div></div>`;
+  overlay.querySelector('#deleteTitle').textContent=title;
   document.body.appendChild(overlay);
   requestAnimationFrame(()=>overlay.classList.add('visible'));
   document.getElementById('deleteCancel').onclick=()=>{overlay.classList.remove('visible');setTimeout(()=>overlay.remove(),200);};
@@ -1652,9 +1653,13 @@ async function playMedia(id){
     window._hlsTotalDur=0;
     window._hlsLoad=null;
     V.src='/stream/'+item.id;
-    V.currentTime=startTime;
     V.playbackRate=playbackSpeed;
-    V.play().catch(()=>{});
+    if(startTime>0){
+      const _seekTimeout=setTimeout(()=>{V.currentTime=startTime;V.play().catch(()=>{});},5000);
+      V.addEventListener('loadedmetadata',()=>{clearTimeout(_seekTimeout);V.currentTime=startTime;V.play().catch(()=>{});},{once:true});
+    } else {
+      V.play().catch(()=>{});
+    }
     startProgressSync();showControls();resetUpNext();
     modal.addEventListener('mousemove',showControls);
     updateEpBtns();buildSubMenu();buildAudioMenu();
