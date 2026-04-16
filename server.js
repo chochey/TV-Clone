@@ -832,7 +832,13 @@ function saveLibraryCache() {
 function loadLibraryCache() {
   try {
     if (fs.existsSync(LIBRARY_CACHE_FILE)) {
-      libraryCache = JSON.parse(fs.readFileSync(LIBRARY_CACHE_FILE, 'utf8'));
+      const parsed = JSON.parse(fs.readFileSync(LIBRARY_CACHE_FILE, 'utf8'));
+      // Treat empty cache as no cache so startup will trigger a rescan
+      if (!Array.isArray(parsed) || parsed.length === 0) {
+        console.log(`  [Cache] Disk cache is empty — will trigger fresh scan`);
+        return false;
+      }
+      libraryCache = parsed;
       // Rebuild fileIndex and subtitleIndex from cache
       fileIndex = {};
       subtitleIndex = {};
@@ -951,6 +957,24 @@ function scanLibrary(trigger) {
         showName, epInfo, fileSize, addedAt, genres,
         streamMode, codec,
       });
+    }
+  }
+
+  // Safety check: if scan returns 0 files but folders are configured,
+  // it's likely a mount/permission issue. Don't overwrite a non-empty existing cache.
+  if (library.length === 0 && config.folders.length > 0) {
+    let existingCount = 0;
+    try {
+      if (fs.existsSync(LIBRARY_CACHE_FILE)) {
+        existingCount = JSON.parse(fs.readFileSync(LIBRARY_CACHE_FILE, 'utf8')).length;
+      }
+    } catch {}
+    if (existingCount > 0) {
+      console.warn(`  [scan] WARNING: scan found 0 files but cache has ${existingCount}. Likely mount issue — keeping existing cache.`);
+      // Reload existing cache so server keeps working
+      loadLibraryCache();
+      recordScan({ count: 0, durationMs: Date.now() - _scanStart, trigger: trigger || 'startup', skipped: 'mount-issue' });
+      return libraryCache || [];
     }
   }
 
@@ -3439,6 +3463,14 @@ app.listen(PORT, '0.0.0.0', () => {
   if (hadCache) {
     console.log(`  Total media: ${libraryCache.length} file(s) (from cache)`);
     serverReadyStatus = 'loading';
+  } else {
+    console.log('  [Startup] No cache — scanning library now...');
+    try {
+      const lib = scanLibrary('startup');
+      console.log(`  Total media: ${lib.length} file(s) (fresh scan)`);
+    } catch (e) {
+      console.error('  [Startup] Initial scan failed:', e.message);
+    }
   }
   console.log('');
 
@@ -3448,7 +3480,7 @@ app.listen(PORT, '0.0.0.0', () => {
   // Server is ready immediately (library loaded from cache, watchers active)
   serverReady = true;
   serverReadyStatus = 'ready';
-  console.log('[Startup] Server ready (using cached library, automatic rescan disabled)');
+  console.log('[Startup] Server ready');
   // Resume sprite generation for any items that still need it
   setTimeout(() => { try { queueAllSpriteGen(); } catch {} }, 5000);
 });
