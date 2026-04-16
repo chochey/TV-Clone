@@ -63,19 +63,29 @@ function hashId(filePath) {
   return crypto.createHash('sha256').update(filePath).digest('hex').slice(0, 16);
 }
 
-// Detect VAAPI hardware encoding support
-let VAAPI_AVAILABLE = false;
-try {
-  execFileSync('ffmpeg', [
-    '-hide_banner', '-loglevel', 'error',
-    '-vaapi_device', '/dev/dri/renderD128',
-    '-f', 'lavfi', '-i', 'nullsrc=s=64x64:d=0.1',
-    '-vf', 'format=nv12,hwupload',
-    '-c:v', 'h264_vaapi', '-qp', '22',
-    '-f', 'null', '-',
-  ], { timeout: 5000 });
-  VAAPI_AVAILABLE = true;
-} catch {}
+// VAAPI detection — lazy. The probe takes up to 5s and was blocking startup
+// even for users who never transcode. First call memoizes the result.
+let _vaapiChecked = false;
+let _vaapiAvailable = false;
+function vaapiAvailable() {
+  if (_vaapiChecked) return _vaapiAvailable;
+  _vaapiChecked = true;
+  try {
+    execFileSync('ffmpeg', [
+      '-hide_banner', '-loglevel', 'error',
+      '-vaapi_device', '/dev/dri/renderD128',
+      '-f', 'lavfi', '-i', 'nullsrc=s=64x64:d=0.1',
+      '-vf', 'format=nv12,hwupload',
+      '-c:v', 'h264_vaapi', '-qp', '22',
+      '-f', 'null', '-',
+    ], { timeout: 5000 });
+    _vaapiAvailable = true;
+    console.log('[VAAPI] Hardware encoding available');
+  } catch {
+    console.log('[VAAPI] Hardware encoding not available, using libx264');
+  }
+  return _vaapiAvailable;
+}
 
 app.use(express.json({ limit: '64kb' }));
 
@@ -1848,7 +1858,7 @@ function startFfmpeg(id, filePath, sessionDir, seekTime, startSegNum, audioStrea
     } else {
       ffmpegArgs.push('-c:a', 'aac', '-ac', '2', '-b:a', '192k');
     }
-  } else if (VAAPI_AVAILABLE) {
+  } else if (vaapiAvailable()) {
     const pixFmt = pixFmtCache[filePath] || '';
     const is10bit = pixFmt.includes('10le') || pixFmt.includes('10be') || pixFmt.includes('p010');
     if (is10bit) {
@@ -1972,7 +1982,7 @@ app.get('/hls/:id/master.m3u8', requireAuth, ensureLibrary, async (req, res) => 
   }
 
   // Probe on-demand if not yet cached (also re-probe if pixFmt unknown for VAAPI 10-bit detection)
-  if (!probeCache[filePath] || (VAAPI_AVAILABLE && !pixFmtCache[filePath])) await probeFileAsync(filePath);
+  if (!probeCache[filePath] || (vaapiAvailable() && !pixFmtCache[filePath])) await probeFileAsync(filePath);
 
   // Clean old segments on every new session start
   try {
