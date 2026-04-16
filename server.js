@@ -25,8 +25,6 @@ const DATA_DIR = path.join(__dirname, 'data');
 const TRANSCODE_DIR = path.join(__dirname, PORT === 4800 ? 'transcode_tmp' : `transcode_tmp_${PORT}`);
 const COOKIE_NAME = PORT === 4800 ? 'session' : `session_${PORT}`;
 const ADMIN_COOKIE_NAME = PORT === 4800 ? 'adminSession' : `adminSession_${PORT}`;
-const PROBE_CACHE_FILE = path.join(DATA_DIR, 'probe_cache.json');
-const CORRUPTED_FILES_FILE = path.join(DATA_DIR, 'corrupted_files.json');
 const OMDB_CACHE_FILE = path.join(DATA_DIR, 'omdb_cache.json');
 const OMDB_POSTER_DIR = path.join(DATA_DIR, 'posters');
 const SUBTITLE_CACHE_DIR = path.join(DATA_DIR, 'subtitle_cache');
@@ -293,248 +291,17 @@ function findSubtitles(dirPath, baseName) {
 let fileIndex = {};  // id -> absolute path
 let subtitleIndex = {}; // subId -> { absPath, format }
 
-// ── Codec probing ──────────────────────────────────────────────────────
-const TEXT_SUB_CODECS = new Set(['subrip', 'srt', 'ass', 'ssa', 'webvtt', 'mov_text']);
-
-// Unified media-info store. Persisted as one file (media_info.json). The five
-// in-memory caches below are kept as thin views over this single structure so
-// call sites can stay unchanged while disk I/O is atomic and one save covers
-// everything. This eliminates the "one cache has the file, another doesn't"
-// bug class that previously bit the VAAPI 10-bit fallback path.
-const MEDIA_INFO_FILE = path.join(DATA_DIR, 'media_info.json');
-const SUB_PROBE_CACHE_FILE = path.join(DATA_DIR, 'sub_probe_cache.json');
-const PIX_FMT_CACHE_FILE = path.join(DATA_DIR, 'pix_fmt_cache.json');
-const AUDIO_PROBE_CACHE_FILE = path.join(DATA_DIR, 'audio_probe_cache.json');
-const AUDIO_TRACKS_CACHE_FILE = path.join(DATA_DIR, 'audio_tracks_cache.json');
-
-let subProbeCache, probeCache, pixFmtCache, audioProbeCache, audioTracksCache;
-let mediaInfoDirty = false;
-(function loadMediaInfo() {
-  // Prefer the unified file if it exists.
-  if (fs.existsSync(MEDIA_INFO_FILE)) {
-    const m = loadJSON(MEDIA_INFO_FILE, {});
-    probeCache = m.video || {};
-    pixFmtCache = m.pixFmt || {};
-    audioProbeCache = m.audio || {};
-    audioTracksCache = m.audioTracks || {};
-    subProbeCache = m.subs || {};
-    console.log(`[Startup] Loaded unified media info (${Object.keys(probeCache).length} files)`);
-    return;
-  }
-  // Migrate from the old split cache files if present.
-  probeCache = loadJSON(PROBE_CACHE_FILE, {});
-  pixFmtCache = loadJSON(PIX_FMT_CACHE_FILE, {});
-  audioProbeCache = loadJSON(AUDIO_PROBE_CACHE_FILE, {});
-  audioTracksCache = loadJSON(AUDIO_TRACKS_CACHE_FILE, {});
-  subProbeCache = loadJSON(SUB_PROBE_CACHE_FILE, {});
-  if (Object.keys(probeCache).length > 0) {
-    console.log(`[Startup] Migrating ${Object.keys(probeCache).length} media info entries to unified store`);
-    mediaInfoDirty = true;
-    saveMediaInfo();
-  }
-})();
-
-function saveMediaInfo() {
-  if (!mediaInfoDirty) return;
-  saveJSON(MEDIA_INFO_FILE, {
-    video: probeCache,
-    pixFmt: pixFmtCache,
-    audio: audioProbeCache,
-    audioTracks: audioTracksCache,
-    subs: subProbeCache,
-  });
-  mediaInfoDirty = false;
-}
-
-// Corrupted file registry — persisted to disk, fileId -> { filePath, title, detectedAt, reason }
-let corruptedFiles = loadJSON(CORRUPTED_FILES_FILE, {});
-console.log(`[Startup] Corrupted file registry: ${Object.keys(corruptedFiles).length} entries`);
-
-function markFileCorrupted(id, filePath, title, reason) {
-  corruptedFiles[id] = { filePath, title, detectedAt: Date.now(), reason };
-  saveJSON(CORRUPTED_FILES_FILE, corruptedFiles);
-  console.log(`[CORRUPT] Marked ${title || path.basename(filePath)} as corrupted: ${reason}`);
-}
-
-// Audio codecs browsers can play natively
-const BROWSER_AUDIO_CODECS = new Set(['aac', 'mp3', 'opus', 'vorbis', 'flac']);
-
-function probeFile(filePath) {
-  if (probeCache[filePath]) return probeCache[filePath];
-  try {
-    const raw = execFileSync('ffprobe', [
-      '-v', 'error', '-select_streams', 'v:0',
-      '-show_entries', 'stream=codec_name', '-of', 'json', filePath,
-    ], { timeout: 10000, encoding: 'utf-8' });
-    const codec = JSON.parse(raw).streams?.[0]?.codec_name || 'unknown';
-    probeCache[filePath] = codec;
-    mediaInfoDirty = true;
-    return codec;
-  } catch {
-    probeCache[filePath] = 'unknown';
-    mediaInfoDirty = true;
-    return 'unknown';
-  }
-}
-
-// Duration cache — avoids blocking ffprobe on every seek
-const durationCache = {};
-
-function probeDuration(filePath) {
-  if (durationCache[filePath]) return durationCache[filePath];
-  try {
-    const raw = execFileSync('ffprobe', [
-      '-v', 'error', '-show_entries', 'format=duration', '-of', 'json', filePath,
-    ], { timeout: 10000, encoding: 'utf-8' });
-    const dur = parseFloat(JSON.parse(raw).format?.duration) || 0;
-    if (dur > 0) durationCache[filePath] = dur;
-    return dur;
-  } catch { return 0; }
-}
-
-// Like probeDuration but captures ffprobe stderr for corruption reason reporting
-function probeDurationWithReason(filePath) {
-  if (durationCache[filePath]) return Promise.resolve({ duration: durationCache[filePath], reason: '' });
-  return new Promise((resolve) => {
-    const proc = spawn('ffprobe', [
-      '-v', 'error', '-show_entries', 'format=duration', '-of', 'json', filePath,
-    ]);
-    let out = '', err = '';
-    proc.stdout.on('data', d => out += d);
-    proc.stderr.on('data', d => err += d);
-    proc.on('close', () => {
-      try {
-        const dur = parseFloat(JSON.parse(out).format?.duration) || 0;
-        if (dur > 0) durationCache[filePath] = dur;
-        const reason = err.trim().split('\n')[0] || '';
-        resolve({ duration: dur, reason });
-      } catch { resolve({ duration: 0, reason: err.trim().split('\n')[0] || 'ffprobe parse error' }); }
-    });
-    proc.on('error', () => resolve({ duration: 0, reason: 'ffprobe spawn error' }));
-  });
-}
-
-function probeDurationAsync(filePath) {
-  if (durationCache[filePath]) return Promise.resolve(durationCache[filePath]);
-  return new Promise((resolve) => {
-    const proc = spawn('ffprobe', [
-      '-v', 'error', '-show_entries', 'format=duration', '-of', 'json', filePath,
-    ]);
-    let out = '';
-    proc.stdout.on('data', d => out += d);
-    proc.on('close', () => {
-      try {
-        const dur = parseFloat(JSON.parse(out).format?.duration) || 0;
-        if (dur > 0) durationCache[filePath] = dur;
-        resolve(dur);
-      } catch { resolve(0); }
-    });
-    proc.on('error', () => resolve(0));
-  });
-}
-
-
-const { computeStreamMode } = require('./lib/stream-mode');
-function getStreamMode(filePath) {
-  return computeStreamMode({
-    ext: path.extname(filePath),
-    codec: probeCache[filePath],
-    audioCodec: audioProbeCache[filePath],
-  });
-}
-
-// In-flight probe deduplication — prevents duplicate ffprobe spawns for the same file
-const _probeInflight = new Map();
-
-function probeFileAsync(filePath) {
-  if (_probeInflight.has(filePath)) return _probeInflight.get(filePath);
-  const promise = _probeFileAsyncInner(filePath).finally(() => _probeInflight.delete(filePath));
-  _probeInflight.set(filePath, promise);
-  return promise;
-}
-
-function _probeFileAsyncInner(filePath) {
-  return new Promise((resolve) => {
-    // Probe video, audio codecs + pixel format + full audio stream details in one call
-    const proc = spawn('ffprobe', [
-      '-v', 'error',
-      '-show_entries', 'stream=index,codec_name,codec_type,pix_fmt,channels,channel_layout:stream_tags=language,title',
-      '-of', 'json', filePath,
-    ]);
-    let out = '';
-    proc.stdout.on('data', d => out += d);
-    proc.on('close', () => {
-      try {
-        const streams = JSON.parse(out).streams || [];
-        const videoStream = streams.find(s => s.codec_type === 'video');
-        const videoCodec = videoStream?.codec_name || 'unknown';
-        const audioCodec = streams.find(s => s.codec_type === 'audio')?.codec_name || 'unknown';
-        probeCache[filePath] = videoCodec;
-        mediaInfoDirty = true;
-        if (videoStream?.pix_fmt) { pixFmtCache[filePath] = videoStream.pix_fmt; }
-        audioProbeCache[filePath] = audioCodec;
-        // Build full audio tracks list
-        const audioStreams = streams.filter(s => s.codec_type === 'audio');
-        audioTracksCache[filePath] = audioStreams.map(s => ({
-          index: s.index,
-          codec: s.codec_name,
-          lang: s.tags?.language || '',
-          title: s.tags?.title || '',
-          channels: s.channels || 0,
-          channelLayout: s.channel_layout || '',
-        }));
-        resolve(videoCodec);
-      } catch {
-        probeCache[filePath] = 'unknown';
-        mediaInfoDirty = true;
-        resolve('unknown');
-      }
-    });
-    proc.on('error', () => { probeCache[filePath] = 'unknown'; resolve('unknown'); });
-  });
-}
-
-const _subProbeInflight = new Map();
-
-function probeSubtitlesAsync(filePath) {
-  if (subProbeCache[filePath]) return Promise.resolve(subProbeCache[filePath]);
-  if (_subProbeInflight.has(filePath)) return _subProbeInflight.get(filePath);
-  const promise = _probeSubtitlesAsyncInner(filePath).finally(() => _subProbeInflight.delete(filePath));
-  _subProbeInflight.set(filePath, promise);
-  return promise;
-}
-
-function _probeSubtitlesAsyncInner(filePath) {
-  return new Promise((resolve) => {
-    const proc = spawn('ffprobe', [
-      '-v', 'error', '-select_streams', 's',
-      '-show_entries', 'stream=index,codec_name:stream_tags=language,title',
-      '-of', 'json', filePath,
-    ]);
-    let out = '';
-    proc.stdout.on('data', d => out += d);
-    proc.on('close', () => {
-      try {
-        const streams = JSON.parse(out).streams || [];
-        const subs = streams.map(s => ({
-          index: s.index,
-          codec: s.codec_name,
-          lang: s.tags?.language || '',
-          title: s.tags?.title || '',
-          extractable: TEXT_SUB_CODECS.has(s.codec_name),
-        }));
-        subProbeCache[filePath] = subs;
-        mediaInfoDirty = true;
-        resolve(subs);
-      } catch {
-        subProbeCache[filePath] = [];
-        mediaInfoDirty = true;
-        resolve([]);
-      }
-    });
-    proc.on('error', () => { subProbeCache[filePath] = []; resolve([]); });
-  });
-}
+// ── Codec probing (lib/probe.js) ────────────────────────────────────────
+const probe = require('./lib/probe')({ DATA_DIR, loadJSON, saveJSON });
+const {
+  probeCache, pixFmtCache, audioProbeCache, audioTracksCache, subProbeCache,
+  corruptedFiles, durationCache,
+  probeFile, probeFileAsync,
+  probeDuration, probeDurationAsync, probeDurationWithReason,
+  probeSubtitlesAsync, getStreamMode,
+  saveMediaInfo, markDirty, markFileCorrupted, persistCorrupted,
+  TEXT_SUB_CODECS, BROWSER_AUDIO_CODECS,
+} = probe;
 
 // Background probe: runs after scan, probes uncached files without blocking
 let bgProbeRunning = false;
@@ -1403,13 +1170,13 @@ app.delete('/api/media/:id', requireAdminSession, async (req, res) => {
   delete audioProbeCache[filePath];
   delete audioTracksCache[filePath];
   delete subProbeCache[filePath];
-  mediaInfoDirty = true;
+  markDirty();
   saveMediaInfo();
 
   // 3. Clean up corrupted file registry
   if (corruptedFiles[id]) {
     delete corruptedFiles[id];
-    saveJSON(CORRUPTED_FILES_FILE, corruptedFiles);
+    persistCorrupted();
   }
 
   // 4. Clean up skip segments (per-episode and per-show)
@@ -2225,7 +1992,7 @@ app.delete('/api/corrupted/:id', requireAdminSession, (req, res) => {
   const { id } = req.params;
   if (!corruptedFiles[id]) return res.status(404).json({ error: 'Not found' });
   delete corruptedFiles[id];
-  saveJSON(CORRUPTED_FILES_FILE, corruptedFiles);
+  persistCorrupted();
   console.log(`[CORRUPT] Removed entry ${id} from registry`);
   res.json({ ok: true });
 });
@@ -3067,7 +2834,7 @@ app.post('/api/scan', requirePermission('canScan'), async (_req, res) => {
     let stale = 0;
     for (const key of Object.keys(probeCache)) { if (!currentPaths.has(key)) { delete probeCache[key]; stale++; } }
     for (const key of Object.keys(subProbeCache)) { if (!currentPaths.has(key)) { delete subProbeCache[key]; stale++; } }
-    if (stale > 0) { mediaInfoDirty = true; saveMediaInfo(); }
+    if (stale > 0) { markDirty(); saveMediaInfo(); }
     console.log(`  [scan] Library refreshed: ${library.length} files (cleaned ${stale} stale cache entries)`);
     // Background probe new files
     await backgroundProbe();
