@@ -79,41 +79,10 @@ try {
 
 app.use(express.json());
 
-// Gzip compression for JSON responses
-const zlib = require('zlib');
-app.use((req, res, next) => {
-  const ae = req.headers['accept-encoding'] || '';
-  if (!ae.includes('gzip')) return next();
-  const origJson = res.json.bind(res);
-  res.json = function(data) {
-    const body = JSON.stringify(data);
-    if (body.length < 1024) return origJson(data);
-    zlib.gzip(Buffer.from(body), { level: 1 }, (err, compressed) => {
-      if (err) return origJson(data);
-      res.set('Content-Encoding', 'gzip');
-      res.set('Content-Type', 'application/json');
-      res.end(compressed);
-    });
-  };
-  next();
-});
-
-// ── Security headers ─────────────────────────────────────────────────
-app.use((req, res, next) => {
-  res.setHeader('X-Frame-Options', 'DENY');
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('X-XSS-Protection', '1; mode=block');
-  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
-  res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=()');
-  res.setHeader('Content-Security-Policy', "default-src 'self'; img-src 'self' data: https:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; connect-src 'self'");
-  next();
-});
-
-// Debug: log HLS requests
-app.use((req, res, next) => {
-  if (req.path.startsWith('/hls')) console.log(`[HLS-REQ] ${req.method} ${req.originalUrl}`);
-  next();
-});
+const { gzipJson, securityHeaders, hlsRequestLog } = require('./lib/middleware');
+app.use(gzipJson);
+app.use(securityHeaders);
+app.use(hlsRequestLog);
 
 // ── Ensure data directory ──────────────────────────────────────────────
 if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
