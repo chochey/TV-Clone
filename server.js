@@ -565,41 +565,27 @@ app.get('/api/profiles', (_req, res) => {
   })));
 });
 
-// ── Auth: Login / Logout ────────────────────────────────────────────────
+// ── Admin event logs (ring buffers via lib/log-ring.js) ─────────────────
 const loginAttempts = {}; // ip -> { count, lastAttempt }
-const loginLog = []; // { timestamp, profileName, username, ip, success, reason }
-const MAX_LOGIN_LOG = 500;
+const createLogRing = require('./lib/log-ring');
+const _loginLog  = createLogRing(500);
+const _scanLog   = createLogRing(200);
+const _streamLog = createLogRing(500);
+const _errorLog  = createLogRing(300);
+const loginLog = _loginLog.entries, scanLog = _scanLog.entries;
+const streamLog = _streamLog.entries, errorLog = _errorLog.entries;
 
 function recordLogin({ profileName, username, ip, success, reason }) {
-  loginLog.unshift({ timestamp: Date.now(), profileName: profileName || null, username: username || null, ip, success, reason: reason || null });
-  if (loginLog.length > MAX_LOGIN_LOG) loginLog.pop();
+  _loginLog.push({ profileName: profileName || null, username: username || null, ip, success, reason: reason || null });
 }
-
-// ── Scan log ──────────────────────────────────────────────────────────────
-const scanLog = []; // { timestamp, count, durationMs, trigger }
-const MAX_SCAN_LOG = 200;
-
 function recordScan({ count, durationMs, trigger }) {
-  scanLog.unshift({ timestamp: Date.now(), count, durationMs, trigger: trigger || 'manual' });
-  if (scanLog.length > MAX_SCAN_LOG) scanLog.pop();
+  _scanLog.push({ count, durationMs, trigger: trigger || 'manual' });
 }
-
-// ── Stream session log ────────────────────────────────────────────────────
-const streamLog = []; // { timestamp, id, title, profileName, mode, codec, quality, seekTime }
-const MAX_STREAM_LOG = 500;
-
 function recordStream({ id, title, profileName, mode, codec, quality, seekTime }) {
-  streamLog.unshift({ timestamp: Date.now(), id, title: title || id, profileName: profileName || null, mode, codec: codec || null, quality, seekTime });
-  if (streamLog.length > MAX_STREAM_LOG) streamLog.pop();
+  _streamLog.push({ id, title: title || id, profileName: profileName || null, mode, codec: codec || null, quality, seekTime });
 }
-
-// ── Error log ─────────────────────────────────────────────────────────────
-const errorLog = []; // { timestamp, context, message }
-const MAX_ERROR_LOG = 300;
-
 function recordError(context, message) {
-  errorLog.unshift({ timestamp: Date.now(), context, message });
-  if (errorLog.length > MAX_ERROR_LOG) errorLog.pop();
+  _errorLog.push({ context, message });
 }
 
 app.post('/api/login', (req, res) => {
