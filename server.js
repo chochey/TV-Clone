@@ -168,42 +168,9 @@ function ensureLibrary(req, res, next) {
   next();
 }
 
-// Per-profile data: progress, history, queue, watched
-const profileDataCache = new Map(); // profileId -> { data, dirty }
-
-function sanitizeProfileId(profileId) {
-  return String(profileId).replace(/[^a-zA-Z0-9_-]/g, '');
-}
-
-function profileDataPath(profileId) {
-  return path.join(DATA_DIR, `profile_${sanitizeProfileId(profileId)}.json`);
-}
-
-function loadProfileData(profileId) {
-  const cached = profileDataCache.get(profileId);
-  if (cached) return cached.data;
-  const data = loadJSON(profileDataPath(profileId), {
-    progress: {},    // id -> { currentTime, duration, percent }
-    history: [],     // [{ id, timestamp, title }] most recent first
-    queue: [],       // [id, id, ...]
-    watched: {},     // id -> true/false
-    dismissed: { continueWatching: {}, recentlyAdded: {} },
-    quality: 'auto', // transcode quality preset
-  });
-  // Migration: ensure dismissed field exists for older profiles
-  if (!data.dismissed) data.dismissed = { continueWatching: {}, recentlyAdded: {} };
-  if (!data.dismissed.continueWatching) data.dismissed.continueWatching = {};
-  if (!data.dismissed.recentlyAdded) data.dismissed.recentlyAdded = {};
-  // Migration: ensure quality field exists for older profiles
-  if (!data.quality) data.quality = 'auto';
-  profileDataCache.set(profileId, { data, dirty: false });
-  return data;
-}
-
-function saveProfileData(profileId, data) {
-  profileDataCache.set(profileId, { data, dirty: true });
-  saveJSON(profileDataPath(profileId), data);
-}
+// Per-profile data (lib/profile-data.js)
+const { loadProfileData, saveProfileData, cache: profileDataCache, sanitizeProfileId } =
+  require('./lib/profile-data')({ DATA_DIR, loadJSON, saveJSON });
 
 // ══════════════════════════════════════════════════════════════════════
 // ── Library scanner ──────────────────────────────────────────────────
