@@ -1817,85 +1817,9 @@ app.get('/api/admin/error-logs', requireAdminSession, (_req, res) => {
   res.json(errorLog);
 });
 
-// System stats API
-let _prevCpu = null;
+const systemStats = require('./lib/system-stats')();
 app.get('/api/system/stats', requireAdminSession, (_req, res) => {
-  const cpus = os.cpus();
-  const cpuModel = cpus[0]?.model || 'Unknown';
-  const cpuCores = cpus.length;
-
-  // CPU usage % (compare with previous snapshot)
-  const cpuTotals = cpus.reduce((acc, c) => {
-    acc.user += c.times.user; acc.nice += c.times.nice;
-    acc.sys += c.times.sys; acc.idle += c.times.idle;
-    acc.irq += c.times.irq;
-    return acc;
-  }, { user: 0, nice: 0, sys: 0, idle: 0, irq: 0 });
-  const total = cpuTotals.user + cpuTotals.nice + cpuTotals.sys + cpuTotals.idle + cpuTotals.irq;
-  const idle = cpuTotals.idle;
-  let cpuPercent = 0;
-  if (_prevCpu) {
-    const dTotal = total - _prevCpu.total;
-    const dIdle = idle - _prevCpu.idle;
-    cpuPercent = dTotal > 0 ? Math.round(((dTotal - dIdle) / dTotal) * 100) : 0;
-  }
-  _prevCpu = { total, idle };
-
-  // Memory
-  const memTotal = os.totalmem();
-  const memFree = os.freemem();
-  const memUsed = memTotal - memFree;
-
-  // Disk
-  let disks = [];
-  try {
-    let dfOut;
-    try {
-      dfOut = execFileSync('df', ['-B1', '--output=source,size,used,avail,pcent,target'], { timeout: 5000, encoding: 'utf-8' });
-    } catch (e) {
-      dfOut = e.stdout || ''; // df may exit 1 due to stale mounts but still produce output
-    }
-    const lines = dfOut.trim().split('\n').slice(1);
-    for (const line of lines) {
-      const parts = line.trim().split(/\s+/);
-      if (parts.length >= 6 && /^\/(mnt|media|$)/.test(parts[5])) {
-        disks.push({
-          mount: parts.slice(5).join(' '), source: parts[0],
-          total: parseInt(parts[1]) || 0, used: parseInt(parts[2]) || 0,
-          available: parseInt(parts[3]) || 0, percent: parseInt(parts[4]) || 0,
-        });
-      }
-    }
-  } catch {}
-
-  // GPU
-  let gpu = null;
-  try {
-    const lspci = execFileSync('lspci', [], { timeout: 5000, encoding: 'utf-8' });
-    const vga = lspci.split('\n').find(l => /vga/i.test(l));
-    const gpuName = vga ? vga.replace(/^.*:\s*/, '').trim() : null;
-    let freq = null, maxFreq = null;
-    try { freq = parseInt(fs.readFileSync('/sys/class/drm/card1/gt_cur_freq_mhz', 'utf-8').trim()); } catch {}
-    try { maxFreq = parseInt(fs.readFileSync('/sys/class/drm/card1/gt_max_freq_mhz', 'utf-8').trim()); } catch {}
-    if (!freq) try { freq = parseInt(fs.readFileSync('/sys/class/drm/card0/gt_cur_freq_mhz', 'utf-8').trim()); } catch {}
-    if (!maxFreq) try { maxFreq = parseInt(fs.readFileSync('/sys/class/drm/card0/gt_max_freq_mhz', 'utf-8').trim()); } catch {}
-    if (gpuName) gpu = { name: gpuName, freqMhz: freq, maxFreqMhz: maxFreq };
-  } catch {}
-
-  // Uptime
-  const uptimeSec = os.uptime();
-
-  // Active transcodes
-  const activeTranscodes = Object.keys(transcodeSessions).length;
-
-  res.json({
-    cpu: { model: cpuModel, cores: cpuCores, percent: cpuPercent, loadAvg: os.loadavg() },
-    memory: { total: memTotal, used: memUsed, free: memFree, percent: Math.round((memUsed / memTotal) * 100) },
-    disks,
-    gpu,
-    uptime: uptimeSec,
-    activeTranscodes,
-  });
+  res.json(systemStats.snapshot({ activeTranscodes: Object.keys(transcodeSessions).length }));
 });
 
 // Trigger sprite generation + return sprite metadata
