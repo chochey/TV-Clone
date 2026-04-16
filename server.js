@@ -77,7 +77,7 @@ try {
   VAAPI_AVAILABLE = true;
 } catch {}
 
-app.use(express.json());
+app.use(express.json({ limit: '64kb' }));
 
 const { gzipJson, securityHeaders, hlsRequestLog } = require('./lib/middleware');
 app.use(gzipJson);
