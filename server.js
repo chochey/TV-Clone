@@ -1,11 +1,5 @@
 // Load .env file if present (no external dependencies)
-const _envFile = require('path').join(__dirname, '.env');
-try {
-  for (const line of require('fs').readFileSync(_envFile, 'utf-8').split('\n')) {
-    const m = line.match(/^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*?)\s*$/);
-    if (m && !(m[1] in process.env)) process.env[m[1]] = m[2].replace(/^["']|["']$/g, '');
-  }
-} catch {}
+require('./lib/env-loader').load(require('path').join(__dirname, '.env'));
 
 const express = require('express');
 const fs = require('fs');
