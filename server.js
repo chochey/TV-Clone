@@ -99,30 +99,7 @@ const DEFAULT_CONFIG = {
   genres: {},  // fileId -> [genre strings]
 };
 
-function loadJSON(filePath, fallback) {
-  try {
-    if (fs.existsSync(filePath)) return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-  } catch { /* corrupt file */ }
-  return typeof fallback === 'function' ? fallback() : JSON.parse(JSON.stringify(fallback));
-}
-
-// Async write — non-blocking for request handlers.
-// Uses atomic write (temp file + rename) to prevent corruption on crash.
-function saveJSON(filePath, data) {
-  const content = JSON.stringify(data, null, 2);
-  const tmpPath = filePath + '.tmp';
-  fs.writeFile(tmpPath, content, (err) => {
-    if (err) { console.error('[saveJSON] Write error:', filePath, err.message); return; }
-    fs.rename(tmpPath, filePath, (err2) => {
-      if (err2) console.error('[saveJSON] Rename error:', filePath, err2.message);
-    });
-  });
-}
-
-// Sync write — only for startup/migration when order matters.
-function saveJSONSync(filePath, data) {
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
-}
+const { loadJSON, saveJSON, saveJSONSync } = require('./lib/json-store');
 
 // ── Auth module (sessions, admin/cast tokens, password hashing) ───────
 const auth = require('./lib/auth')({
