@@ -53,13 +53,12 @@ const SESSION_CLEANUP_INTERVAL_MS = 3600000; // clean expired sessions every hou
 const LOGIN_RATE_WINDOW_MS = 300000;      // rate-limit window (5 min)
 const LOGIN_MAX_ATTEMPTS = 10;            // max login attempts per window
 const COOKIE_SECURE = process.env.COOKIE_SECURE === 'true' || process.env.NODE_ENV === 'production';
-const LANG_CODES = {
-  eng: 'English', spa: 'Spanish', fre: 'French', ger: 'German', ita: 'Italian',
-  por: 'Portuguese', jpn: 'Japanese', kor: 'Korean', chi: 'Chinese', zho: 'Chinese',
-  rus: 'Russian', ara: 'Arabic', hin: 'Hindi', dut: 'Dutch', nld: 'Dutch', swe: 'Swedish',
-  nor: 'Norwegian', dan: 'Danish', fin: 'Finnish', pol: 'Polish', tur: 'Turkish',
-  gre: 'Greek', ell: 'Greek', heb: 'Hebrew', tha: 'Thai', und: 'Unknown',
-};
+
+// ── Pure filename parsing (lib/filename-parse.js) ───────────────────────
+const {
+  parseTitle, parseEpisodeInfo, parseShowName, detectType, hasEpisodePattern, detectSubLanguage,
+  LANG_CODES,
+} = require('./lib/filename-parse');
 
 // Generate opaque file IDs from paths (deterministic but not reversible)
 function hashId(filePath) {
@@ -242,53 +241,6 @@ function saveProfileData(profileId, data) {
 // ── Library scanner ──────────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════
 
-function parseTitle(filename) {
-  const name = path.parse(filename).name;
-  // Prefer year in parentheses: "Blade Runner 2049 (2017)" → title="Blade Runner 2049", year="2017"
-  let yearMatch = name.match(/\((\d{4})\)/);
-  if (!yearMatch) {
-    // Fallback: year after separator, but only plausible years (1920-2035)
-    yearMatch = name.match(/[\.\s\-_]((?:19[2-9]\d|20[0-3]\d))[\.\s\-_]?$/);
-  }
-  const year = yearMatch ? yearMatch[1] : null;
-  let title = name;
-  if (yearMatch) title = name.substring(0, yearMatch.index);
-  title = title.replace(/[\._]/g, ' ').replace(/\s+/g, ' ').trim();
-  return { title, year };
-}
-
-function parseEpisodeInfo(filename) {
-  const lower = filename.toLowerCase();
-  // Match S01E01 or S1E1
-  let m = lower.match(/s(\d{1,2})e(\d{1,3})/i);
-  if (m) return { season: parseInt(m[1]), episode: parseInt(m[2]) };
-  // Match 1x01
-  m = lower.match(/(\d{1,2})x(\d{2,3})/i);
-  if (m) return { season: parseInt(m[1]), episode: parseInt(m[2]) };
-  return null;
-}
-
-function parseShowName(filename) {
-  const name = path.parse(filename).name;
-  // Extract show name - everything before S01E01 or 1x01 pattern
-  let m = name.match(/^(.+?)[\.\s\-_]*[Ss]\d{1,2}[Ee]\d{1,3}/);
-  if (m) return m[1].replace(/[\._]/g, ' ').replace(/\s+/g, ' ').trim();
-  m = name.match(/^(.+?)[\.\s\-_]*\d{1,2}x\d{2,3}/);
-  if (m) return m[1].replace(/[\._]/g, ' ').replace(/\s+/g, ' ').trim();
-  return null;
-}
-
-function detectType(filename, folderType) {
-  if (folderType && folderType !== 'auto') return folderType;
-  const lower = filename.toLowerCase();
-  if (/s\d{1,2}e\d{1,2}/i.test(lower) || /\d{1,2}x\d{2}/i.test(lower)) return 'show';
-  return 'movie';
-}
-
-function hasEpisodePattern(filename) {
-  return /s\d{1,2}e\d{1,2}/i.test(filename) || /\d{1,2}x\d{2}/i.test(filename);
-}
-
 function findPosterInDir(dirPath, baseName) {
   const searchDirs = [path.join(dirPath, 'posters'), dirPath];
   for (const dir of searchDirs) {
@@ -299,60 +251,6 @@ function findPosterInDir(dirPath, baseName) {
     }
   }
   return null;
-}
-
-// 2-letter ISO 639-1 code mapping (supplements the 3-letter LANG_CODES)
-const LANG_CODES_2 = {
-  en: 'English', es: 'Spanish', fr: 'French', de: 'German', it: 'Italian',
-  pt: 'Portuguese', ja: 'Japanese', ko: 'Korean', zh: 'Chinese', ru: 'Russian',
-  ar: 'Arabic', hi: 'Hindi', nl: 'Dutch', sv: 'Swedish', no: 'Norwegian', da: 'Danish',
-  fi: 'Finnish', pl: 'Polish', tr: 'Turkish', el: 'Greek', he: 'Hebrew', th: 'Thai',
-  cs: 'Czech', hr: 'Croatian', hu: 'Hungarian', ro: 'Romanian', uk: 'Ukrainian',
-  vi: 'Vietnamese', id: 'Indonesian', ms: 'Malay', tl: 'Tagalog', ca: 'Catalan',
-  eu: 'Basque', bg: 'Bulgarian', sk: 'Slovak', sl: 'Slovenian', sr: 'Serbian',
-  lt: 'Lithuanian', lv: 'Latvian', et: 'Estonian', ta: 'Tamil', te: 'Telugu',
-};
-
-// Full-word language names that appear in subtitle filenames
-const LANG_WORDS = {
-  english: 'English', spanish: 'Spanish', french: 'French', german: 'German', italian: 'Italian',
-  portuguese: 'Portuguese', japanese: 'Japanese', korean: 'Korean', chinese: 'Chinese', russian: 'Russian',
-  arabic: 'Arabic', hindi: 'Hindi', dutch: 'Dutch', swedish: 'Swedish', norwegian: 'Norwegian',
-  danish: 'Danish', finnish: 'Finnish', polish: 'Polish', turkish: 'Turkish', greek: 'Greek',
-  hebrew: 'Hebrew', thai: 'Thai', czech: 'Czech', croatian: 'Croatian', hungarian: 'Hungarian',
-  romanian: 'Romanian', ukrainian: 'Ukrainian', vietnamese: 'Vietnamese', indonesian: 'Indonesian',
-  catalan: 'Catalan', basque: 'Basque', bulgarian: 'Bulgarian', slovak: 'Slovak', slovenian: 'Slovenian',
-  serbian: 'Serbian', brazilian: 'Portuguese (BR)', european: 'European', forced: 'Forced',
-};
-
-function detectSubLanguage(filename, videoBaseName) {
-  const name = path.parse(filename).name;
-  // Strip the video basename prefix if present to get the language/tag portion
-  let tagPart = name;
-  if (videoBaseName && name.toLowerCase().startsWith(videoBaseName.toLowerCase())) {
-    tagPart = name.slice(videoBaseName.length).replace(/^[\.\-_ ]+/, '');
-  }
-  if (!tagPart) return 'Default';
-
-  const parts = tagPart.toLowerCase().split(/[\.\-_ ]+/).filter(Boolean);
-  const labels = [];
-
-  for (const part of parts) {
-    const resolved = LANG_WORDS[part] || LANG_CODES_2[part] || LANG_CODES[part];
-    if (resolved) {
-      // Don't add duplicate language names (e.g. "english" + "eng" both resolve to "English")
-      if (!labels.includes(resolved)) labels.push(resolved);
-      continue;
-    }
-    // SDH, CC, forced, etc. — keep as-is
-    if (/^(sdh|cc|hi|forced|full|default|signs|songs)$/i.test(part)) { labels.push(part.toUpperCase()); continue; }
-    // Qualifiers like "simplified", "traditional", "canadian" — keep readable
-    if (part.length > 3) { labels.push(part.charAt(0).toUpperCase() + part.slice(1)); continue; }
-    // Unknown short code — show uppercase
-    labels.push(part.toUpperCase());
-  }
-
-  return labels.length > 0 ? labels.join(' · ') : 'Unknown';
 }
 
 function findSubtitles(dirPath, baseName) {
