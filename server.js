@@ -126,7 +126,7 @@ function saveJSONSync(filePath, data) {
 
 // ── Auth module (sessions, admin/cast tokens, password hashing) ───────
 const auth = require('./lib/auth')({
-  DATA_DIR, COOKIE_NAME, saveJSON,
+  DATA_DIR, COOKIE_NAME, ADMIN_COOKIE_NAME, saveJSON,
   cleanupIntervalMs: SESSION_CLEANUP_INTERVAL_MS,
 });
 const {
@@ -134,6 +134,7 @@ const {
   sessions, adminTokens, castTokens,
   createSession, createAdminToken, revokeAdminToken,
   getSession, requireAuth, requireAdminSession,
+  resolveAdminToken, requireAdmin, requirePermission,
   persistSessions,
   SESSION_MAX_AGE, CAST_TOKEN_TTL, VALID_PERMISSIONS,
 } = auth;
@@ -1276,42 +1277,6 @@ app.get('/api/stats', requireAuth, (_req, res) => {
 // ══════════════════════════════════════════════════════════════════════
 // ── Config APIs (folders) ────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════
-
-// Validate admin token cookie — re-registers it against the current session if the server
-// restarted and wiped adminTokens (avoids forcing a re-login on every server restart)
-function resolveAdminToken(req) {
-  const cookieHeader = req.headers.cookie || '';
-  const adminMatch = cookieHeader.match(new RegExp(`${ADMIN_COOKIE_NAME}=([a-f0-9]{48})`));
-  const aToken = adminMatch ? adminMatch[1] : req.headers['x-admin-token'];
-  if (!aToken) return false;
-  // Happy path — token is already registered
-  if (adminTokens.has(aToken) && sessions.has(adminTokens.get(aToken))) return true;
-  // Server restarted: adminTokens wiped but session cookie is still valid — re-register
-  const session = getSession(req);
-  if (session) { adminTokens.set(aToken, /* session token */ (() => {
-    const cookieMatch = cookieHeader.match(new RegExp(`${COOKIE_NAME}=([a-f0-9]{64})`));
-    return cookieMatch ? cookieMatch[1] : null;
-  })()); return adminTokens.has(aToken) && !!adminTokens.get(aToken); }
-  return false;
-}
-
-// Admin auth: per-session token validated against adminTokens map
-function requireAdmin(req, res, next) {
-  if (!resolveAdminToken(req)) return res.status(403).json({ error: 'Unauthorized' });
-  next();
-}
-
-// Permission-based auth: checks admin token AND that session has a specific permission (or is admin)
-function requirePermission(permission) {
-  return (req, res, next) => {
-    if (!resolveAdminToken(req)) return res.status(403).json({ error: 'Unauthorized' });
-    const session = getSession(req);
-    if (!session) return res.status(401).json({ error: 'Login required' });
-    if (session.role === 'admin') return next();
-    if (session.permissions && session.permissions.includes(permission)) return next();
-    return res.status(403).json({ error: 'Permission denied' });
-  };
-}
 
 app.get('/api/config', requireAdmin, (_req, res) => {
   const lib = scanLibrary();
