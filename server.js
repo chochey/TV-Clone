@@ -773,8 +773,14 @@ app.get('/api/library', requireAuth, (req, res) => {
     return res.json({ items, page, limit, total, totalPages });
   }
 
-  // ETag for conditional requests (home page polls frequently)
-  const profileVersion = Object.keys(profileData.progress).length + '-' + Object.keys(profileData.watched).length;
+  // ETag for conditional requests (home page polls frequently).
+  // Include max progress.updatedAt so re-watching an item that's already in
+  // the progress map busts the cache — needed for Continue Watching reorder.
+  let maxProgressAt = 0;
+  for (const v of Object.values(profileData.progress)) {
+    if (v && v.updatedAt > maxProgressAt) maxProgressAt = v.updatedAt;
+  }
+  const profileVersion = Object.keys(profileData.progress).length + '-' + Object.keys(profileData.watched).length + '-' + maxProgressAt;
   const omdbVersion = omdb.cacheSize;
   const overrideVersion = Object.keys(metadataOverrides.all()).length;
   const cacheTag = (libraryCache ? libraryCache.length : 0) + '-' + profileVersion + '-' + omdbVersion + '-' + overrideVersion;
