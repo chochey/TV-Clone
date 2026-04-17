@@ -304,9 +304,10 @@ function loadLibraryCache() {
 
 function invalidateLibrary() {
   libraryCache = null;
-  // Immediately rebuild cache so next request doesn't wait
-  try { scanLibrary('invalidate'); } catch {}
-  // Queue sprite generation for any new items after rescan
+  // Defer the rescan so we don't block the event loop on the invalidation
+  // path. If a request arrives before the rescan finishes, ensureLibrary
+  // middleware will trigger one on demand.
+  setImmediate(() => { try { scanLibrary('invalidate'); } catch {} });
   setTimeout(() => { try { queueAllSpriteGen(); } catch {} }, 3000);
 }
 
