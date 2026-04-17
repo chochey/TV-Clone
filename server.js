@@ -178,35 +178,44 @@ const {
 
 // Background probe: runs after scan, probes uncached files without blocking
 let bgProbeRunning = false;
+const PROBE_CONCURRENCY = parseInt(process.env.PROBE_CONCURRENCY, 10) || 4;
 async function backgroundProbe() {
   if (bgProbeRunning) return;
   bgProbeRunning = true;
   const lib = libraryCache || [];
   let codecCount = 0, subCount = 0;
 
+  // Build the list of work to do first — skip files already cached.
+  const codecTasks = [];
+  const subTasks = [];
   for (const item of lib) {
     const fp = fileIndex[item.id];
     if (!fp) continue;
-    // Video + audio codec + audio tracks probe
-    if (!probeCache[fp] || !audioProbeCache[fp] || !audioTracksCache[fp]) {
-      await probeFileAsync(fp);
-      codecCount++;
-      await new Promise(r => setTimeout(r, 50));
-    }
-    // Subtitle stream probe (for non-mp4 files that might have embedded subs)
-    if (!subProbeCache[fp]) {
-      const ext = path.extname(fp).toLowerCase();
-      if (ext !== '.mp4') {
-        await probeSubtitlesAsync(fp);
-        subCount++;
-        await new Promise(r => setTimeout(r, 50));
-      }
-    }
-    if ((codecCount + subCount) % 100 === 0 && (codecCount + subCount) > 0) {
-      saveMediaInfo();
-      console.log(`  [probe] ${codecCount} codec + ${subCount} subtitle probes...`);
-    }
+    if (!probeCache[fp] || !audioProbeCache[fp] || !audioTracksCache[fp]) codecTasks.push(fp);
+    if (!subProbeCache[fp] && path.extname(fp).toLowerCase() !== '.mp4') subTasks.push(fp);
   }
+
+  async function runPool(tasks, worker, onProgress) {
+    let next = 0;
+    const workers = Array.from({ length: PROBE_CONCURRENCY }, async () => {
+      while (next < tasks.length) {
+        const i = next++;
+        await worker(tasks[i]);
+        onProgress();
+      }
+    });
+    await Promise.all(workers);
+  }
+
+  await runPool(codecTasks, probeFileAsync, () => {
+    codecCount++;
+    if (codecCount % 100 === 0) { saveMediaInfo(); console.log(`  [probe] ${codecCount}/${codecTasks.length} codec probes...`); }
+  });
+  await runPool(subTasks, probeSubtitlesAsync, () => {
+    subCount++;
+    if (subCount % 100 === 0) { saveMediaInfo(); console.log(`  [probe] ${subCount}/${subTasks.length} subtitle probes...`); }
+  });
+
   saveMediaInfo();
   if (codecCount > 0 || subCount > 0) console.log(`  [probe] Complete — ${codecCount} codec + ${subCount} subtitle probes.`);
   bgProbeRunning = false;
