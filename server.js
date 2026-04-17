@@ -908,6 +908,38 @@ app.post('/api/queue/remove', requireAuth, (req, res) => {
   res.json({ ok: true, queue: data.queue });
 });
 
+// ── Watchlist (save-for-later, separate from the queue) ────────────────
+// Unlike the queue ("up next"), watchlist is a lasting list of items the user
+// flagged as interesting — no implication that they'll watch it soon.
+app.get('/api/watchlist', requireAuth, (req, res) => {
+  const profileId = getRequestProfile(req);
+  if (!profileId) return res.status(403).json({ error: 'Cannot access other profiles' });
+  const data = loadProfileData(profileId);
+  res.json(data.watchlist || []);
+});
+
+app.post('/api/watchlist/add', requireAuth, (req, res) => {
+  const { id } = req.body;
+  if (!id) return res.status(400).json({ error: 'Missing id' });
+  const profileId = getRequestProfile(req);
+  if (!profileId) return res.status(403).json({ error: 'Cannot modify other profiles' });
+  const data = loadProfileData(profileId);
+  if (!data.watchlist) data.watchlist = [];
+  if (!data.watchlist.includes(id)) data.watchlist.push(id);
+  saveProfileData(profileId, data);
+  res.json({ ok: true, watchlist: data.watchlist });
+});
+
+app.post('/api/watchlist/remove', requireAuth, (req, res) => {
+  const { id } = req.body;
+  const profileId = getRequestProfile(req);
+  if (!profileId) return res.status(403).json({ error: 'Cannot modify other profiles' });
+  const data = loadProfileData(profileId);
+  data.watchlist = (data.watchlist || []).filter(w => w !== id);
+  saveProfileData(profileId, data);
+  res.json({ ok: true, watchlist: data.watchlist });
+});
+
 // ── Dismissed (hide from Continue Watching / Recently Added) ──────────────
 app.get('/api/dismissed', requireAuth, (req, res) => {
   const profileId = getRequestProfile(req);
