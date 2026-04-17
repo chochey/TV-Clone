@@ -448,7 +448,14 @@ app.get('/api/profiles', (_req, res) => {
 });
 
 // ── Admin event logs (ring buffers via lib/log-ring.js) ─────────────────
-const loginAttempts = {}; // ip -> { count, lastAttempt }
+// Rate-limit key is `${ip}|${username}` so one user locking themselves out on a
+// shared NAT doesn't also lock out everyone else. Entries expire after 2×window.
+const loginAttempts = new Map(); // key -> { count, lastAttempt }
+function loginRateKey(ip, username) { return `${ip}|${(username || '').toLowerCase()}`; }
+setInterval(() => {
+  const cutoff = Date.now() - LOGIN_RATE_WINDOW_MS * 2;
+  for (const [k, v] of loginAttempts) if (v.lastAttempt < cutoff) loginAttempts.delete(k);
+}, LOGIN_RATE_WINDOW_MS).unref();
 const createLogRing = require('./lib/log-ring');
 const _loginLog  = createLogRing(500);
 const _scanLog   = createLogRing(200);
@@ -473,14 +480,16 @@ function recordError(context, message) {
 app.post('/api/login', (req, res) => {
   const ip = req.ip;
   const now = Date.now();
-  if (!loginAttempts[ip]) loginAttempts[ip] = { count: 0, lastAttempt: 0 };
-  if (now - loginAttempts[ip].lastAttempt > LOGIN_RATE_WINDOW_MS) loginAttempts[ip].count = 0;
-  if (loginAttempts[ip].count >= LOGIN_MAX_ATTEMPTS) {
-    recordLogin({ username: req.body?.username, ip, success: false, reason: 'Rate limited' });
+  const { username, password, profileId } = req.body;
+  const key = loginRateKey(ip, username || profileId);
+  let bucket = loginAttempts.get(key);
+  if (!bucket) { bucket = { count: 0, lastAttempt: 0 }; loginAttempts.set(key, bucket); }
+  if (now - bucket.lastAttempt > LOGIN_RATE_WINDOW_MS) bucket.count = 0;
+  if (bucket.count >= LOGIN_MAX_ATTEMPTS) {
+    recordLogin({ username, ip, success: false, reason: 'Rate limited' });
     return res.status(429).json({ error: 'Too many attempts. Try again in 5 minutes.' });
   }
 
-  const { username, password, profileId } = req.body;
   // Support both username-based login (new) and profileId-based login (legacy/internal)
   let profile;
   if (username) {
@@ -489,22 +498,22 @@ app.post('/api/login', (req, res) => {
     profile = config.profiles.find(p => p.id === profileId);
   }
   if (!profile) {
-    loginAttempts[ip].count++;
-    loginAttempts[ip].lastAttempt = now;
+    bucket.count++;
+    bucket.lastAttempt = now;
     recordLogin({ username, ip, success: false, reason: 'Unknown user' });
     return res.status(403).json({ error: 'Invalid username or password' });
   }
 
-  loginAttempts[ip].lastAttempt = now;
+  bucket.lastAttempt = now;
 
   if (!verifyPassword(password || '', profile.password || '')) {
-    loginAttempts[ip].count++;
+    bucket.count++;
     recordLogin({ profileName: profile.name, username, ip, success: false, reason: 'Wrong password' });
     return res.status(403).json({ error: 'Invalid username or password' });
   }
 
-  // Successful login — reset rate limit counter
-  loginAttempts[ip].count = 0;
+  // Successful login — clear the bucket
+  loginAttempts.delete(key);
   recordLogin({ profileName: profile.name, username, ip, success: true });
 
   const role = profile.role || 'user';
