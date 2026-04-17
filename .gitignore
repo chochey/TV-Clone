@@ -1,5 +1,6 @@
 node_modules/
 data/
+data_backups/
 config.json
 .env
 media/
