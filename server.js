@@ -997,6 +997,43 @@ const introDetect = require('./lib/intro-detect')({
 });
 const { fetchIntroDb, detectIntroForShow } = introDetect;
 
+// Background intro detection: run once per show that has 2+ episodes and no
+// skip-segment entry yet. Runs after a library scan completes. Gated on
+// fpcalc being available — skip if not installed.
+let bgIntroRunning = false;
+async function backgroundDetectIntros(library) {
+  if (bgIntroRunning) return;
+  bgIntroRunning = true;
+  try {
+    // Collect show names (dedupe) that have >= 2 episodes and no entry yet.
+    const showEpCount = new Map();
+    for (const item of library) {
+      if (item.type !== 'show' || !item.showName) continue;
+      showEpCount.set(item.showName, (showEpCount.get(item.showName) || 0) + 1);
+    }
+    const candidates = [];
+    for (const [name, count] of showEpCount) {
+      if (count < 2) continue;
+      if (skipSegments['show:' + name]) continue;
+      candidates.push(name);
+    }
+    if (candidates.length === 0) return;
+    console.log(`  [intro] Auto-detecting intros for ${candidates.length} show(s)...`);
+    let detected = 0;
+    for (const name of candidates) {
+      try {
+        const intro = await detectIntroForShow(name);
+        if (intro) {
+          skipSegments['show:' + name] = { intro };
+          saveJSON(SKIP_SEGMENTS_FILE, skipSegments);
+          detected++;
+        }
+      } catch (e) { console.warn(`  [intro] ${name} failed: ${e.message}`); }
+    }
+    console.log(`  [intro] Complete — detected ${detected}/${candidates.length}`);
+  } finally { bgIntroRunning = false; }
+}
+
 app.get('/api/skip-segments/:id', requireAuth, async (req, res) => {
   const id = req.params.id;
   // Check for per-episode override first, then show-level
@@ -2374,6 +2411,8 @@ app.post('/api/scan', requirePermission('canScan'), async (_req, res) => {
     await backgroundProbe();
     // Background OMDB fetch
     await backgroundOmdbFetch(library);
+    // Background intro detection for shows with >= 2 episodes and no segments yet
+    if (process.env.AUTO_DETECT_INTROS !== '0') await backgroundDetectIntros(library);
     // Re-scan to pick up new metadata
     invalidateLibrary();
     scanLibrary('file-watcher');
