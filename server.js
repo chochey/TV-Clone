@@ -169,8 +169,8 @@ const probe = require('./lib/probe')({ DATA_DIR, loadJSON, saveJSON });
 const {
   probeCache, pixFmtCache, audioProbeCache, audioTracksCache, subProbeCache,
   corruptedFiles, durationCache,
-  probeFile, probeFileAsync,
-  probeDuration, probeDurationAsync, probeDurationWithReason,
+  probeFileAsync,
+  probeDurationAsync, probeDurationWithReason,
   probeSubtitlesAsync, getStreamMode,
   saveMediaInfo, markDirty, markFileCorrupted, persistCorrupted,
   TEXT_SUB_CODECS, BROWSER_AUDIO_CODECS,
