@@ -1826,20 +1826,14 @@ function cleanupSession(id, keepFiles) {
   try { session.process.kill('SIGTERM'); } catch {}
   clearTimeout(session.timeout);
   delete transcodeSessions[id];
-  if (!keepFiles) {
-    // Use a unique cleanup path to avoid race conditions with new sessions reusing the same id.
-    // Rename the directory first so a new session can safely recreate it.
-    const deadDir = session.dir + '_dead_' + Date.now();
-    try { fs.renameSync(session.dir, deadDir); } catch { return; }
-    setTimeout(() => {
-      try {
-        if (fs.existsSync(deadDir)) {
-          fs.readdirSync(deadDir).forEach(f => fs.unlinkSync(path.join(deadDir, f)));
-          fs.rmdirSync(deadDir);
-        }
-      } catch {}
-    }, 5000);
-  }
+  if (keepFiles) return;
+
+  // Rename before removing so a new session that reuses this id can create
+  // the directory fresh without racing our async delete. fs.rm handles the
+  // recursive walk with its own retry policy — no hand-rolled 5s timeout.
+  const deadDir = session.dir + '_dead_' + Date.now();
+  try { fs.renameSync(session.dir, deadDir); } catch { return; }
+  fs.rm(deadDir, { recursive: true, force: true, maxRetries: 3 }, () => {});
 }
 
 const QUALITY_PRESETS = {
