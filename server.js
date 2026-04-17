@@ -232,6 +232,13 @@ const omdb = require('./lib/omdb')({
 const { parseYearFromName, stripYearFromName, omdbCacheKey,
         fetchOmdbData, saveOmdbCache, getOmdbForItem, backgroundOmdbFetch } = omdb;
 
+// Admin metadata overrides — shadow OMDB fields for items that matched wrong
+// or not at all. Applied as a top layer over getOmdbForItem output.
+const metadataOverrides = require('./lib/metadata-overrides')({ DATA_DIR, loadJSON, saveJSON });
+function getMetadataForItem(item) {
+  return metadataOverrides.apply(item.id, getOmdbForItem(item));
+}
+
 
 const SKIP_DIRS = new Set(['featurettes','extras','behind the scenes','deleted scenes','interviews',
   'bonus','bonus features','samples','sample','specials','trailers','shorts']);
@@ -678,7 +685,7 @@ app.get('/api/library', requireAuth, (req, res) => {
 
   // Slim response: exclude heavy fields not needed for browsing
   let result = lib.map(item => {
-    const omdb = getOmdbForItem(item);
+    const omdb = getMetadataForItem(item);
     return {
       id: item.id,
       title: item.title,
@@ -769,7 +776,8 @@ app.get('/api/library', requireAuth, (req, res) => {
   // ETag for conditional requests (home page polls frequently)
   const profileVersion = Object.keys(profileData.progress).length + '-' + Object.keys(profileData.watched).length;
   const omdbVersion = omdb.cacheSize;
-  const cacheTag = (libraryCache ? libraryCache.length : 0) + '-' + profileVersion + '-' + omdbVersion;
+  const overrideVersion = Object.keys(metadataOverrides.all()).length;
+  const cacheTag = (libraryCache ? libraryCache.length : 0) + '-' + profileVersion + '-' + omdbVersion + '-' + overrideVersion;
   const etag = '"lib-' + crypto.createHash('md5').update(cacheTag).digest('hex').slice(0, 12) + '"';
   res.set('ETag', etag);
   if (req.headers['if-none-match'] === etag) return res.status(304).end();
@@ -782,7 +790,7 @@ app.get('/api/item/:id', requireAuth, (req, res) => {
   const lib = scanLibrary();
   const item = lib.find(m => m.id === req.params.id);
   if (!item) return res.status(404).json({ error: 'Not found' });
-  const omdb = getOmdbForItem(item);
+  const omdb = getMetadataForItem(item);
   const profileId = getRequestProfile(req);
   if (!profileId) return res.status(403).json({ error: 'Cannot access other profiles' });
   const profileData = loadProfileData(profileId);
@@ -969,7 +977,7 @@ app.get('/api/skip-segments/:id', requireAuth, async (req, res) => {
 
   // Fallback: fetch from IntroDB using IMDB ID
   if (item && item.type === 'show' && item.epInfo) {
-    const omdb = getOmdbForItem(item);
+    const omdb = getMetadataForItem(item);
     const imdbId = omdb?.imdbID;
     if (imdbId) {
       const introdb = await fetchIntroDb(imdbId, item.epInfo.season || 1, item.epInfo.episode || 1);
@@ -1116,6 +1124,35 @@ app.post('/api/genres', requireAuth, (req, res) => {
   config.genres[id] = Array.isArray(genres) ? genres : [];
   saveJSON(CONFIG_FILE, config);
   res.json({ ok: true });
+});
+
+// ── Metadata overrides (admin-only) ─────────────────────────────────────
+// GET   /api/metadata-override          — return all overrides
+// GET   /api/metadata-override/:id      — return override for one item (or null)
+// PUT   /api/metadata-override/:id      — merge fields into the override
+// DELETE /api/metadata-override/:id     — clear all overrides for item
+// DELETE /api/metadata-override/:id/:field — clear a single field
+app.get('/api/metadata-override', requireAdminSession, (_req, res) => {
+  res.json(metadataOverrides.all());
+});
+app.get('/api/metadata-override/:id', requireAdminSession, (req, res) => {
+  res.json(metadataOverrides.get(req.params.id) || {});
+});
+app.put('/api/metadata-override/:id', requireAdminSession, (req, res) => {
+  const saved = metadataOverrides.set(req.params.id, req.body || {});
+  if (!saved) return res.status(400).json({ error: 'No valid fields in body' });
+  notifyClients('library-updated'); // prompt clients to refetch
+  res.json({ ok: true, override: saved });
+});
+app.delete('/api/metadata-override/:id', requireAdminSession, (req, res) => {
+  const removed = metadataOverrides.clear(req.params.id);
+  if (removed) notifyClients('library-updated');
+  res.json({ ok: removed });
+});
+app.delete('/api/metadata-override/:id/:field', requireAdminSession, (req, res) => {
+  const removed = metadataOverrides.clearField(req.params.id, req.params.field);
+  if (removed) notifyClients('library-updated');
+  res.json({ ok: removed });
 });
 
 // ── OMDB metadata on-demand endpoint ────────────────────────────────────
