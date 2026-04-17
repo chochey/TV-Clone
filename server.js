@@ -161,8 +161,9 @@ const { findPosterInDir: _findPoster, findSubtitles: _findSubs } = require('./li
 const findPosterInDir = (dir, baseName) => _findPoster(dir, baseName, POSTER_EXT);
 const findSubtitles = (dir, baseName) => _findSubs(dir, baseName, SUBTITLE_EXT);
 
-let fileIndex = {};  // id -> absolute path
-let subtitleIndex = {}; // subId -> { absPath, format }
+let fileIndex = {};      // id -> absolute video path
+let posterIndex = {};    // id -> absolute poster path
+let subtitleIndex = {};  // subId -> { absPath, format }
 
 // ── Codec probing (lib/probe.js) ────────────────────────────────────────
 const probe = require('./lib/probe')({ DATA_DIR, loadJSON, saveJSON });
@@ -274,14 +275,18 @@ function loadLibraryCache() {
         return false;
       }
       libraryCache = parsed;
-      // Rebuild fileIndex and subtitleIndex from cache
+      // Rebuild fileIndex, posterIndex, and subtitleIndex from cache
       fileIndex = {};
+      posterIndex = {};
       subtitleIndex = {};
       for (const item of libraryCache) {
         const fullPath = item._filePath;
         if (!fullPath) continue;
         fileIndex[item.id] = fullPath;
-        if (item.posterUrl) fileIndex[`poster_${item.id}`] = findPosterInDir(path.dirname(fullPath), path.parse(path.basename(fullPath)).name) || '';
+        if (item.posterUrl) {
+          const poster = findPosterInDir(path.dirname(fullPath), path.parse(path.basename(fullPath)).name);
+          if (poster) posterIndex[item.id] = poster;
+        }
         if (item.subtitles) {
           for (const s of item.subtitles) {
             if (!s.embedded && s.id && s._absPath) {
@@ -310,6 +315,7 @@ function scanLibrary(trigger) {
   const _scanStart = Date.now();
   const library = [];
   fileIndex = {};
+  posterIndex = {};
   subtitleIndex = {};
 
   for (const folder of config.folders) {
@@ -331,7 +337,7 @@ function scanLibrary(trigger) {
 
       // Poster (check file's own directory)
       const posterAbsPath = findPosterInDir(fileDir, baseName);
-      if (posterAbsPath) fileIndex[`poster_${id}`] = posterAbsPath;
+      if (posterAbsPath) posterIndex[id] = posterAbsPath;
 
       // External subtitles (check file's own directory)
       const subs = findSubtitles(fileDir, baseName);
@@ -1078,7 +1084,7 @@ app.delete('/api/media/:id', requireAdminSession, async (req, res) => {
 
   // 8. Remove from fileIndex and update library cache in-place
   delete fileIndex[id];
-  delete fileIndex[`poster_${id}`];
+  delete posterIndex[id];
   if (libraryCache) libraryCache = libraryCache.filter(i => i.id !== id);
   saveLibraryCache();
 
@@ -1319,7 +1325,7 @@ app.get('/stream/:id', requireAuth, ensureLibrary, (req, res) => {
 });
 
 app.get('/poster/:id', requireAuth, ensureLibrary, (req, res) => {
-  const p = fileIndex[`poster_${req.params.id}`];
+  const p = posterIndex[req.params.id];
   if (!p || !fs.existsSync(p)) return res.status(404).send('Not found');
   res.set('Cache-Control', 'public, max-age=2592000');
   res.sendFile(p);
