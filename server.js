@@ -282,7 +282,10 @@ function loadLibraryCache() {
         return false;
       }
       libraryCache = parsed;
-      // Rebuild fileIndex, posterIndex, and subtitleIndex from cache
+      // Rebuild fileIndex, posterIndex, and subtitleIndex from cache.
+      // Also recompute streamMode against the current probe caches so that
+      // logic changes (e.g. 10-bit H.264 handling) take effect without a
+      // full rescan.
       fileIndex = {};
       posterIndex = {};
       subtitleIndex = {};
@@ -290,6 +293,7 @@ function loadLibraryCache() {
         const fullPath = item._filePath;
         if (!fullPath) continue;
         fileIndex[item.id] = fullPath;
+        item.streamMode = getStreamMode(fullPath);
         if (item.posterUrl) {
           const poster = findPosterInDir(path.dirname(fullPath), path.parse(path.basename(fullPath)).name);
           if (poster) posterIndex[item.id] = poster;
