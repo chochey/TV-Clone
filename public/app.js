@@ -537,7 +537,20 @@ function renderHome(){
   }
   const cw=getContinueWatching();
   const rad=dismissedItems.recentlyAdded||{};
-  const recentlyAdded=[...library].sort((a,b)=>(b.addedAt||0)-(a.addedAt||0)).filter(m=>!rad[m.id]).slice(0,18);
+  // Recently Added: newest first, dedupe shows (keep latest episode per showName)
+  // so a single binge doesn't dominate the row.
+  const raSorted=[...library].sort((a,b)=>(b.addedAt||0)-(a.addedAt||0)).filter(m=>!rad[m.id]);
+  const raSeen=new Set();
+  const recentlyAdded=[];
+  for(const item of raSorted){
+    if(item.showName){
+      const key=item.type+'::'+item.showName;
+      if(raSeen.has(key))continue;
+      raSeen.add(key);
+    }
+    recentlyAdded.push(item);
+    if(recentlyAdded.length>=18)break;
+  }
   const movies=library.filter(m=>m.type==='movie');
   const shows=library.filter(m=>m.type==='show');
   const hero=cw.length>0?cw[0]:library[Math.floor(Math.random()*library.length)];
@@ -559,7 +572,7 @@ function renderHero(item){
   const plot=item.plot?`<p class="hero-meta" style="max-width:600px;opacity:.85;margin-top:4px">${esc(item.plot)}</p>`:'';
   const rating=item.imdbRating?` · ★ ${item.imdbRating}`:'';
   const heroType=item.type==='movie'?'Movie':item.type==='show'?'TV Show':customTypeLabel(item.type);
-  const deleteBtn=currentRole==='admin'?`<button class="btn btn-danger-outline" onclick='event.stopPropagation();confirmDeleteMedia("${item.id}","${esc(item.title)}")' title="Delete from server">&#128465; Delete</button>`:'';
+  const deleteBtn=currentRole==='admin'?`<button class="btn-icon-ghost" onclick='event.stopPropagation();confirmDeleteMedia("${item.id}","${esc(item.title)}")' title="Delete from server" aria-label="Delete from server">&#128465;</button>`:'';
   return `<div class="hero"><div class="hero-bg" style="${bg}"></div><div class="hero-content"><span class="hero-tag">${heroType}</span><h1 class="hero-title">${esc(item.title)}</h1><p class="hero-meta">${item.year?item.year+' · ':''}${heroType}${rating}${item.progress.percent>0?' · '+item.progress.percent+'% watched':''}</p>${plot}<div class="hero-actions"><button class="btn btn-primary" onclick='playMedia("${item.id}")'>&#9654; ${rt}</button><button class="btn btn-secondary" onclick='addToQueue("${item.id}")'>&#128203; Queue</button>${deleteBtn}</div></div></div>`;
 }
 
