@@ -150,7 +150,7 @@ function ensureLibrary(req, res, next) {
 }
 
 // Per-profile data (lib/profile-data.js)
-const { loadProfileData, saveProfileData, cache: profileDataCache, sanitizeProfileId } =
+const { loadProfileData, saveProfileData, cache: profileDataCache, sanitizeProfileId, profileDataPath } =
   require('./lib/profile-data')({ DATA_DIR, loadJSON, saveJSON });
 
 // ══════════════════════════════════════════════════════════════════════
@@ -538,7 +538,7 @@ app.post('/api/login', (req, res) => {
   const permissions = role === 'admin' ? [...VALID_PERMISSIONS] : (profile.permissions || []);
   const token = createSession(profile.id, role, permissions);
   res.cookie(COOKIE_NAME, token, { httpOnly: true, secure: COOKIE_SECURE, sameSite: 'strict', maxAge: SESSION_MAX_AGE });
-  if (role === 'admin' || permissions.includes('canDownload') || permissions.includes('canScan') || permissions.includes('canRestart')) {
+  if (role === 'admin' || permissions.includes('canDownload') || permissions.includes('canScan') || permissions.includes('canRestart') || permissions.includes('canLogs')) {
     const aToken = createAdminToken(token);
     res.cookie(ADMIN_COOKIE_NAME, aToken, { httpOnly: true, secure: COOKIE_SECURE, sameSite: 'strict', maxAge: SESSION_MAX_AGE });
   }
@@ -640,6 +640,7 @@ app.delete('/api/profiles/:id', requireAdminSession, (req, res) => {
   config.profiles = config.profiles.filter(p => p.id !== req.params.id);
   saveJSON(CONFIG_FILE, config);
   // Delete profile data file
+  profileDataCache.delete(req.params.id);
   const dataPath = profileDataPath(req.params.id);
   if (fs.existsSync(dataPath)) try { fs.unlinkSync(dataPath); } catch {}
   res.json({ ok: true });
@@ -1811,14 +1812,14 @@ app.delete('/api/corrupted/:id', requireAdminSession, (req, res) => {
 });
 
 // GET /api/now-watching — who is actively watching (progress ping within last 60s)
-app.get('/api/now-watching', requireAdminSession, (_req, res) => {
+app.get('/api/now-watching', requirePermission('canLogs'), (_req, res) => {
   const cutoff = Date.now() - 60000;
   const active = Object.values(nowWatching).filter(w => w.updatedAt >= cutoff);
   res.json(active);
 });
 
 // GET /api/admin/logs — combined watch history for all profiles
-app.get('/api/admin/logs', requireAdminSession, (_req, res) => {
+app.get('/api/admin/logs', requirePermission('canLogs'), (_req, res) => {
   const entries = [];
   for (const profile of config.profiles) {
     const data = loadProfileData(profile.id);
@@ -1842,22 +1843,22 @@ app.get('/api/admin/logs', requireAdminSession, (_req, res) => {
 });
 
 // GET /api/admin/login-logs — recent login attempts
-app.get('/api/admin/login-logs', requireAdminSession, (_req, res) => {
+app.get('/api/admin/login-logs', requirePermission('canLogs'), (_req, res) => {
   res.json(loginLog);
 });
 
 // GET /api/admin/scan-logs — library scan history
-app.get('/api/admin/scan-logs', requireAdminSession, (_req, res) => {
+app.get('/api/admin/scan-logs', requirePermission('canLogs'), (_req, res) => {
   res.json(scanLog);
 });
 
 // GET /api/admin/stream-logs — HLS session starts
-app.get('/api/admin/stream-logs', requireAdminSession, (_req, res) => {
+app.get('/api/admin/stream-logs', requirePermission('canLogs'), (_req, res) => {
   res.json(streamLog);
 });
 
 // GET /api/admin/error-logs — server/ffmpeg errors
-app.get('/api/admin/error-logs', requireAdminSession, (_req, res) => {
+app.get('/api/admin/error-logs', requirePermission('canLogs'), (_req, res) => {
   res.json(errorLog);
 });
 

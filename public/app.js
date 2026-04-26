@@ -7,20 +7,22 @@ let skipInterval=10,playbackSpeed=1,watchFilter='all';
 let _currentQuality='auto'; // 'low', 'auto', 'high'
 let dismissedItems={continueWatching:{},recentlyAdded:{}};
 let currentRole='user'; // 'admin' or 'user'
-let currentPermissions=[]; // ['canDownload','canScan','canRestart']
+let currentPermissions=[]; // ['canDownload','canScan','canRestart','canLogs']
 function hasPerm(p){return currentRole==='admin'||currentPermissions.includes(p);}
 // Admin auth is handled via HttpOnly cookie — no token in JS needed
 function adminHeaders(){return{'Content-Type':'application/json'};}
 async function adminFetch(url,opts={}){
   opts.credentials='same-origin';
   const r=await fetch(url,opts);
-  if(r.status===403){
+  if(r.status===401||(r.status===403&&currentRole==='admin')){
     // adminSession cookie is stale (server restarted) — force full re-login
     await fetch('/api/logout',{method:'POST',credentials:'same-origin'});
-    currentProfile=null;currentSession=null;
-    document.getElementById('mainApp').style.display='none';
-    document.getElementById('profileScreen').style.display='flex';
-    showToast('Session expired — please log in again');
+    activeProfile=null;currentRole='user';currentPermissions=[];
+    const app=document.getElementById('appContainer');
+    const profile=document.getElementById('profileScreen');
+    if(app)app.style.display='none';
+    if(profile)profile.style.display='flex';
+    if(typeof showToast==='function')showToast('Session expired — please log in again');
   }
   return r;
 }
@@ -356,7 +358,7 @@ async function fetchLib(){
 }
 
 async function fetchConfig(){
-  try{folderConfig=await(await adminFetch('/api/config')).json();}catch{folderConfig=[];}
+  try{const r=await adminFetch('/api/config');folderConfig=r.ok?await r.json():[];}catch{folderConfig=[];}
 }
 
 async function fetchQueue(){
@@ -404,6 +406,40 @@ function updateStats(){
   document.getElementById('libCount').textContent=`${library.length} items`;
 }
 
+function activateWithKeyboard(event){
+  if(event.key==='Enter'||event.key===' '){
+    event.preventDefault();
+    event.currentTarget.click();
+  }
+}
+
+function updateLayoutChrome(view){
+  const hideTopBar=view==='settings'||view==='showDetail'||view==='downloads';
+  document.getElementById('topBar').style.display=hideTopBar?'none':'';
+  document.body.classList.toggle('top-bar-hidden',hideTopBar);
+  document.body.dataset.view=view;
+}
+
+function updateSidebarState(isOpen){
+  const sidebar=document.getElementById('sidebar');
+  const overlay=document.getElementById('sidebarOverlay');
+  const hamburger=document.querySelector('.hamburger');
+  sidebar.classList.toggle('open',isOpen);
+  overlay.classList.toggle('open',isOpen);
+  if(hamburger){
+    hamburger.setAttribute('aria-expanded',String(isOpen));
+    hamburger.setAttribute('aria-label',isOpen?'Close navigation menu':'Open navigation menu');
+  }
+}
+
+function updateFilterButtons(){
+  document.querySelectorAll('.filter-btn').forEach(btn=>{
+    const active=btn.id===`filter${watchFilter.charAt(0).toUpperCase()+watchFilter.slice(1)}Btn`;
+    btn.classList.toggle('active',active);
+    btn.setAttribute('aria-pressed',active?'true':'false');
+  });
+}
+
 // SSE for live updates
 function setupSSE(){
   const es=new EventSource('/api/events');
@@ -418,13 +454,16 @@ function nav(view,btn){
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
   if(btn)btn.classList.add('active');
   document.getElementById('searchInput').value='';
-  document.getElementById('topBar').style.display=(view==='settings'||view==='showDetail'||view==='downloads')?'none':'';
+  updateLayoutChrome(view);
   renderView();
-  document.getElementById('sidebar').classList.remove('open');
-  document.getElementById('sidebarOverlay').classList.remove('open');
+  updateSidebarState(false);
 }
 
-function toggleSidebar(){document.getElementById('sidebar').classList.toggle('open');document.getElementById('sidebarOverlay').classList.toggle('open');}
+function toggleSidebar(forceState){
+  const sidebar=document.getElementById('sidebar');
+  const nextState=typeof forceState==='boolean'?forceState:!sidebar.classList.contains('open');
+  updateSidebarState(nextState);
+}
 
 function renderView(){
   const a=document.getElementById('contentArea');
@@ -490,8 +529,8 @@ function renderCustomTypeView(typeName){
     if(!showList.length)return `<div class="empty-state"><div class="empty-icon">${customTypeIcon(typeName)}</div><div class="empty-title">No ${label} Found</div></div>`;
     const cards=showList.map(s=>{
       const ep=s.items.length;
-      const poster=s.poster?`<img src="${s.poster}" loading="lazy">`:`<div class="card-placeholder">${customTypeIcon(typeName)}</div>`;
-      return `<div class="card" onclick="openShow('${escAttr(s.name)}','${escAttr(typeName)}')"><div class="card-poster">${poster}<div class="card-overlay"><div class="play-icon">&#9654;</div></div></div><div class="card-info"><div class="card-title">${esc(s.name)}</div><div class="card-year">${ep} episode${ep>1?'s':''}</div><span class="card-type show">${label}</span></div></div>`;
+      const poster=s.poster?`<img src="${s.poster}" alt="${esc(s.name)} poster" loading="lazy">`:`<div class="card-placeholder">${customTypeIcon(typeName)}</div>`;
+      return `<div class="card" onclick="openShow('${escAttr(s.name)}','${escAttr(typeName)}')" onkeydown="activateWithKeyboard(event)" role="button" tabindex="0" aria-label="Open ${escAttr(s.name)}"><div class="card-poster">${poster}<div class="card-overlay"><div class="play-icon">&#9654;</div></div></div><div class="card-info"><div class="card-title">${esc(s.name)}</div><div class="card-year">${ep} episode${ep>1?'s':''}</div><span class="card-type show">${label}</span></div></div>`;
     });
     return `<div class="section"><div class="section-header"><h2 class="section-title">${label} (${showList.length})</h2></div><div class="grid">${cards.join('')}</div></div>`;
   }
@@ -524,8 +563,7 @@ function sortItems(items){
 
 function setFilter(f){
   watchFilter=f;
-  document.querySelectorAll('.filter-btn').forEach(b=>b.classList.remove('active'));
-  document.getElementById(`filter${f.charAt(0).toUpperCase()+f.slice(1)}Btn`).classList.add('active');
+  updateFilterButtons();
   renderView();
 }
 
@@ -583,10 +621,10 @@ function card(item){
   const prog=item.progress.percent>0?`<div class="card-progress"><div class="card-progress-fill" style="width:${item.progress.percent}%"></div></div>`:'';
   const watched=item.watched?`<div class="card-watched-badge">✓</div>`:'';
   const ratingBadge=item.imdbRating?`<div class="card-rating">★ ${item.imdbRating}</div>`:'';
-  const genres=item.genre?`<div class="card-year" style="color:var(--text-muted);font-size:.7rem">${item.genre}</div>`:item.genres&&item.genres.length?`<div class="genre-tags">${item.genres.map(g=>`<span class="genre-tag">${esc(g)}</span>`).join('')}</div>`:'';
+  const genres=item.genre?`<div class="card-genres">${item.genre}</div>`:item.genres&&item.genres.length?`<div class="genre-tags">${item.genres.map(g=>`<span class="genre-tag">${esc(g)}</span>`).join('')}</div>`:'';
   const typeLabel=item.type==='movie'?'Movie':item.type==='show'?'TV Show':customTypeLabel(item.type);
-  const delBtn=currentRole==='admin'?`<button class="card-action-btn card-delete-btn" onclick="event.stopPropagation();confirmDeleteMedia('${item.id}','${esc(item.title).replace(/'/g,"\\&#39;")}')" title="Delete from server">&#128465;</button>`:'';
-  return `<div class="card" data-id="${item.id}" onclick='playMedia("${item.id}")'><div class="card-poster">${poster}${prog}${watched}${ratingBadge}<div class="card-actions"><button class="card-action-btn" onclick="event.stopPropagation();toggleWatched('${item.id}',${!item.watched})" title="${item.watched?'Mark unwatched':'Mark watched'}">&#128065;</button><button class="card-action-btn" onclick="event.stopPropagation();addToQueue('${item.id}')" title="Add to queue">+Q</button>${delBtn}</div><div class="card-overlay"><div class="play-icon">&#9654;</div></div></div><div class="card-info"><div class="card-title">${esc(item.title)}</div>${item.year?`<div class="card-year">${item.year}</div>`:''}<span class="card-type ${item.type}">${typeLabel}</span>${genres}</div></div>`;
+  const delBtn=currentRole==='admin'?`<button class="card-action-btn card-delete-btn" onclick="event.stopPropagation();confirmDeleteMedia('${item.id}','${esc(item.title).replace(/'/g,"\\&#39;")}')" title="Delete from server" aria-label="Delete ${escAttr(item.title)} from server">&#128465;</button>`:'';
+  return `<div class="card" data-id="${item.id}" onclick='playMedia("${item.id}")' onkeydown="activateWithKeyboard(event)" role="button" tabindex="0" aria-label="Play ${escAttr(item.title)}"><div class="card-poster">${poster}${prog}${watched}${ratingBadge}<div class="card-actions"><button class="card-action-btn" onclick="event.stopPropagation();toggleWatched('${item.id}',${!item.watched})" title="${item.watched?'Mark unwatched':'Mark watched'}" aria-label="${item.watched?'Mark as unwatched':'Mark as watched'}">&#128065;</button><button class="card-action-btn" onclick="event.stopPropagation();addToQueue('${item.id}')" title="Add to queue" aria-label="Add ${escAttr(item.title)} to queue">+Q</button>${delBtn}</div><div class="card-overlay"><div class="play-icon">&#9654;</div></div></div><div class="card-info"><div class="card-title">${esc(item.title)}</div>${item.year?`<div class="card-year">${item.year}</div>`:''}<span class="card-type ${item.type}">${typeLabel}</span>${genres}</div></div>`;
 }
 
 function carousel(title,items){
@@ -600,11 +638,11 @@ function cardDismissable(item,section){
   const prog=item.progress.percent>0?`<div class="card-progress"><div class="card-progress-fill" style="width:${item.progress.percent}%"></div></div>`:'';
   const watched=item.watched?`<div class="card-watched-badge">✓</div>`:'';
   const ratingBadge=item.imdbRating?`<div style="position:absolute;top:6px;right:32px;background:rgba(0,0,0,.75);color:#f5c518;padding:2px 6px;border-radius:4px;font-size:.7rem;font-weight:700">★ ${item.imdbRating}</div>`:'';
-  const genres=item.genre?`<div class="card-year" style="color:var(--text-muted);font-size:.7rem">${item.genre}</div>`:item.genres&&item.genres.length?`<div class="genre-tags">${item.genres.map(g=>`<span class="genre-tag">${esc(g)}</span>`).join('')}</div>`:'';
+  const genres=item.genre?`<div class="card-genres">${item.genre}</div>`:item.genres&&item.genres.length?`<div class="genre-tags">${item.genres.map(g=>`<span class="genre-tag">${esc(g)}</span>`).join('')}</div>`:'';
   const typeLabel=item.type==='movie'?'Movie':item.type==='show'?'TV Show':customTypeLabel(item.type);
-  const dismissBtn=`<button class="card-dismiss-btn" onclick="event.stopPropagation();dismissItem('${item.id}','${section}',this)" title="Hide from this list">&#10005;</button>`;
-  const delBtn=currentRole==='admin'?`<button class="card-action-btn card-delete-btn" onclick="event.stopPropagation();confirmDeleteMedia('${item.id}','${esc(item.title).replace(/'/g,"\\&#39;")}')" title="Delete from server">&#128465;</button>`:'';
-  return `<div class="card" data-id="${item.id}" onclick='playMedia("${item.id}")'><div class="card-poster">${poster}${prog}${watched}${ratingBadge}${dismissBtn}<div class="card-actions"><button class="card-action-btn" onclick="event.stopPropagation();toggleWatched('${item.id}',${!item.watched})" title="${item.watched?'Mark unwatched':'Mark watched'}">&#128065;</button><button class="card-action-btn" onclick="event.stopPropagation();addToQueue('${item.id}')" title="Add to queue">+Q</button>${delBtn}</div><div class="card-overlay"><div class="play-icon">&#9654;</div></div></div><div class="card-info"><div class="card-title">${esc(item.title)}</div>${item.year?`<div class="card-year">${item.year}</div>`:''}<span class="card-type ${item.type}">${typeLabel}</span>${genres}</div></div>`;
+  const dismissBtn=`<button class="card-dismiss-btn" onclick="event.stopPropagation();dismissItem('${item.id}','${section}',this)" title="Hide from this list" aria-label="Hide ${escAttr(item.title)} from this list">&#10005;</button>`;
+  const delBtn=currentRole==='admin'?`<button class="card-action-btn card-delete-btn" onclick="event.stopPropagation();confirmDeleteMedia('${item.id}','${esc(item.title).replace(/'/g,"\\&#39;")}')" title="Delete from server" aria-label="Delete ${escAttr(item.title)} from server">&#128465;</button>`:'';
+  return `<div class="card" data-id="${item.id}" onclick='playMedia("${item.id}")' onkeydown="activateWithKeyboard(event)" role="button" tabindex="0" aria-label="Play ${escAttr(item.title)}"><div class="card-poster">${poster}${prog}${watched}${ratingBadge}${dismissBtn}<div class="card-actions"><button class="card-action-btn" onclick="event.stopPropagation();toggleWatched('${item.id}',${!item.watched})" title="${item.watched?'Mark unwatched':'Mark watched'}" aria-label="${item.watched?'Mark as unwatched':'Mark as watched'}">&#128065;</button><button class="card-action-btn" onclick="event.stopPropagation();addToQueue('${item.id}')" title="Add to queue" aria-label="Add ${escAttr(item.title)} to queue">+Q</button>${delBtn}</div><div class="card-overlay"><div class="play-icon">&#9654;</div></div></div><div class="card-info"><div class="card-title">${esc(item.title)}</div>${item.year?`<div class="card-year">${item.year}</div>`:''}<span class="card-type ${item.type}">${typeLabel}</span>${genres}</div></div>`;
 }
 
 function carouselWithDismiss(title,items,section){
@@ -789,8 +827,8 @@ function renderShowsView(){
   // Show as cards that open detail pages
   const cards=showList.map(s=>{
     const ep=s.items.length;
-    const poster=s.poster?`<img src="${s.poster}" loading="lazy">`:`<div class="card-placeholder">&#128250;</div>`;
-    return `<div class="card" onclick="openShow('${escAttr(s.name)}','show')"><div class="card-poster">${poster}<div class="card-overlay"><div class="play-icon">&#9654;</div></div></div><div class="card-info"><div class="card-title">${esc(s.name)}</div><div class="card-year">${ep} episode${ep>1?'s':''}</div><span class="card-type show">TV Show</span></div></div>`;
+    const poster=s.poster?`<img src="${s.poster}" alt="${esc(s.name)} poster" loading="lazy">`:`<div class="card-placeholder">&#128250;</div>`;
+    return `<div class="card" onclick="openShow('${escAttr(s.name)}','show')" onkeydown="activateWithKeyboard(event)" role="button" tabindex="0" aria-label="Open ${escAttr(s.name)}"><div class="card-poster">${poster}<div class="card-overlay"><div class="play-icon">&#9654;</div></div></div><div class="card-info"><div class="card-title">${esc(s.name)}</div><div class="card-year">${ep} episode${ep>1?'s':''}</div><span class="card-type show">TV Show</span></div></div>`;
   });
 
   return `<div class="section"><div class="section-header"><h2 class="section-title">TV Shows (${showList.length})</h2></div><div class="grid">${cards.join('')}</div></div>`;
@@ -800,7 +838,7 @@ function openShow(name,type){
   currentShowName=name;
   currentShowType=type||'show';
   currentView='showDetail';
-  document.getElementById('topBar').style.display='none';
+  updateLayoutChrome('showDetail');
   renderView();
 }
 
@@ -833,7 +871,7 @@ function renderShowDetail(showName){
       const epNum=ep.epInfo?`E${String(ep.epInfo.episode).padStart(2,'0')}`:'';
       const prog=ep.progress.percent||0;
       const epDel=currentRole==='admin'?`<button class="episode-delete-btn" onclick="event.stopPropagation();confirmDeleteMedia('${ep.id}','${esc(ep.title)}')" title="Delete episode">&#128465;</button>`:'';
-      return `<div class="episode-row" onclick='playMedia("${ep.id}")'><div class="episode-num">${epNum}</div><div class="episode-info"><div class="episode-title">${esc(ep.title)}</div><div class="episode-file">${esc(ep.filename)}</div></div><div class="episode-progress"><div class="episode-progress-fill" style="width:${prog}%"></div></div>${ep.watched?'<div class="episode-watched">✓</div>':''}${epDel}</div>`;
+      return `<div class="episode-row" onclick='playMedia("${ep.id}")' onkeydown="activateWithKeyboard(event)" role="button" tabindex="0" aria-label="Play ${escAttr(ep.title)}"><div class="episode-num">${epNum}</div><div class="episode-info"><div class="episode-title">${esc(ep.title)}</div><div class="episode-file">${esc(ep.filename)}</div></div><div class="episode-progress"><div class="episode-progress-fill" style="width:${prog}%"></div></div>${ep.watched?'<div class="episode-watched">✓</div>':''}${epDel}</div>`;
     }).join('');
     return `<div class="season-section"><div class="season-title">${sNum==='0'?'Episodes':`Season ${sNum}`} (${eps.length} episodes)</div><div class="episode-list">${epRows}</div></div>`;
   }).join('');
@@ -861,7 +899,7 @@ function renderQueue(){
   const items=profileQueue.map((id,i)=>{
     const item=library.find(m=>m.id===id);
     if(!item)return '';
-    return `<div class="queue-item" onclick='playMedia("${id}")'><div class="queue-num">${i+1}</div><div class="queue-title">${esc(item.title)}</div><div class="queue-type">${item.type}</div><button class="btn-ghost" onclick="event.stopPropagation();removeFromQueue('${id}')" style="color:var(--danger)">&#10005;</button></div>`;
+    return `<div class="queue-item" onclick='playMedia("${id}")' onkeydown="activateWithKeyboard(event)" role="button" tabindex="0" aria-label="Play ${escAttr(item.title)}"><div class="queue-num">${i+1}</div><div class="queue-title">${esc(item.title)}</div><div class="queue-type">${item.type}</div><button class="btn-ghost" onclick="event.stopPropagation();removeFromQueue('${id}')" style="color:var(--danger)" aria-label="Remove ${escAttr(item.title)} from queue">&#10005;</button></div>`;
   }).join('');
   return `<div class="section"><div class="section-header"><h2 class="section-title">Up Next (${profileQueue.length})</h2><button class="btn btn-ghost" onclick="clearQueue()">Clear All</button></div>${items}</div>`;
 }
@@ -890,9 +928,8 @@ async function renderHistory(){
   const a=document.getElementById('contentArea');
   if(!history.length){a.innerHTML='<div class="empty-state"><div class="empty-icon">&#128337;</div><div class="empty-title">No Watch History</div></div>';return;}
   const items=history.map(h=>{
-    const item=library.find(m=>m.id===h.id);
     const time=new Date(h.timestamp).toLocaleDateString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
-    return `<div class="history-item" onclick='playMedia("${h.id}")'><div class="history-time">${time}</div><div class="history-title">${esc(h.title||'Unknown')}</div></div>`;
+    return `<div class="history-item" onclick='playMedia("${h.id}")' onkeydown="activateWithKeyboard(event)" role="button" tabindex="0" aria-label="Play ${escAttr(h.title||'Unknown')}"><div class="history-time">${time}</div><div class="history-title">${esc(h.title||'Unknown')}</div></div>`;
   }).join('');
   a.innerHTML=`<div class="section"><div class="section-header"><h2 class="section-title">Watch History</h2></div>${items}</div>`;
 }
@@ -951,11 +988,11 @@ async function _doSearch(){
     const ep=s.items.length;
     const seasons=new Set(s.items.map(i=>i.epInfo?i.epInfo.season:0).filter(n=>n>0));
     const meta=seasons.size?`${seasons.size} season${seasons.size>1?'s':''}, ${ep} ep${ep>1?'s':''}`:`${ep} episode${ep>1?'s':''}`;
-    const poster=s.poster?`<img src="${s.poster}" loading="lazy">`:`<div class="card-placeholder">&#128250;</div>`;
+    const poster=s.poster?`<img src="${s.poster}" alt="${esc(s.name)} poster" loading="lazy">`:`<div class="card-placeholder">&#128250;</div>`;
     const ratingBadge=s.imdbRating?`<div class="card-rating">★ ${s.imdbRating}</div>`:'';
-    const genres=s.genre?`<div class="card-year" style="color:var(--text-muted);font-size:.7rem">${s.genre}</div>`:'';
+    const genres=s.genre?`<div class="card-genres">${s.genre}</div>`:'';
     const tLabel=s.type==='show'?'TV Show':customTypeLabel(s.type);
-    return `<div class="card" onclick="openShow('${escAttr(s.name)}','${escAttr(s.type)}')"><div class="card-poster">${poster}${ratingBadge}<div class="card-overlay"><div class="play-icon">&#9654;</div></div></div><div class="card-info"><div class="card-title">${esc(s.name)}</div><div class="card-year">${meta}</div>${s.year?`<div class="card-year">${s.year}</div>`:''}<span class="card-type ${s.type}">${tLabel}</span>${genres}</div></div>`;
+    return `<div class="card" onclick="openShow('${escAttr(s.name)}','${escAttr(s.type)}')" onkeydown="activateWithKeyboard(event)" role="button" tabindex="0" aria-label="Open ${escAttr(s.name)}"><div class="card-poster">${poster}${ratingBadge}<div class="card-overlay"><div class="play-icon">&#9654;</div></div></div><div class="card-info"><div class="card-title">${esc(s.name)}</div><div class="card-year">${meta}</div>${s.year?`<div class="card-year">${s.year}</div>`:''}<span class="card-type ${s.type}">${tLabel}</span>${genres}</div></div>`;
   });
   const allCards=standalone.map(card).concat(showCards);
   const total=standalone.length+Object.keys(showMap).length;
@@ -1208,8 +1245,8 @@ async function browseTo(p){
 let browserPath='',browserData=null;
 function renderBrowser(){
   if(!browserData)return;const d=browserData;let items='';
-  if(d.parent&&d.parent!==d.current)items+=`<div class="browser-item parent" onclick="browseTo('${escAttr(d.parent)}')"><span class="browser-item-icon">&#11168;</span><span class="browser-item-name">..</span></div>`;
-  for(const dir of d.dirs){const fp=d.current+(d.current.endsWith('/')?'':'/')+dir;items+=`<div class="browser-item" onclick="browseTo('${escAttr(fp)}')"><span class="browser-item-icon">&#128194;</span><span class="browser-item-name">${esc(dir)}</span></div>`;}
+  if(d.parent&&d.parent!==d.current)items+=`<div class="browser-item parent" onclick="browseTo('${escAttr(d.parent)}')" onkeydown="activateWithKeyboard(event)" role="button" tabindex="0" aria-label="Browse parent folder"><span class="browser-item-icon">&#11168;</span><span class="browser-item-name">..</span></div>`;
+  for(const dir of d.dirs){const fp=d.current+(d.current.endsWith('/')?'':'/')+dir;items+=`<div class="browser-item" onclick="browseTo('${escAttr(fp)}')" onkeydown="activateWithKeyboard(event)" role="button" tabindex="0" aria-label="Browse ${escAttr(dir)}"><span class="browser-item-icon">&#128194;</span><span class="browser-item-name">${esc(dir)}</span></div>`;}
   const vc=d.videoCount>0?`<span class="browser-video-count">${d.videoCount} video${d.videoCount===1?'':'s'}</span>`:'';
   const el=document.getElementById('folderBrowser');
   if(el)el.innerHTML=`<div class="browser-panel"><div class="browser-path-bar">&#128194; <span>${esc(d.current)}</span>${vc}</div><div class="browser-list">${items}</div><div class="browser-actions"><span class="browser-selected">Selected: ${esc(d.current)}</span><button class="btn btn-primary btn-sm" onclick="selectBrowserPath()">&#10003; Use This</button></div></div>`;

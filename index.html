@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Chochey's Media Server</title>
 <script>if(location.port!=='4800'&&location.port!=='80'&&location.port!=='')document.title="Chochey's Media Server [DEV:"+location.port+']';</script>
 <script src="/hls.min.js"></script>
@@ -17,8 +17,8 @@
     <div style="font-size:3rem;margin-bottom:12px">&#9654;</div>
     <h1 style="font-size:1.6rem;margin-bottom:4px">Chochey's Media Server</h1>
     <div class="dl-spinner" style="width:36px;height:36px;border-width:3px;margin:20px auto"></div>
-    <p id="startupMsg" style="color:var(--text-muted);font-size:.85rem">Loading...</p>
-    <p id="startupDetail" style="color:var(--text-muted);font-size:.75rem;margin-top:6px;opacity:.6"></p>
+    <p id="startupMsg" style="color:var(--text-muted);font-size:.85rem" aria-live="polite">Loading...</p>
+    <p id="startupDetail" style="color:var(--text-muted);font-size:.75rem;margin-top:6px;opacity:.6" aria-live="polite"></p>
   </div>
 </div>
 
@@ -30,18 +30,18 @@
     <p style="color:var(--text-muted);font-size:.85rem;margin-bottom:24px">Sign in to continue</p>
   </div>
   <div class="login-form" id="loginForm">
-    <input type="text" id="loginUsername" placeholder="Username" autocomplete="username" autofocus>
-    <input type="password" id="loginPassword" placeholder="Password" autocomplete="current-password">
-    <div class="login-error" id="loginError"></div>
-    <button onclick="doLogin()">Sign In</button>
+    <input type="text" id="loginUsername" placeholder="Username" autocomplete="username" aria-label="Username" autofocus>
+    <input type="password" id="loginPassword" placeholder="Password" autocomplete="current-password" aria-label="Password">
+    <div class="login-error" id="loginError" aria-live="polite"></div>
+    <button onclick="doLogin()" aria-label="Sign in">Sign In</button>
   </div>
 </div>
 
 <!-- Reusable modal -->
 <div class="modal-overlay" id="modalOverlay" onclick="if(event.target===this)closeModal()"></div>
 
-<button class="hamburger" onclick="toggleSidebar()">&#9776;</button>
-<div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleSidebar()"></div>
+<button class="hamburger" onclick="toggleSidebar()" aria-label="Open navigation menu" aria-controls="sidebar" aria-expanded="false">&#9776;</button>
+<div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleSidebar(false)" aria-hidden="true"></div>
 
 <div class="app" id="appContainer" style="display:none">
   <aside class="sidebar" id="sidebar">
@@ -64,7 +64,7 @@
       <button class="nav-item" id="navRestart" onclick="restartServer()"><span class="nav-icon">&#128260;</span> Restart Server</button>
       </div>
     </nav>
-    <div class="sidebar-profile" onclick="switchProfile()">
+    <div class="sidebar-profile" onclick="switchProfile()" role="button" tabindex="0" onkeydown="activateWithKeyboard(event)" aria-label="Sign out">
       <div class="sidebar-profile-avatar" id="sidebarAvatar"></div>
       <span class="sidebar-profile-name" id="sidebarName"></span>
       <span class="sidebar-profile-switch">Sign Out</span>
@@ -74,19 +74,23 @@
 
   <main class="main">
     <div class="top-bar" id="topBar">
-      <input class="search-input" type="text" placeholder="Search your library..." id="searchInput" oninput="handleSearch()">
-      <select class="sort-select" id="sortSelect" onchange="renderView()">
-        <option value="title-asc">Title A-Z</option>
-        <option value="title-desc">Title Z-A</option>
-        <option value="year-desc">Year (New)</option>
-        <option value="year-asc">Year (Old)</option>
-        <option value="recent">Recently Added</option>
-      </select>
-      <button class="filter-btn" id="filterAllBtn" onclick="setFilter('all')">All</button>
-      <button class="filter-btn" id="filterUnwatchedBtn" onclick="setFilter('unwatched')">Unwatched</button>
-      <button class="filter-btn" id="filterWatchedBtn" onclick="setFilter('watched')">Watched</button>
-      <button class="btn-ghost" onclick="playRandom()" title="Random pick">&#127922; Shuffle</button>
-      <span class="lib-count" id="libCount"></span>
+      <div class="top-bar-primary">
+        <input class="search-input" type="text" placeholder="Search your library..." id="searchInput" oninput="handleSearch()" aria-label="Search library">
+        <select class="sort-select" id="sortSelect" onchange="renderView()" aria-label="Sort titles">
+          <option value="title-asc">Title A-Z</option>
+          <option value="title-desc">Title Z-A</option>
+          <option value="year-desc">Year (New)</option>
+          <option value="year-asc">Year (Old)</option>
+          <option value="recent">Recently Added</option>
+        </select>
+        <button class="btn-ghost top-bar-shuffle" onclick="playRandom()" title="Random pick" aria-label="Play a random unwatched title">&#127922; Shuffle</button>
+        <span class="lib-count" id="libCount"></span>
+      </div>
+      <div class="top-bar-filters" role="group" aria-label="Watch filters">
+        <button class="filter-btn" id="filterAllBtn" onclick="setFilter('all')" aria-pressed="true">All</button>
+        <button class="filter-btn" id="filterUnwatchedBtn" onclick="setFilter('unwatched')" aria-pressed="false">Unwatched</button>
+        <button class="filter-btn" id="filterWatchedBtn" onclick="setFilter('watched')" aria-pressed="false">Watched</button>
+      </div>
     </div>
     <div id="contentArea"><div class="loading"><div class="spinner"></div> Loading...</div></div>
   </main>
@@ -95,7 +99,7 @@
 <!-- Player -->
 <div class="player-modal" id="playerModal">
   <div class="player-top-bar">
-    <button class="player-close" onclick="closePlayer()">&#10005;</button>
+    <button class="player-close" onclick="closePlayer()" aria-label="Close player">&#10005;</button>
     <span class="player-now-playing" id="playerTitle"></span>
   </div>
   <div class="player-video-wrapper" id="videoWrapper">
@@ -141,31 +145,31 @@
     </div>
     <div class="controls-row">
       <div class="controls-center">
-        <button class="ctrl-btn disabled" id="prevEpBtn" onclick="playPrevEp()" title="Previous">&#9198;</button>
-        <button class="ctrl-btn" id="skipBackBtn" onclick="skipBack()" title="Rewind 10s">&#9194;</button>
-        <button class="ctrl-btn big" id="playPauseBtn" onclick="togglePlay()">&#9654;&#65039;</button>
-        <button class="ctrl-btn" id="skipFwdBtn" onclick="skipFwd()" title="Forward 10s">&#9193;</button>
-        <button class="ctrl-btn disabled" id="nextEpBtn" onclick="playNextEp()" title="Next">&#9197;</button>
+        <button class="ctrl-btn disabled" id="prevEpBtn" onclick="playPrevEp()" title="Previous" aria-label="Previous episode">&#9198;</button>
+        <button class="ctrl-btn" id="skipBackBtn" onclick="skipBack()" title="Rewind 10s" aria-label="Rewind 10 seconds">&#9194;</button>
+        <button class="ctrl-btn big" id="playPauseBtn" onclick="togglePlay()" aria-label="Play or pause">&#9654;&#65039;</button>
+        <button class="ctrl-btn" id="skipFwdBtn" onclick="skipFwd()" title="Forward 10s" aria-label="Forward 10 seconds">&#9193;</button>
+        <button class="ctrl-btn disabled" id="nextEpBtn" onclick="playNextEp()" title="Next" aria-label="Next episode">&#9197;</button>
         <span class="time-display" id="timeDisplay">0:00 / 0:00</span>
         <span class="ep-info" id="epInfo"></span>
       </div>
       <div class="controls-right">
-        <div class="ctrl-btn-wrap"><button class="ctrl-btn" onclick="toggleMenu('skipMenu',event)" id="skipIntervalBtn" style="font-size:.72rem;font-weight:700">10s</button><div class="skip-menu" id="skipMenu"><div class="menu-option" onclick="setSkip(5)">5s</div><div class="menu-option active" onclick="setSkip(10)">10s</div><div class="menu-option" onclick="setSkip(15)">15s</div><div class="menu-option" onclick="setSkip(30)">30s</div><div class="menu-option" onclick="setSkip(60)">60s</div></div></div>
+        <div class="ctrl-btn-wrap"><button class="ctrl-btn" onclick="toggleMenu('skipMenu',event)" id="skipIntervalBtn" style="font-size:.72rem;font-weight:700" aria-label="Choose skip interval">10s</button><div class="skip-menu" id="skipMenu"><div class="menu-option" onclick="setSkip(5)">5s</div><div class="menu-option active" onclick="setSkip(10)">10s</div><div class="menu-option" onclick="setSkip(15)">15s</div><div class="menu-option" onclick="setSkip(30)">30s</div><div class="menu-option" onclick="setSkip(60)">60s</div></div></div>
         <div class="ctrl-divider"></div>
-        <div class="ctrl-btn-wrap"><button class="ctrl-btn" onclick="toggleMenu('speedMenu',event)" id="speedBtn" style="font-size:.72rem;font-weight:700">1x</button><div class="speed-menu" id="speedMenu"><div class="menu-option" onclick="setSpd(.5)">0.5x</div><div class="menu-option" onclick="setSpd(.75)">0.75x</div><div class="menu-option active" onclick="setSpd(1)">1x</div><div class="menu-option" onclick="setSpd(1.25)">1.25x</div><div class="menu-option" onclick="setSpd(1.5)">1.5x</div><div class="menu-option" onclick="setSpd(2)">2x</div></div></div>
+        <div class="ctrl-btn-wrap"><button class="ctrl-btn" onclick="toggleMenu('speedMenu',event)" id="speedBtn" style="font-size:.72rem;font-weight:700" aria-label="Choose playback speed">1x</button><div class="speed-menu" id="speedMenu"><div class="menu-option" onclick="setSpd(.5)">0.5x</div><div class="menu-option" onclick="setSpd(.75)">0.75x</div><div class="menu-option active" onclick="setSpd(1)">1x</div><div class="menu-option" onclick="setSpd(1.25)">1.25x</div><div class="menu-option" onclick="setSpd(1.5)">1.5x</div><div class="menu-option" onclick="setSpd(2)">2x</div></div></div>
         <div class="ctrl-divider"></div>
-        <div class="ctrl-btn-wrap"><button class="ctrl-btn" onclick="toggleMenu('audioMenu',event)" id="audioBtn" title="Audio Track" style="font-size:.72rem;font-weight:700">AUD</button><div class="audio-menu" id="audioMenu"><div class="menu-option active" onclick="setAudioTrack(-1)">Default</div></div></div>
+        <div class="ctrl-btn-wrap"><button class="ctrl-btn" onclick="toggleMenu('audioMenu',event)" id="audioBtn" title="Audio Track" style="font-size:.72rem;font-weight:700" aria-label="Choose audio track">AUD</button><div class="audio-menu" id="audioMenu"><div class="menu-option active" onclick="setAudioTrack(-1)">Default</div></div></div>
         <div class="ctrl-divider"></div>
-        <div class="ctrl-btn-wrap"><button class="ctrl-btn" onclick="toggleMenu('subMenu',event)" id="subBtn" title="Subtitles" style="font-size:.72rem;font-weight:700">CC</button><div class="sub-menu" id="subMenu"><div class="menu-option active" onclick="setSub(-1)">Off</div></div></div>
+        <div class="ctrl-btn-wrap"><button class="ctrl-btn" onclick="toggleMenu('subMenu',event)" id="subBtn" title="Subtitles" style="font-size:.72rem;font-weight:700" aria-label="Choose subtitles">CC</button><div class="sub-menu" id="subMenu"><div class="menu-option active" onclick="setSub(-1)">Off</div></div></div>
         <div class="ctrl-divider"></div>
-        <div class="ctrl-btn-wrap"><button class="ctrl-btn" onclick="toggleMenu('qualityMenu',event)" id="qualityBtn" title="Quality" style="font-size:.72rem;font-weight:700">Auto</button><div class="quality-menu" id="qualityMenu"><div class="menu-option" onclick="setQuality('low')">Low</div><div class="menu-option active" onclick="setQuality('auto')">Auto</div><div class="menu-option" onclick="setQuality('high')">High</div></div></div>
+        <div class="ctrl-btn-wrap"><button class="ctrl-btn" onclick="toggleMenu('qualityMenu',event)" id="qualityBtn" title="Quality" style="font-size:.72rem;font-weight:700" aria-label="Choose stream quality">Auto</button><div class="quality-menu" id="qualityMenu"><div class="menu-option" onclick="setQuality('low')">Low</div><div class="menu-option active" onclick="setQuality('auto')">Auto</div><div class="menu-option" onclick="setQuality('high')">High</div></div></div>
         <div class="ctrl-divider"></div>
-        <div class="volume-wrapper"><button class="ctrl-btn" id="volumeBtn" onclick="toggleMute()">&#128266;</button><input class="volume-slider" type="range" min="0" max="1" step="0.05" value="1" id="volumeSlider" oninput="setVol(this.value)"></div>
-        <div class="ctrl-btn-wrap"><button class="ctrl-btn" onclick="toggleMenu('boostMenu',event)" id="boostBtn" title="Audio Boost" style="font-size:1rem">&#128266;+</button><div class="boost-menu" id="boostMenu"><div class="boost-menu-head"><span>Audio Boost</span><span id="boostLevel">1.0x</span></div><input class="boost-slider" type="range" min="1" max="3" step="0.1" value="1" id="boostSlider" oninput="setBoost(this.value)"><div class="boost-hint" id="boostHint">Boost quiet audio up to 3x when needed.</div></div></div>
-        <button class="ctrl-btn" onclick="togglePiP()" title="PiP" id="pipBtn">&#128247;</button>
-        <button class="ctrl-btn" onclick="castToggle()" title="Cast" id="castBtn" style="display:none">&#128225;</button>
-        <button class="ctrl-btn" onclick="toggleMarkIntro()" title="Mark Intro" id="markIntroBtn" style="font-size:.72rem;font-weight:700;display:none">INTRO</button>
-        <button class="ctrl-btn" onclick="toggleFS()" title="Fullscreen">&#x26F6;</button>
+        <div class="volume-wrapper"><button class="ctrl-btn" id="volumeBtn" onclick="toggleMute()" aria-label="Mute or unmute">&#128266;</button><input class="volume-slider" type="range" min="0" max="1" step="0.05" value="1" id="volumeSlider" oninput="setVol(this.value)" aria-label="Volume"></div>
+        <div class="ctrl-btn-wrap"><button class="ctrl-btn" onclick="toggleMenu('boostMenu',event)" id="boostBtn" title="Audio Boost" style="font-size:1rem" aria-label="Adjust audio boost">&#128266;+</button><div class="boost-menu" id="boostMenu"><div class="boost-menu-head"><span>Audio Boost</span><span id="boostLevel">1.0x</span></div><input class="boost-slider" type="range" min="1" max="3" step="0.1" value="1" id="boostSlider" oninput="setBoost(this.value)" aria-label="Audio boost"><div class="boost-hint" id="boostHint">Boost quiet audio up to 3x when needed.</div></div></div>
+        <button class="ctrl-btn" onclick="togglePiP()" title="PiP" id="pipBtn" aria-label="Toggle picture in picture">&#128247;</button>
+        <button class="ctrl-btn" onclick="castToggle()" title="Cast" id="castBtn" style="display:none" aria-label="Cast to device">&#128225;</button>
+        <button class="ctrl-btn" onclick="toggleMarkIntro()" title="Mark Intro" id="markIntroBtn" style="font-size:.72rem;font-weight:700;display:none" aria-label="Mark intro timestamps">INTRO</button>
+        <button class="ctrl-btn" onclick="toggleFS()" title="Fullscreen" aria-label="Toggle fullscreen">&#x26F6;</button>
       </div>
     </div>
   </div>
