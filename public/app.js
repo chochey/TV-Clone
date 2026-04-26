@@ -568,6 +568,63 @@ function setFilter(f){
 }
 
 // ── Home ───────────────────────────────────────────────────────────────
+function mediaTypeLabel(item){
+  if(item.type==='movie')return 'Movie';
+  if(item.type==='show')return 'TV Show';
+  return customTypeLabel(item.type);
+}
+
+function mediaMetaLine(item){
+  const parts=[];
+  if(item.year)parts.push(item.year);
+  if(item.epInfo)parts.push(`S${item.epInfo.season||1} E${item.epInfo.episode||1}`);
+  parts.push(mediaTypeLabel(item));
+  if(item.imdbRating)parts.push('IMDb '+item.imdbRating);
+  if(item.progress?.percent>0)parts.push(item.progress.percent+'% watched');
+  return parts.join(' · ');
+}
+
+function getNextEpisodes(){
+  const episodes=library.filter(m=>m.type==='show'&&!m.watched);
+  episodes.sort((a,b)=>{
+    const an=a.showName||a.title||'',bn=b.showName||b.title||'';
+    const showSort=an.localeCompare(bn);
+    if(showSort)return showSort;
+    const seasonSort=(a.epInfo?.season||0)-(b.epInfo?.season||0);
+    if(seasonSort)return seasonSort;
+    return (a.epInfo?.episode||0)-(b.epInfo?.episode||0);
+  });
+  const seen=new Set(),next=[];
+  for(const item of episodes){
+    const key=item.showName||item.title;
+    if(seen.has(key))continue;
+    seen.add(key);
+    next.push(item);
+    if(next.length>=18)break;
+  }
+  return next;
+}
+
+function getSmartPicks(){
+  return library.filter(m=>!m.watched)
+    .sort((a,b)=>(parseFloat(b.imdbRating)||0)-(parseFloat(a.imdbRating)||0)||(b.addedAt||0)-(a.addedAt||0))
+    .slice(0,18);
+}
+
+function renderHomeDashboard(){
+  const movies=library.filter(m=>m.type==='movie').length;
+  const shows=new Set(library.filter(m=>m.type==='show').map(m=>m.showName||m.title)).size;
+  const inProgress=library.filter(m=>m.progress?.percent>0&&!m.watched).length;
+  const unwatched=library.filter(m=>!m.watched).length;
+  return `<div class="home-dashboard" aria-label="Library snapshot">
+    <div class="home-stat"><span>${library.length}</span><small>Total titles</small></div>
+    <div class="home-stat"><span>${movies}</span><small>Movies</small></div>
+    <div class="home-stat"><span>${shows}</span><small>Shows</small></div>
+    <div class="home-stat accent"><span>${inProgress}</span><small>In progress</small></div>
+    <div class="home-stat cyan"><span>${unwatched}</span><small>Unwatched</small></div>
+  </div>`;
+}
+
 function renderHome(){
   if(library.length===0){
     const hf=folderConfig.length>0;
@@ -591,40 +648,45 @@ function renderHome(){
   }
   const movies=library.filter(m=>m.type==='movie');
   const shows=library.filter(m=>m.type==='show');
+  const nextEpisodes=getNextEpisodes();
+  const smartPicks=getSmartPicks();
   const hero=cw.length>0?cw[0]:library[Math.floor(Math.random()*library.length)];
-  let h=renderHero(hero);
+  let h=`<div class="home-shell">${renderHero(hero)}${renderHomeDashboard()}`;
   if(cw.length>0)h+=carouselWithDismiss('Continue Watching',cw,'continueWatching');
+  if(nextEpisodes.length>0)h+=carousel('Next Episodes',nextEpisodes);
   if(recentlyAdded.length>0)h+=carouselWithDismiss('Recently Added',recentlyAdded,'recentlyAdded');
+  if(smartPicks.length>0)h+=carousel('Smart Picks',smartPicks);
   if(movies.length>0)h+=carousel('Movies',movies.slice(0,18));
   if(shows.length>0)h+=carousel('TV Shows',shows.slice(0,18));
   for(const t of getCustomTypes()){
     const items=library.filter(m=>m.type===t);
     if(items.length>0)h+=carousel(customTypeLabel(t),items.slice(0,18));
   }
-  return h;
+  return h+'</div>';
 }
 
 function renderHero(item){
-  const bg=(item.omdbPosterUrl||item.posterUrl)?`background-image:url('${item.omdbPosterUrl||item.posterUrl}')`:'';
+  const posterSrc=item.omdbPosterUrl||item.posterUrl;
+  const bg=posterSrc?`background-image:url('${escCssUrl(posterSrc)}')`:'';
   const rt=item.progress.percent>0?'Resume':'Play';
-  const plot=item.plot?`<p class="hero-meta" style="max-width:600px;opacity:.85;margin-top:4px">${esc(item.plot)}</p>`:'';
-  const rating=item.imdbRating?` · ★ ${item.imdbRating}`:'';
-  const heroType=item.type==='movie'?'Movie':item.type==='show'?'TV Show':customTypeLabel(item.type);
-  const deleteBtn=currentRole==='admin'?`<button class="btn-icon-ghost" onclick='event.stopPropagation();confirmDeleteMedia("${item.id}","${esc(item.title)}")' title="Delete from server" aria-label="Delete from server">&#128465;</button>`:'';
-  return `<div class="hero"><div class="hero-bg" style="${bg}"></div><div class="hero-content"><span class="hero-tag">${heroType}</span><h1 class="hero-title">${esc(item.title)}</h1><p class="hero-meta">${item.year?item.year+' · ':''}${heroType}${rating}${item.progress.percent>0?' · '+item.progress.percent+'% watched':''}</p>${plot}<div class="hero-actions"><button class="btn btn-primary" onclick='playMedia("${item.id}")'>&#9654; ${rt}</button><button class="btn btn-secondary" onclick='addToQueue("${item.id}")'>&#128203; Queue</button>${deleteBtn}</div></div></div>`;
+  const plot=item.plot?`<p class="hero-copy">${esc(item.plot)}</p>`:'';
+  const progress=item.progress.percent>0?`<div class="hero-progress"><div class="hero-progress-fill" style="width:${item.progress.percent}%"></div></div>`:'';
+  const deleteBtn=currentRole==='admin'?`<button class="btn-icon-ghost" data-title="${escAttr(item.title)}" onclick='event.stopPropagation();confirmDeleteMedia("${item.id}",this.dataset.title)' title="Delete from server" aria-label="Delete from server">&#128465;</button>`:'';
+  const poster=posterSrc?`<img src="${escAttr(posterSrc)}" alt="${escAttr(item.title)} poster" loading="lazy">`:`<div class="card-placeholder">&#127916;</div>`;
+  return `<div class="hero premium-hero"><div class="hero-bg" style="${bg}"></div><div class="hero-content"><span class="hero-tag">${mediaTypeLabel(item)}</span><h1 class="hero-title">${esc(item.title)}</h1><p class="hero-meta">${esc(mediaMetaLine(item))}</p>${plot}<div class="hero-actions"><button class="btn btn-primary" onclick='playMedia("${item.id}")'>&#9654; ${rt}</button><button class="btn btn-secondary" onclick='openMediaDetail("${item.id}")'>&#9432; Details</button><button class="btn btn-secondary" onclick='addToQueue("${item.id}")'>+ Queue</button>${deleteBtn}</div>${progress}</div><div class="hero-poster">${poster}</div></div>`;
 }
 
 // ── Cards ──────────────────────────────────────────────────────────────
 function card(item){
   const posterSrc=item.omdbPosterUrl||item.posterUrl;
-  const poster=posterSrc?`<img src="${posterSrc}" alt="${esc(item.title)}" loading="lazy">`:`<div class="card-placeholder">&#127916;</div>`;
+  const poster=posterSrc?`<img src="${escAttr(posterSrc)}" alt="${escAttr(item.title)}" loading="lazy">`:`<div class="card-placeholder">&#127916;</div>`;
   const prog=item.progress.percent>0?`<div class="card-progress"><div class="card-progress-fill" style="width:${item.progress.percent}%"></div></div>`:'';
-  const watched=item.watched?`<div class="card-watched-badge">✓</div>`:'';
-  const ratingBadge=item.imdbRating?`<div class="card-rating">★ ${item.imdbRating}</div>`:'';
-  const genres=item.genre?`<div class="card-genres">${item.genre}</div>`:item.genres&&item.genres.length?`<div class="genre-tags">${item.genres.map(g=>`<span class="genre-tag">${esc(g)}</span>`).join('')}</div>`:'';
-  const typeLabel=item.type==='movie'?'Movie':item.type==='show'?'TV Show':customTypeLabel(item.type);
-  const delBtn=currentRole==='admin'?`<button class="card-action-btn card-delete-btn" onclick="event.stopPropagation();confirmDeleteMedia('${item.id}','${esc(item.title).replace(/'/g,"\\&#39;")}')" title="Delete from server" aria-label="Delete ${escAttr(item.title)} from server">&#128465;</button>`:'';
-  return `<div class="card" data-id="${item.id}" onclick='playMedia("${item.id}")' onkeydown="activateWithKeyboard(event)" role="button" tabindex="0" aria-label="Play ${escAttr(item.title)}"><div class="card-poster">${poster}${prog}${watched}${ratingBadge}<div class="card-actions"><button class="card-action-btn" onclick="event.stopPropagation();toggleWatched('${item.id}',${!item.watched})" title="${item.watched?'Mark unwatched':'Mark watched'}" aria-label="${item.watched?'Mark as unwatched':'Mark as watched'}">&#128065;</button><button class="card-action-btn" onclick="event.stopPropagation();addToQueue('${item.id}')" title="Add to queue" aria-label="Add ${escAttr(item.title)} to queue">+Q</button>${delBtn}</div><div class="card-overlay"><div class="play-icon">&#9654;</div></div></div><div class="card-info"><div class="card-title">${esc(item.title)}</div>${item.year?`<div class="card-year">${item.year}</div>`:''}<span class="card-type ${item.type}">${typeLabel}</span>${genres}</div></div>`;
+  const watched=item.watched?`<div class="card-watched-badge">&#10003;</div>`:'';
+  const ratingBadge=item.imdbRating?`<div class="card-rating">IMDb ${esc(String(item.imdbRating))}</div>`:'';
+  const genres=item.genre?`<div class="card-genres">${esc(item.genre)}</div>`:item.genres&&item.genres.length?`<div class="genre-tags">${item.genres.slice(0,3).map(g=>`<span class="genre-tag">${esc(g)}</span>`).join('')}</div>`:'';
+  const typeLabel=mediaTypeLabel(item);
+  const delBtn=currentRole==='admin'?`<button class="card-action-btn card-delete-btn" data-title="${escAttr(item.title)}" onclick="event.stopPropagation();confirmDeleteMedia('${item.id}',this.dataset.title)" title="Delete from server" aria-label="Delete ${escAttr(item.title)} from server">&#128465;</button>`:'';
+  return `<div class="card media-card" data-id="${item.id}" onclick='playMedia("${item.id}")' onkeydown="activateWithKeyboard(event)" role="button" tabindex="0" aria-label="Play ${escAttr(item.title)}"><div class="card-poster">${poster}${prog}${watched}${ratingBadge}<div class="card-actions"><button class="card-action-btn card-info-btn" onclick="event.stopPropagation();openMediaDetail('${item.id}')" title="Details" aria-label="View details for ${escAttr(item.title)}">&#9432;</button><button class="card-action-btn" onclick="event.stopPropagation();toggleWatched('${item.id}',${!item.watched})" title="${item.watched?'Mark unwatched':'Mark watched'}" aria-label="${item.watched?'Mark as unwatched':'Mark as watched'}">&#128065;</button><button class="card-action-btn" onclick="event.stopPropagation();addToQueue('${item.id}')" title="Add to queue" aria-label="Add ${escAttr(item.title)} to queue">+Q</button>${delBtn}</div><div class="card-overlay"><div class="play-icon">&#9654;</div><span>Play</span></div></div><div class="card-info"><div class="card-title">${esc(item.title)}</div><div class="card-meta-line">${esc(mediaMetaLine(item))}</div><span class="card-type ${item.type}">${typeLabel}</span>${genres}</div></div>`;
 }
 
 function carousel(title,items){
@@ -634,19 +696,62 @@ function carousel(title,items){
 // Card variant with dismiss (X) button for Continue Watching / Recently Added
 function cardDismissable(item,section){
   const posterSrc=item.omdbPosterUrl||item.posterUrl;
-  const poster=posterSrc?`<img src="${posterSrc}" alt="${esc(item.title)}" loading="lazy">`:`<div class="card-placeholder">&#127916;</div>`;
+  const poster=posterSrc?`<img src="${escAttr(posterSrc)}" alt="${escAttr(item.title)}" loading="lazy">`:`<div class="card-placeholder">&#127916;</div>`;
   const prog=item.progress.percent>0?`<div class="card-progress"><div class="card-progress-fill" style="width:${item.progress.percent}%"></div></div>`:'';
-  const watched=item.watched?`<div class="card-watched-badge">✓</div>`:'';
-  const ratingBadge=item.imdbRating?`<div style="position:absolute;top:6px;right:32px;background:rgba(0,0,0,.75);color:#f5c518;padding:2px 6px;border-radius:4px;font-size:.7rem;font-weight:700">★ ${item.imdbRating}</div>`:'';
-  const genres=item.genre?`<div class="card-genres">${item.genre}</div>`:item.genres&&item.genres.length?`<div class="genre-tags">${item.genres.map(g=>`<span class="genre-tag">${esc(g)}</span>`).join('')}</div>`:'';
-  const typeLabel=item.type==='movie'?'Movie':item.type==='show'?'TV Show':customTypeLabel(item.type);
+  const watched=item.watched?`<div class="card-watched-badge">&#10003;</div>`:'';
+  const ratingBadge=item.imdbRating?`<div class="card-rating">IMDb ${esc(String(item.imdbRating))}</div>`:'';
+  const genres=item.genre?`<div class="card-genres">${esc(item.genre)}</div>`:item.genres&&item.genres.length?`<div class="genre-tags">${item.genres.slice(0,3).map(g=>`<span class="genre-tag">${esc(g)}</span>`).join('')}</div>`:'';
+  const typeLabel=mediaTypeLabel(item);
   const dismissBtn=`<button class="card-dismiss-btn" onclick="event.stopPropagation();dismissItem('${item.id}','${section}',this)" title="Hide from this list" aria-label="Hide ${escAttr(item.title)} from this list">&#10005;</button>`;
-  const delBtn=currentRole==='admin'?`<button class="card-action-btn card-delete-btn" onclick="event.stopPropagation();confirmDeleteMedia('${item.id}','${esc(item.title).replace(/'/g,"\\&#39;")}')" title="Delete from server" aria-label="Delete ${escAttr(item.title)} from server">&#128465;</button>`:'';
-  return `<div class="card" data-id="${item.id}" onclick='playMedia("${item.id}")' onkeydown="activateWithKeyboard(event)" role="button" tabindex="0" aria-label="Play ${escAttr(item.title)}"><div class="card-poster">${poster}${prog}${watched}${ratingBadge}${dismissBtn}<div class="card-actions"><button class="card-action-btn" onclick="event.stopPropagation();toggleWatched('${item.id}',${!item.watched})" title="${item.watched?'Mark unwatched':'Mark watched'}" aria-label="${item.watched?'Mark as unwatched':'Mark as watched'}">&#128065;</button><button class="card-action-btn" onclick="event.stopPropagation();addToQueue('${item.id}')" title="Add to queue" aria-label="Add ${escAttr(item.title)} to queue">+Q</button>${delBtn}</div><div class="card-overlay"><div class="play-icon">&#9654;</div></div></div><div class="card-info"><div class="card-title">${esc(item.title)}</div>${item.year?`<div class="card-year">${item.year}</div>`:''}<span class="card-type ${item.type}">${typeLabel}</span>${genres}</div></div>`;
+  const delBtn=currentRole==='admin'?`<button class="card-action-btn card-delete-btn" data-title="${escAttr(item.title)}" onclick="event.stopPropagation();confirmDeleteMedia('${item.id}',this.dataset.title)" title="Delete from server" aria-label="Delete ${escAttr(item.title)} from server">&#128465;</button>`:'';
+  return `<div class="card media-card" data-id="${item.id}" onclick='playMedia("${item.id}")' onkeydown="activateWithKeyboard(event)" role="button" tabindex="0" aria-label="Play ${escAttr(item.title)}"><div class="card-poster">${poster}${prog}${watched}${ratingBadge}${dismissBtn}<div class="card-actions"><button class="card-action-btn card-info-btn" onclick="event.stopPropagation();openMediaDetail('${item.id}')" title="Details" aria-label="View details for ${escAttr(item.title)}">&#9432;</button><button class="card-action-btn" onclick="event.stopPropagation();toggleWatched('${item.id}',${!item.watched})" title="${item.watched?'Mark unwatched':'Mark watched'}" aria-label="${item.watched?'Mark as unwatched':'Mark as watched'}">&#128065;</button><button class="card-action-btn" onclick="event.stopPropagation();addToQueue('${item.id}')" title="Add to queue" aria-label="Add ${escAttr(item.title)} to queue">+Q</button>${delBtn}</div><div class="card-overlay"><div class="play-icon">&#9654;</div><span>Play</span></div></div><div class="card-info"><div class="card-title">${esc(item.title)}</div><div class="card-meta-line">${esc(mediaMetaLine(item))}</div><span class="card-type ${item.type}">${typeLabel}</span>${genres}</div></div>`;
 }
 
 function carouselWithDismiss(title,items,section){
   return `<div class="section"><div class="section-header"><h2 class="section-title">${title}</h2></div><div class="carousel-wrapper"><button class="carousel-btn left" onclick="this.parentElement.querySelector('.carousel').scrollBy({left:-400,behavior:'smooth'})">&#10094;</button><div class="carousel">${items.map(i=>cardDismissable(i,section)).join('')}</div><button class="carousel-btn right" onclick="this.parentElement.querySelector('.carousel').scrollBy({left:400,behavior:'smooth'})">&#10095;</button></div></div>`;
+}
+
+function openMediaDetail(id){
+  const item=library.find(m=>m.id===id);
+  if(!item)return;
+  closeMediaDetail();
+  const posterSrc=item.omdbPosterUrl||item.posterUrl;
+  const bg=posterSrc?`style="background-image:url('${escCssUrl(posterSrc)}')"`:'';
+  const poster=posterSrc?`<img src="${escAttr(posterSrc)}" alt="${escAttr(item.title)} poster">`:`<div class="card-placeholder">&#127916;</div>`;
+  const plot=item.plot||'No synopsis yet. Press play and let the media do the convincing.';
+  const progress=item.progress?.percent>0?`<div class="detail-progress"><div class="detail-progress-fill" style="width:${item.progress.percent}%"></div></div><div class="detail-progress-label">${item.progress.percent}% watched</div>`:'';
+  const deleteBtn=currentRole==='admin'?`<button class="btn btn-danger-outline" data-title="${escAttr(item.title)}" onclick='confirmDeleteMedia("${item.id}",this.dataset.title);closeMediaDetail();'>Delete</button>`:'';
+  const overlay=document.createElement('div');
+  overlay.className='media-detail-overlay visible';
+  overlay.id='mediaDetailOverlay';
+  overlay.innerHTML=`<div class="media-detail-backdrop" ${bg}></div><aside class="media-detail-drawer" role="dialog" aria-modal="true" aria-label="${escAttr(item.title)} details">
+    <button class="detail-close" onclick="closeMediaDetail()" aria-label="Close details">&#10005;</button>
+    <div class="detail-poster">${poster}</div>
+    <div class="detail-body">
+      <span class="hero-tag">${mediaTypeLabel(item)}</span>
+      <h2>${esc(item.title)}</h2>
+      <p class="detail-meta">${esc(mediaMetaLine(item))}</p>
+      ${progress}
+      <p class="detail-copy">${esc(plot)}</p>
+      <div class="detail-actions">
+        <button class="btn btn-primary" onclick='playMedia("${item.id}");closeMediaDetail();'>&#9654; ${item.progress?.percent>0?'Resume':'Play'}</button>
+        <button class="btn btn-secondary" onclick='addToQueue("${item.id}")'>+ Queue</button>
+        <button class="btn btn-secondary" onclick='toggleWatched("${item.id}",${!item.watched});closeMediaDetail();'>${item.watched?'Mark Unwatched':'Mark Watched'}</button>
+        ${deleteBtn}
+      </div>
+    </div>
+  </aside>`;
+  overlay.addEventListener('click',e=>{if(e.target===overlay)closeMediaDetail();});
+  document.body.appendChild(overlay);
+  document.body.classList.add('detail-open');
+}
+
+function closeMediaDetail(){
+  const overlay=document.getElementById('mediaDetailOverlay');
+  if(!overlay)return;
+  overlay.classList.remove('visible');
+  document.body.classList.remove('detail-open');
+  setTimeout(()=>overlay.remove(),180);
 }
 
 // ── Delete media from server (admin only) ─────────────────────────────
@@ -681,7 +786,7 @@ async function deleteMedia(id,title,overlay){
     else if(currentView==='showDetail'){renderView();}
   }catch(e){
     btn.disabled=false;btn.textContent='Delete';
-    alert('Failed to delete: '+e.message);
+    showToast('Failed to delete: '+e.message,'error');
   }
 }
 
@@ -943,7 +1048,7 @@ async function toggleWatched(id,watched){
 // ── Random / Shuffle ───────────────────────────────────────────────────
 function playRandom(){
   const pool=library.filter(m=>!m.watched);
-  if(!pool.length){alert('Everything is watched!');return;}
+  if(!pool.length){showToast('Everything is watched!','info');return;}
   const pick=pool[Math.floor(Math.random()*pool.length)];
   playMedia(pick.id);
 }
@@ -1273,9 +1378,9 @@ function scanLibrary(e){
       // Meanwhile just show scanning state, the SSE handler will refresh
       setTimeout(()=>{btn.innerHTML=orig;btn.disabled=false;fetchLib();},2000);
     } else {
-      btn.innerHTML=orig;btn.disabled=false;alert(d.message||'Scan failed');
+      btn.innerHTML=orig;btn.disabled=false;showToast(d.message||'Scan failed','error');
     }
-  }).catch(()=>{btn.innerHTML=orig;btn.disabled=false;alert('Failed to reach server.');});
+  }).catch(()=>{btn.innerHTML=orig;btn.disabled=false;showToast('Failed to reach server.','error');});
 }
 
 function restartServer(){
@@ -1285,7 +1390,7 @@ function restartServer(){
     const poll=setInterval(()=>{
       fetch('/api/stats').then(r=>{if(r.ok){clearInterval(poll);location.reload();}}).catch(()=>{});
     },1000);
-  }).catch(()=>{alert('Failed to reach server.');});
+  }).catch(()=>{showToast('Failed to reach server.','error');});
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -1622,8 +1727,8 @@ function updateMarkIntroDisplay(){
 }
 
 async function saveMarkedIntro(){
-  if(_markIntroStart===null||_markIntroEnd===null){alert('Set both start and end times');return;}
-  if(_markIntroEnd<=_markIntroStart){alert('End must be after start');return;}
+  if(_markIntroStart===null||_markIntroEnd===null){showToast('Set both start and end times','error');return;}
+  if(_markIntroEnd<=_markIntroStart){showToast('End must be after start','error');return;}
   const applyToShow=document.getElementById('markIntroApplyShow').checked;
   await fetch('/api/skip-segments/'+currentMedia.id,{
     method:'POST',headers:{'Content-Type':'application/json'},
@@ -1651,7 +1756,7 @@ async function autoDetectIntro(){
     } else {
       btn.textContent='Auto-detect';
       btn.disabled=false;
-      alert(data.message||'Could not detect intro pattern');
+      showToast(data.message||'Could not detect intro pattern','error');
     }
   }catch(e){
     btn.textContent='Auto-detect';
@@ -2045,6 +2150,11 @@ V.addEventListener('ended',()=>{
 });
 
 document.addEventListener('keydown',e=>{
+  if(e.key==='Escape'&&document.getElementById('mediaDetailOverlay')&&!modal.classList.contains('active')){
+    e.preventDefault();
+    closeMediaDetail();
+    return;
+  }
   if(!modal.classList.contains('active'))return;
   switch(e.key){
     case ' ':case 'k':e.preventDefault();togglePlay();break;
@@ -2097,7 +2207,26 @@ async function saveProg(){
 function fmt(s){if(!s||isNaN(s))return '0:00';const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sec=Math.floor(s%60);return h>0?`${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`:`${m}:${String(sec).padStart(2,'0')}`;}
 function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML;}
 function escAttr(s){return s.replace(/&/g,'&amp;').replace(/'/g,'&#39;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\\/g,'\\\\');}
+function escCssUrl(s){return escAttr(String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/\r?\n/g,''));}
 function formatSize(b){if(b<1024)return b+' B';if(b<1048576)return(b/1024).toFixed(1)+' KB';if(b<1073741824)return(b/1048576).toFixed(1)+' MB';return(b/1073741824).toFixed(1)+' GB';}
+function showToast(message,type='info'){
+  let stack=document.getElementById('toastStack');
+  if(!stack){
+    stack=document.createElement('div');
+    stack.id='toastStack';
+    stack.className='toast-stack';
+    document.body.appendChild(stack);
+  }
+  const toast=document.createElement('div');
+  toast.className='toast toast-'+type;
+  toast.textContent=message;
+  stack.appendChild(toast);
+  requestAnimationFrame(()=>toast.classList.add('visible'));
+  setTimeout(()=>{
+    toast.classList.remove('visible');
+    setTimeout(()=>toast.remove(),180);
+  },3200);
+}
 
 // ══════════════════════════════════════════════════════════════════════
 // Chromecast
