@@ -545,6 +545,68 @@ video::cue{background:rgba(0,0,0,.8);color:#fff;font-size:clamp(1.6rem, 3.5vw, 2
 /* Card delete button */
 .card-delete-btn{color:var(--danger) !important;opacity:.85}.card-delete-btn:hover{opacity:1;background:rgba(229,72,77,.2) !important}
 
+/* Admin dashboard */
+.admin-dashboard{padding:36px 40px 52px;max-width:1480px}
+.admin-loading{min-height:360px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;color:var(--text-muted)}
+.admin-hero{position:relative;overflow:hidden;border:1px solid rgba(255,236,205,.12);border-radius:30px;padding:34px 36px;margin-bottom:22px;background:radial-gradient(circle at 82% 16%,rgba(48,213,209,.18),transparent 34%),linear-gradient(135deg,rgba(255,255,255,.09),rgba(255,255,255,.025));box-shadow:0 24px 70px rgba(0,0,0,.26);display:flex;align-items:flex-end;justify-content:space-between;gap:22px}
+.admin-hero::before{content:'';position:absolute;inset:auto -80px -150px auto;width:360px;height:360px;border-radius:50%;background:rgba(242,169,59,.12);filter:blur(20px)}
+.admin-hero>*{position:relative;z-index:1}
+.admin-eyebrow{font-size:.72rem;font-weight:800;text-transform:uppercase;letter-spacing:.14em;color:var(--accent);margin-bottom:8px}
+.admin-hero h1{font-size:clamp(2.4rem,5vw,4.7rem);line-height:.95;letter-spacing:-.07em;margin:0 0 10px}
+.admin-hero p{max-width:650px;color:var(--text-secondary);font-size:1rem;line-height:1.6}
+.admin-hero-actions{display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end}
+.admin-grid{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:16px}
+.admin-panel{grid-column:span 4;border:1px solid rgba(255,236,205,.1);border-radius:24px;padding:20px;background:linear-gradient(145deg,rgba(255,255,255,.07),rgba(255,255,255,.022));box-shadow:0 18px 46px rgba(0,0,0,.2);min-height:210px}
+.admin-panel-wide{grid-column:span 8}
+.admin-panel-head{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;margin-bottom:16px}
+.admin-panel-head h2,.admin-panel-title{font-size:1.1rem;font-weight:800;letter-spacing:-.035em}
+.admin-pill{display:inline-flex;align-items:center;white-space:nowrap;border-radius:999px;padding:5px 10px;font-size:.72rem;font-weight:800;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.07);color:var(--text-secondary)}
+.admin-pill.ok{color:#7fe3a4;border-color:rgba(127,227,164,.26);background:rgba(79,180,119,.12)}
+.admin-pill.info{color:var(--accent-cyan);border-color:rgba(48,213,209,.26);background:rgba(48,213,209,.1)}
+.admin-pill.warn{color:#ffd47a;border-color:rgba(255,212,122,.28);background:rgba(242,169,59,.12)}
+.admin-pill.bad{color:#ff8f8f;border-color:rgba(229,72,77,.32);background:rgba(229,72,77,.12)}
+.admin-pill.live{color:#ffd47a;border-color:rgba(242,169,59,.32);background:rgba(242,169,59,.14)}
+.admin-health-grid,.admin-mini-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.admin-mini-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+.admin-metric{border:1px solid rgba(255,236,205,.08);border-radius:18px;padding:14px;background:rgba(0,0,0,.16)}
+.admin-metric.ok{border-color:rgba(79,180,119,.18)}
+.admin-metric.warn{border-color:rgba(242,169,59,.26)}
+.admin-metric.crit,.admin-metric.bad{border-color:rgba(229,72,77,.3)}
+.admin-metric.live{border-color:rgba(242,169,59,.32);box-shadow:0 0 28px rgba(242,169,59,.08)}
+.admin-metric-label{font-size:.68rem;text-transform:uppercase;letter-spacing:.1em;color:var(--text-muted);font-weight:800}
+.admin-metric-value{font-size:1.55rem;font-weight:900;letter-spacing:-.045em;margin-top:6px}
+.admin-metric-sub{font-size:.74rem;line-height:1.4;color:var(--text-muted);margin-top:4px}
+.admin-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px}
+.admin-list{display:flex;flex-direction:column;gap:9px}
+.admin-list-row{display:flex;align-items:center;gap:12px;border:1px solid rgba(255,236,205,.07);border-radius:16px;background:rgba(0,0,0,.14);padding:12px}
+.admin-list-row.compact{align-items:flex-start}
+.admin-list-icon{width:36px;height:36px;border-radius:14px;background:linear-gradient(135deg,rgba(242,169,59,.22),rgba(48,213,209,.13));display:flex;align-items:center;justify-content:center;font-weight:900;color:var(--text-primary);flex-shrink:0}
+.admin-list-body{min-width:0;flex:1}
+.admin-list-body strong{display:block;font-size:.88rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.admin-list-body span{display:block;font-size:.74rem;color:var(--text-muted);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.admin-row-bar{height:4px;border-radius:999px;background:rgba(255,255,255,.1);overflow:hidden;margin-top:8px}
+.admin-row-bar div{height:100%;border-radius:inherit;background:linear-gradient(90deg,var(--accent),var(--accent-cyan))}
+.admin-dot{width:10px;height:10px;border-radius:50%;margin-top:4px;flex-shrink:0;background:var(--text-muted)}
+.admin-dot.info{background:var(--accent-cyan)}.admin-dot.bad{background:var(--danger)}
+.admin-empty{border:1px dashed rgba(255,236,205,.12);border-radius:16px;padding:18px;color:var(--text-muted);font-size:.88rem;line-height:1.5;background:rgba(0,0,0,.12)}
+.admin-service-list{display:flex;flex-direction:column;gap:10px}
+.admin-service-row{display:flex;align-items:center;justify-content:space-between;gap:10px;border:1px solid rgba(255,236,205,.08);border-radius:16px;padding:13px;background:rgba(0,0,0,.14)}
+.admin-service-row strong{display:block;font-size:.9rem}.admin-service-row span{display:block;font-size:.73rem;color:var(--text-muted);margin-top:3px}
+@media(max-width:1180px){
+  .admin-panel,.admin-panel-wide{grid-column:span 6}
+  .admin-health-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media(max-width:760px){
+  .admin-dashboard{padding:24px 16px 40px}
+  .admin-hero{padding:26px 22px;align-items:flex-start;flex-direction:column}
+  .admin-hero-actions{justify-content:flex-start;width:100%}
+  .admin-hero-actions .btn{flex:1;justify-content:center}
+  .admin-panel,.admin-panel-wide{grid-column:1/-1}
+}
+@media(max-width:520px){
+  .admin-health-grid,.admin-mini-grid{grid-template-columns:1fr}
+}
+
 /* Premium dev redesign */
 .sidebar{background:linear-gradient(180deg,rgba(20,17,14,.96),rgba(9,8,6,.96));border-right:1px solid rgba(255,233,204,.09);box-shadow:14px 0 44px rgba(0,0,0,.28)}
 .sidebar-header{border-bottom-color:rgba(255,233,204,.08)}

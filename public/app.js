@@ -37,6 +37,7 @@ function updateSystemVisibility(){
   const showSystem=showDownloads||showSettings||showScan||showRestart||showLogs||isAdmin;
   const el=document.getElementById('systemSection');
   if(el){showSystem?el.classList.add('visible'):el.classList.remove('visible');}
+  const ndash=document.getElementById('navSystem');if(ndash)ndash.style.display=isAdmin?'':'none';
   const nd=document.getElementById('navDownloads');if(nd)nd.style.display=showDownloads?'':'none';
   const nl=document.getElementById('navLogs');if(nl)nl.style.display=showLogs?'':'none';
   const nol=document.getElementById('navOrgLogs');if(nol)nol.style.display=isAdmin?'':'none';
@@ -414,7 +415,7 @@ function activateWithKeyboard(event){
 }
 
 function updateLayoutChrome(view){
-  const hideTopBar=view==='settings'||view==='showDetail'||view==='downloads';
+  const hideTopBar=view==='settings'||view==='showDetail'||view==='downloads'||view==='system'||view==='logs'||view==='orglogs';
   document.getElementById('topBar').style.display=hideTopBar?'none':'';
   document.body.classList.toggle('top-bar-hidden',hideTopBar);
   document.body.dataset.view=view;
@@ -474,6 +475,7 @@ function renderView(){
     case 'continue':a.innerHTML=renderContinue();break;
     case 'queue':a.innerHTML=renderQueue();break;
     case 'history':renderHistory();return;
+    case 'system':if(currentRole!=='admin'){nav('home',document.querySelector('[data-view="home"]'));return;}renderAdminDashboard();return;
     case 'settings':if(currentRole!=='admin'){nav('home',document.querySelector('[data-view="home"]'));return;}renderSettings();return;
     case 'downloads':if(!hasPerm('canDownload')){nav('home',document.querySelector('[data-view="home"]'));return;}renderDownloads();return;
     case 'logs':if(currentRole!=='admin'&&!hasPerm('canLogs')){nav('home',document.querySelector('[data-view="home"]'));return;}renderLogs();return;
@@ -1183,6 +1185,205 @@ function renderSysStats(){
   html+='</div>';
   return html;
 }
+
+let dashboardData={downloads:null,docker:null,errors:null,scans:null};
+async function fetchDashboardData(){
+  const tasks=[fetchStats(),fetchSpriteProgress(),fetchSysStats()];
+  if(currentRole==='admin')tasks.push(fetchConfig(),fetchCorrupted());
+  if(currentRole==='admin'||hasPerm('canLogs'))tasks.push(fetchNowWatching(),fetchDashboardLogs());
+  if(currentRole==='admin'||hasPerm('canDownload'))tasks.push(fetchDashboardDownloads());
+  if(currentRole==='admin')tasks.push(fetchDashboardDocker());
+  await Promise.allSettled(tasks);
+}
+
+async function fetchDashboardDownloads(){
+  dashboardData.downloads={connected:false,torrents:[],error:null};
+  try{
+    const status=await(await fetch('/api/qbt/status',{credentials:'same-origin'})).json();
+    dashboardData.downloads.connected=!!status.connected;
+    dashboardData.downloads.error=status.error||null;
+    if(status.connected){
+      const torrents=await(await fetch('/api/qbt/torrents',{credentials:'same-origin'})).json();
+      dashboardData.downloads.torrents=Array.isArray(torrents)?torrents:[];
+    }
+  }catch(e){dashboardData.downloads={connected:false,torrents:[],error:'Could not reach qBittorrent'};}
+}
+
+async function fetchDashboardDocker(){
+  dashboardData.docker=null;
+  try{const r=await adminFetch('/api/docker/status');if(r.ok)dashboardData.docker=await r.json();}catch{}
+}
+
+async function fetchDashboardLogs(){
+  dashboardData.errors=[];
+  dashboardData.scans=[];
+  try{const r=await fetch('/api/admin/error-logs',{credentials:'same-origin'});if(r.ok)dashboardData.errors=(await r.json()).slice(0,4);}catch{}
+  try{const r=await fetch('/api/admin/scan-logs',{credentials:'same-origin'});if(r.ok)dashboardData.scans=(await r.json()).slice(0,4);}catch{}
+}
+
+function metricCard(label,value,sub='',tone=''){
+  return `<div class="admin-metric ${tone}"><div class="admin-metric-label">${label}</div><div class="admin-metric-value">${value}</div>${sub?`<div class="admin-metric-sub">${sub}</div>`:''}</div>`;
+}
+
+function statusPill(text,tone='ok'){
+  return `<span class="admin-pill ${tone}">${text}</span>`;
+}
+
+function renderAdminSystemPanel(){
+  if(!sysStats)return `<div class="admin-panel"><div class="admin-panel-title">System Health</div><div class="admin-empty">System stats are unavailable.</div></div>`;
+  const s=sysStats;
+  const disk=s.disks&&s.disks.length?s.disks[0]:null;
+  return `<div class="admin-panel admin-panel-wide">
+    <div class="admin-panel-head"><div><div class="admin-eyebrow">Live Machine</div><h2>System Health</h2></div>${statusPill(s.activeTranscodes>0?s.activeTranscodes+' transcodes':'Idle','ok')}</div>
+    <div class="admin-health-grid">
+      ${metricCard('CPU',s.cpu.percent+'%',s.cpu.cores+' cores · load '+s.cpu.loadAvg[0].toFixed(1),barClass(s.cpu.percent))}
+      ${metricCard('Memory',s.memory.percent+'%',fmtBytes(s.memory.free)+' free',barClass(s.memory.percent))}
+      ${disk?metricCard('Disk '+esc(disk.mount),disk.percent+'%',fmtBytes(disk.available)+' free',barClass(disk.percent)):''}
+      ${metricCard('Uptime',fmtUptime(s.uptime)||'Fresh start','Server process')}
+    </div>
+  </div>`;
+}
+
+function renderAdminLibraryPanel(){
+  const files=statsData?.totalFiles||library.length;
+  const movies=statsData?.movies||library.filter(i=>i.type==='movie').length;
+  const shows=statsData?.shows||library.filter(i=>i.type==='show').length;
+  const episodes=statsData?.episodes||library.filter(i=>i.type==='show').length;
+  const folderCount=folderConfig.length;
+  return `<div class="admin-panel">
+    <div class="admin-panel-head"><div><div class="admin-eyebrow">Media</div><h2>Library</h2></div>${currentRole==='admin'?statusPill(folderCount+' folders','info'):''}</div>
+    <div class="admin-mini-grid">
+      ${metricCard('Files',files.toLocaleString())}
+      ${metricCard('Movies',movies.toLocaleString())}
+      ${metricCard('Shows',shows.toLocaleString())}
+      ${metricCard('Episodes',episodes.toLocaleString())}
+    </div>
+    <div class="admin-actions">
+      ${hasPerm('canScan')?'<button class="btn btn-primary btn-sm" onclick="scanLibrary(event)">Scan Library</button>':''}
+      ${currentRole==='admin'?'<button class="btn btn-secondary btn-sm" onclick="nav(\'settings\',document.querySelector(\'[data-view=settings]\'))">Manage Folders</button>':''}
+    </div>
+  </div>`;
+}
+
+function renderAdminWatchingPanel(){
+  const viewers=nowWatchingData||[];
+  const body=viewers.length?viewers.slice(0,4).map(v=>{
+    const pct=v.duration?Math.round(v.currentTime/v.duration*100):0;
+    return `<div class="admin-list-row"><div class="admin-list-icon">${esc((v.profileName||'?').charAt(0).toUpperCase())}</div><div class="admin-list-body"><strong>${esc(v.title)}</strong><span>${esc(v.profileName||'Unknown')} · ${pct}%</span><div class="admin-row-bar"><div style="width:${pct}%"></div></div></div></div>`;
+  }).join(''):`<div class="admin-empty">Nobody is watching right now. Peaceful little server moment.</div>`;
+  return `<div class="admin-panel">
+    <div class="admin-panel-head"><div><div class="admin-eyebrow">Activity</div><h2>Now Watching</h2></div>${statusPill(viewers.length?viewers.length+' live':'Idle',viewers.length?'live':'ok')}</div>
+    <div class="admin-list">${body}</div>
+    ${(currentRole==='admin'||hasPerm('canLogs'))?'<div class="admin-actions"><button class="btn btn-secondary btn-sm" onclick="nav(\'logs\',document.querySelector(\'[data-view=logs]\'))">Open Logs</button></div>':''}
+  </div>`;
+}
+
+function renderAdminDownloadsPanel(){
+  if(!(currentRole==='admin'||hasPerm('canDownload')))return '';
+  const d=dashboardData.downloads;
+  if(!d)return `<div class="admin-panel"><div class="admin-panel-title">Downloads</div><div class="admin-empty">Downloads are loading...</div></div>`;
+  const active=d.torrents.filter(t=>t.progress<1);
+  const speed=d.torrents.reduce((sum,t)=>sum+(t.dlspeed||0),0);
+  return `<div class="admin-panel">
+    <div class="admin-panel-head"><div><div class="admin-eyebrow">qBittorrent</div><h2>Downloads</h2></div>${statusPill(d.connected?'Connected':'Offline',d.connected?'ok':'bad')}</div>
+    <div class="admin-mini-grid">
+      ${metricCard('Active',active.length)}
+      ${metricCard('Total',d.torrents.length)}
+      ${metricCard('Speed',dlFormatSpeed(speed)||'0 B/s')}
+      ${metricCard('Complete',d.torrents.filter(t=>t.progress>=1).length)}
+    </div>
+    ${!d.connected?`<div class="admin-empty">${esc(d.error||'qBittorrent is not connected.')}</div>`:''}
+    <div class="admin-actions"><button class="btn btn-secondary btn-sm" onclick="nav('downloads',document.querySelector('[data-view=downloads]'))">Open Downloads</button></div>
+  </div>`;
+}
+
+function renderAdminMaintenancePanel(){
+  const corruptedCount=corruptedData?.length||0;
+  const sprite=spriteProgress;
+  const spriteTone=!sprite?'info':!sprite.enabled?'warn':sprite.running?'live':'ok';
+  return `<div class="admin-panel">
+    <div class="admin-panel-head"><div><div class="admin-eyebrow">Care & Feeding</div><h2>Maintenance</h2></div>${statusPill(corruptedCount?corruptedCount+' corrupted':'Clean',corruptedCount?'bad':'ok')}</div>
+    <div class="admin-mini-grid">
+      ${metricCard('Sprites',sprite?`${sprite.percent}%`:'--',sprite?sprite.completed+' / '+sprite.total:'Unavailable',spriteTone)}
+      ${metricCard('Corrupted',corruptedCount,corruptedCount?'Needs review':'None detected',corruptedCount?'bad':'ok')}
+      ${metricCard('Scans',dashboardData.scans?.length||0,'Recent entries')}
+      ${metricCard('Errors',dashboardData.errors?.length||0,'Recent entries',dashboardData.errors?.length?'bad':'ok')}
+    </div>
+    <div class="admin-actions">
+      ${currentRole==='admin'?'<button class="btn btn-secondary btn-sm" onclick="nav(\'settings\',document.querySelector(\'[data-view=settings]\'))">Maintenance Tools</button>':''}
+      ${(currentRole==='admin'||hasPerm('canLogs'))?'<button class="btn btn-secondary btn-sm" onclick="nav(\'logs\',document.querySelector(\'[data-view=logs]\'))">Review Logs</button>':''}
+    </div>
+  </div>`;
+}
+
+function renderAdminDockerPanel(){
+  if(currentRole!=='admin'||!dashboardData.docker)return '';
+  const d=dashboardData.docker;
+  const row=(name,label)=>`<div class="admin-service-row"><div><strong>${label}</strong><span>${name}</span></div>${statusPill(d[name]||'unknown',d[name]==='running'?'ok':'bad')}</div>`;
+  return `<div class="admin-panel">
+    <div class="admin-panel-head"><div><div class="admin-eyebrow">Services</div><h2>Containers</h2></div></div>
+    <div class="admin-service-list">${row('gluetun','VPN Tunnel')}${row('qbittorrent','Torrent Client')}</div>
+    <div class="admin-actions"><button class="btn btn-secondary btn-sm" onclick="nav('settings',document.querySelector('[data-view=settings]'))">Container Controls</button></div>
+  </div>`;
+}
+
+function renderAdminRecentPanel(){
+  if(!(currentRole==='admin'||hasPerm('canLogs')))return '';
+  const errors=dashboardData.errors||[];
+  const scans=dashboardData.scans||[];
+  const items=[
+    ...errors.map(e=>({type:'Error',tone:'bad',title:e.message,meta:e.context+' · '+fmtDate(e.timestamp)})),
+    ...scans.map(e=>({type:'Scan',tone:'info',title:(e.count||0).toLocaleString()+' files scanned',meta:(e.trigger||'scan')+' · '+fmtDate(e.timestamp)})),
+  ].slice(0,6);
+  const body=items.length?items.map(i=>`<div class="admin-list-row compact"><div class="admin-dot ${i.tone}"></div><div class="admin-list-body"><strong>${esc(i.title)}</strong><span>${esc(i.type)} · ${esc(i.meta)}</span></div></div>`).join(''):'<div class="admin-empty">No recent scan or error events.</div>';
+  return `<div class="admin-panel admin-panel-wide">
+    <div class="admin-panel-head"><div><div class="admin-eyebrow">Signals</div><h2>Recent Events</h2></div><button class="btn btn-secondary btn-sm" onclick="nav('logs',document.querySelector('[data-view=logs]'))">Open Logs</button></div>
+    <div class="admin-list">${body}</div>
+  </div>`;
+}
+
+function buildAdminDashboardHtml(){
+  const canRestart=currentRole==='admin'||hasPerm('canRestart');
+  return `<div class="admin-dashboard">
+    <div class="admin-hero">
+      <div>
+        <div class="admin-eyebrow">Control Center</div>
+        <h1>System Dashboard</h1>
+        <p>Server health, library operations, downloads, logs, and maintenance in one place.</p>
+      </div>
+      <div class="admin-hero-actions">
+        ${hasPerm('canScan')?'<button class="btn btn-primary" onclick="scanLibrary(event)">Scan Library</button>':''}
+        ${canRestart?'<button class="btn btn-secondary" onclick="restartServer()">Restart Server</button>':''}
+      </div>
+    </div>
+    <div class="admin-grid">
+      ${renderAdminSystemPanel()}
+      ${renderAdminLibraryPanel()}
+      ${renderAdminWatchingPanel()}
+      ${renderAdminDownloadsPanel()}
+      ${currentRole==='admin'?renderAdminMaintenancePanel():''}
+      ${renderAdminDockerPanel()}
+      ${renderAdminRecentPanel()}
+    </div>
+  </div>`;
+}
+
+async function renderAdminDashboard(){
+  const a=document.getElementById('contentArea');
+  a.innerHTML='<div class="admin-dashboard"><div class="admin-loading"><span class="dl-spinner" style="width:28px;height:28px;border-width:3px"></span><p>Loading control center...</p></div></div>';
+  await fetchDashboardData();
+  a.innerHTML=buildAdminDashboardHtml();
+  startDashboardRefresh();
+}
+
+function startDashboardRefresh(){
+  clearInterval(window._dashboardInterval);
+  window._dashboardInterval=setInterval(async()=>{
+    if(currentView!=='system'){clearInterval(window._dashboardInterval);return;}
+    await fetchDashboardData();
+    if(currentView==='system')document.getElementById('contentArea').innerHTML=buildAdminDashboardHtml();
+  },15000);
+}
 async function renderSettings(){
   await Promise.all([fetchConfig(),fetchStats(),fetchSpriteProgress(),fetchSysStats(),fetchCorrupted(),fetchNowWatching()]);
   const a=document.getElementById('contentArea');
@@ -1368,19 +1569,19 @@ async function removeFolder(fp){try{await adminFetch('/api/config/remove',{metho
 function showSettingsAlert(m,t){const e=document.getElementById('settingsAlert');if(!e)return;e.className=`alert ${t}`;e.textContent=m;setTimeout(()=>{e.className='alert';},3500);}
 
 function scanLibrary(e){
-  const btn=(e&&e.target||event.target).closest('.nav-item');
-  const orig=btn.innerHTML;
-  btn.innerHTML='<span class="nav-icon">&#8987;</span> Scanning...';
-  btn.disabled=true;
+  const rawTarget=e&&e.target?e.target:event.target;
+  const btn=rawTarget.closest('.nav-item')||rawTarget.closest('button');
+  const orig=btn?btn.innerHTML:'';
+  if(btn){btn.innerHTML='<span class="nav-icon">&#8987;</span> Scanning...';btn.disabled=true;}
   adminFetch('/api/scan',{method:'POST'}).then(r=>r.json()).then(d=>{
     if(d.ok){
       // Poll until scan completes by waiting for library-updated SSE event
       // Meanwhile just show scanning state, the SSE handler will refresh
-      setTimeout(()=>{btn.innerHTML=orig;btn.disabled=false;fetchLib();},2000);
+      setTimeout(()=>{if(btn){btn.innerHTML=orig;btn.disabled=false;}fetchLib();},2000);
     } else {
-      btn.innerHTML=orig;btn.disabled=false;showToast(d.message||'Scan failed','error');
+      if(btn){btn.innerHTML=orig;btn.disabled=false;}showToast(d.message||'Scan failed','error');
     }
-  }).catch(()=>{btn.innerHTML=orig;btn.disabled=false;showToast('Failed to reach server.','error');});
+  }).catch(()=>{if(btn){btn.innerHTML=orig;btn.disabled=false;}showToast('Failed to reach server.','error');});
 }
 
 function restartServer(){
