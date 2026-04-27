@@ -48,6 +48,7 @@ function updateSystemVisibility(){
 
 const V=document.getElementById('videoElement'),modal=document.getElementById('playerModal');
 const progContainer=document.getElementById('progressContainer');
+const _isTouch=('ontouchstart' in window)||navigator.maxTouchPoints>0;
 let hlsInstance=null;
 window._hlsSeekOffset=0;
 let audioBoostLevel=1;
@@ -2197,6 +2198,7 @@ function toggleFS(){document.fullscreenElement?document.exitFullscreen().catch((
 // Click vs double-click on video wrapper (manual detection for reliability)
 let _clickCount=0,_clickTimer=null;
 document.getElementById('videoWrapper').addEventListener('click',function(e){
+  if(_isTouch)return;
   if(e.target.closest('.player-controls,.player-top-bar,.up-next-overlay,.skip-intro-box,.mark-intro-panel,.cast-overlay'))return;
   _clickCount++;
   if(_clickCount===1){
@@ -2444,7 +2446,6 @@ function showControls(){modal.classList.add('controls-visible');clearTimeout(con
 // keydown event). A second Escape press then closes the player via the keydown handler.
 
 // Touch support: tap video to toggle controls, auto-hide after 3s
-const _isTouch='ontouchstart' in window;
 document.getElementById('videoWrapper').addEventListener('click',function(e){
   if(!_isTouch)return; // desktop uses mousemove
   if(e.target.closest('.player-controls,.player-top-bar,.sub-menu,.audio-menu,.boost-menu,.speed-menu,.skip-menu,.quality-menu'))return;
