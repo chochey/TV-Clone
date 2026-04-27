@@ -1517,6 +1517,7 @@ const spriteQueue = { total: 0, completed: 0, current: '', running: false };
 let lastPlaybackAt = 0; // timestamp of last segment/stream request — used to pause sprite gen during playback
 const nowWatching = {}; // profileId -> { profileName, id, title, currentTime, duration, updatedAt }
 let spriteGenEnabled = true; // can be toggled via /api/sprites/pause and /api/sprites/resume
+let spriteRequeueRequested = false;
 
 function getThumbId(filePath) {
   return crypto.createHash('md5').update(filePath).digest('hex').slice(0, 16);
@@ -1524,6 +1525,32 @@ function getThumbId(filePath) {
 
 function spriteFilePath(thumbId, sheetNum) {
   return path.join(THUMB_DIR, `${thumbId}_sprite_${sheetNum}.jpg`);
+}
+
+function clearSpriteArtifacts(id, filePath) {
+  const thumbId = getThumbId(filePath);
+  let removed = 0;
+  try {
+    const thumbFiles = fs.readdirSync(THUMB_DIR).filter(f => f.startsWith(thumbId));
+    for (const f of thumbFiles) {
+      try {
+        fs.rmSync(path.join(THUMB_DIR, f), { recursive: true, force: true });
+        removed++;
+      } catch {}
+    }
+  } catch {}
+  try { fs.rmSync(path.join(THUMB_DIR, `_tmp_${thumbId}`), { recursive: true, force: true }); } catch {}
+  delete spriteJobs[id];
+  return removed;
+}
+
+function requestSpriteQueue() {
+  if (spriteQueue.running) {
+    spriteRequeueRequested = true;
+    return false;
+  }
+  queueAllSpriteGen();
+  return true;
 }
 
 // Extract a single frame via fast input seeking
@@ -1748,10 +1775,18 @@ function queueAllSpriteGen() {
     spriteQueue.running = false;
     spriteQueue.current = '';
     console.log('[SPRITE] All queued items processed');
+    if (spriteRequeueRequested) {
+      spriteRequeueRequested = false;
+      setTimeout(() => queueAllSpriteGen(), 1000);
+    }
   })().catch(err => {
     spriteQueue.running = false;
     spriteQueue.current = '';
     console.error('[SPRITE] Queue loop crashed:', err);
+    if (spriteRequeueRequested) {
+      spriteRequeueRequested = false;
+      setTimeout(() => queueAllSpriteGen(), 1000);
+    }
   });
 }
 
@@ -1799,6 +1834,39 @@ app.post('/api/sprites/resume', requireAdminSession, (req, res) => {
 app.get('/api/corrupted', requireAdminSession, (_req, res) => {
   const entries = Object.entries(corruptedFiles).map(([id, info]) => ({ id, ...info }));
   res.json(entries);
+});
+
+// POST /api/corrupted/:id/retry — clear marker/artifacts and queue sprite retry
+app.post('/api/corrupted/:id/retry', requireAdminSession, ensureLibrary, (req, res) => {
+  const { id } = req.params;
+  const entry = corruptedFiles[id];
+  if (!entry) return res.status(404).json({ error: 'Not found' });
+  const filePath = fileIndex[id] || entry.filePath;
+  if (!filePath || !fs.existsSync(filePath)) return res.status(404).json({ error: 'Media file not found' });
+  delete corruptedFiles[id];
+  persistCorrupted();
+  const removed = clearSpriteArtifacts(id, filePath);
+  const started = requestSpriteQueue();
+  console.log(`[CORRUPT] Retrying sprite generation for ${entry.title || id} (${removed} stale file(s) removed)`);
+  res.json({ ok: true, started, requeueRequested: spriteRequeueRequested, removed });
+});
+
+// POST /api/corrupted/retry-all — retry every corrupted sprite entry
+app.post('/api/corrupted/retry-all', requireAdminSession, ensureLibrary, (_req, res) => {
+  const entries = Object.entries(corruptedFiles);
+  let removedEntries = 0;
+  let removedArtifacts = 0;
+  for (const [id, entry] of entries) {
+    const filePath = fileIndex[id] || entry.filePath;
+    if (!filePath || !fs.existsSync(filePath)) continue;
+    delete corruptedFiles[id];
+    removedEntries++;
+    removedArtifacts += clearSpriteArtifacts(id, filePath);
+  }
+  persistCorrupted();
+  const started = removedEntries > 0 ? requestSpriteQueue() : false;
+  console.log(`[CORRUPT] Retrying ${removedEntries} corrupted sprite entr${removedEntries === 1 ? 'y' : 'ies'} (${removedArtifacts} stale file(s) removed)`);
+  res.json({ ok: true, retried: removedEntries, started, requeueRequested: spriteRequeueRequested, removed: removedArtifacts });
 });
 
 // DELETE /api/corrupted/:id — remove a file from the corrupted registry

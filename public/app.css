@@ -283,6 +283,8 @@ button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible,.c
 .corrupted-list{margin-top:10px;display:flex;flex-direction:column;gap:6px}
 .corrupted-item{display:flex;align-items:flex-start;gap:10px;padding:10px 12px;background:rgba(229,72,77,.07);border:1px solid rgba(229,72,77,.18);border-radius:8px}
 .corrupted-item-body{flex:1;min-width:0}
+.corrupted-item-actions{display:flex;gap:8px;flex-shrink:0;align-items:center}
+.corrupted-item-actions .btn{padding:4px 10px;font-size:.75rem}
 .corrupted-item-title{font-size:.85rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .corrupted-item-reason{font-size:.75rem;color:#e5484d;margin-top:2px;font-family:monospace;word-break:break-all}
 .corrupted-item-date{font-size:.72rem;color:var(--text-muted);margin-top:2px}

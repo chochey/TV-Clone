@@ -1175,9 +1175,10 @@ function renderCorruptedSection(){
   const badge=count>0?`<span class="corrupted-badge has-items">${count} corrupted</span>`:`<span class="corrupted-badge none">None detected</span>`;
   let list='';
   if(count>0){
-    const items=corruptedData.map(f=>`<div class="corrupted-item"><div class="corrupted-item-body"><div class="corrupted-item-title" title="${escAttr(f.filePath)}">${esc(f.title||f.filePath)}</div><div class="corrupted-item-reason">${esc(f.reason||'unknown reason')}</div><div class="corrupted-item-date">Detected: ${fmtDate(f.detectedAt)}</div></div><button class="btn btn-danger btn-sm" style="flex-shrink:0;padding:4px 10px;font-size:.75rem" onclick="removeCorrupted('${escAttr(f.id)}')">Remove</button></div>`).join('');
+    const items=corruptedData.map(f=>`<div class="corrupted-item"><div class="corrupted-item-body"><div class="corrupted-item-title" title="${escAttr(f.filePath)}">${esc(f.title||f.filePath)}</div><div class="corrupted-item-reason">${esc(f.reason||'unknown reason')}</div><div class="corrupted-item-date">Detected: ${fmtDate(f.detectedAt)}</div></div><div class="corrupted-item-actions"><button class="btn btn-secondary btn-sm" onclick="retryCorrupted('${escAttr(f.id)}',this)">Retry</button><button class="btn btn-danger btn-sm" onclick="removeCorrupted('${escAttr(f.id)}')">Remove</button></div></div>`).join('');
+    const retryBtn=`<button class="btn btn-secondary btn-sm" style="font-size:.75rem;padding:4px 12px" onclick="retryAllCorrupted(this)">Retry All</button>`;
     const clearBtn=`<button class="btn btn-danger btn-sm" style="font-size:.75rem;padding:4px 12px" onclick="clearAllCorrupted()">Clear All</button>`;
-    list=`<div class="corrupted-list">${items}</div><div style="margin-top:10px;display:flex;justify-content:flex-end">${clearBtn}</div>`;
+    list=`<div class="corrupted-list">${items}</div><div style="margin-top:10px;display:flex;justify-content:flex-end;gap:8px">${retryBtn}${clearBtn}</div>`;
   }
   return `<h3 style="font-size:1rem;font-weight:700;margin:20px 0 12px">Corrupted Files</h3><div class="corrupted-section"><div class="corrupted-section-title"><span>Files that failed during sprite generation</span>${badge}</div>${list}</div>`;
 }
@@ -1188,6 +1189,37 @@ function updateCorruptedSection(){
 }
 async function removeCorrupted(id){
   try{const r=await adminFetch('/api/corrupted/'+id,{method:'DELETE'});if(!r.ok)return;await fetchCorrupted();updateCorruptedSection();}catch{}
+}
+async function retryCorrupted(id,btn){
+  if(btn){btn.disabled=true;btn.textContent='Retrying...';}
+  try{
+    const r=await adminFetch('/api/corrupted/'+id+'/retry',{method:'POST'});
+    const data=await r.json().catch(()=>({}));
+    if(!r.ok)throw new Error(data.error||'Retry failed');
+    showToast(data.started?'Sprite retry queued.':'Retry will run after the current sprite queue finishes.','success');
+    await Promise.all([fetchCorrupted(),fetchSpriteProgress()]);
+    updateCorruptedSection();
+    updateSpriteSection();
+  }catch(e){
+    showToast(e.message||'Retry failed','error');
+    if(btn){btn.disabled=false;btn.textContent='Retry';}
+  }
+}
+async function retryAllCorrupted(btn){
+  if(!corruptedData||corruptedData.length===0)return;
+  if(btn){btn.disabled=true;btn.textContent='Retrying...';}
+  try{
+    const r=await adminFetch('/api/corrupted/retry-all',{method:'POST'});
+    const data=await r.json().catch(()=>({}));
+    if(!r.ok)throw new Error(data.error||'Retry failed');
+    showToast(`${data.retried||0} sprite ${data.retried===1?'retry':'retries'} queued.`,'success');
+    await Promise.all([fetchCorrupted(),fetchSpriteProgress()]);
+    updateCorruptedSection();
+    updateSpriteSection();
+  }catch(e){
+    showToast(e.message||'Retry failed','error');
+    if(btn){btn.disabled=false;btn.textContent='Retry All';}
+  }
 }
 async function clearAllCorrupted(){
   if(!corruptedData||corruptedData.length===0)return;
