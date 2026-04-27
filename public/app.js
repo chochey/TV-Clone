@@ -1013,8 +1013,8 @@ function renderShowDetail(showName){
     const epRows=eps.map(ep=>{
       const epNum=ep.epInfo?`E${String(ep.epInfo.episode).padStart(2,'0')}`:'';
       const prog=ep.progress.percent||0;
-      const epDel=currentRole==='admin'?`<button class="episode-delete-btn" onclick="event.stopPropagation();confirmDeleteMedia('${ep.id}','${esc(ep.title)}')" title="Delete episode">&#128465;</button>`:'';
-      return `<div class="episode-row" onclick='playMedia("${ep.id}")' onkeydown="activateWithKeyboard(event)" role="button" tabindex="0" aria-label="Play ${escAttr(ep.title)}"><div class="episode-num">${epNum}</div><div class="episode-info"><div class="episode-title">${esc(ep.title)}</div><div class="episode-file">${esc(ep.filename)}</div></div><div class="episode-progress"><div class="episode-progress-fill" style="width:${prog}%"></div></div>${ep.watched?'<div class="episode-watched">✓</div>':''}${epDel}</div>`;
+      const epDel=currentRole==='admin'?`<button class="episode-delete-btn" onclick="event.stopPropagation();confirmDeleteMedia('${ep.id}','${esc(ep.title)}')" title="Delete episode" aria-label="Delete ${escAttr(ep.title)}">&#128465;</button>`:'';
+      return `<div class="episode-row" onclick='openMediaDetail("${ep.id}")' onkeydown="activateWithKeyboard(event)" role="button" tabindex="0" aria-label="View details for ${escAttr(ep.title)}"><div class="episode-num">${epNum}</div><div class="episode-info"><div class="episode-title">${esc(ep.title)}</div><div class="episode-file">${esc(ep.filename)}</div></div><button class="episode-play-btn" onclick="event.stopPropagation();playMedia('${ep.id}')" aria-label="Play ${escAttr(ep.title)}"><span class="play-icon">&#9654;</span><span>Play</span></button><div class="episode-progress"><div class="episode-progress-fill" style="width:${prog}%"></div></div>${ep.watched?'<div class="episode-watched">✓</div>':''}${epDel}</div>`;
     }).join('');
     return `<div class="season-section"><div class="season-title">${sNum==='0'?'Episodes':`Season ${sNum}`} (${eps.length} episodes)</div><div class="episode-list">${epRows}</div></div>`;
   }).join('');

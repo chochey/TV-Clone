@@ -103,6 +103,15 @@ test.describe('Library Browsing', () => {
     await expect(page.locator('.show-detail')).toBeVisible({ timeout: 5000 });
     const episodes = page.locator('.episode-row');
     expect(await episodes.count()).toBeGreaterThan(0);
+
+    await episodes.first().click();
+    await expect(page.locator('#mediaDetailOverlay')).toBeVisible({ timeout: 5000 });
+    await page.locator('.detail-close').click();
+    await expect(page.locator('#mediaDetailOverlay')).toHaveCount(0, { timeout: 5000 });
+
+    await episodes.first().hover();
+    await episodes.first().locator('.episode-play-btn').click();
+    await expect(page.locator('#playerModal')).toHaveClass(/active/, { timeout: 10000 });
   });
 
   test('episode detail drawer can jump to all show episodes', async ({ page }) => {

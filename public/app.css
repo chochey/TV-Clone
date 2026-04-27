@@ -198,6 +198,10 @@ button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible,.c
 .episode-info{flex:1;min-width:0}
 .episode-title{font-size:.88rem;font-weight:600}
 .episode-file{font-size:.72rem;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.episode-play-btn{display:flex;align-items:center;gap:8px;border-radius:999px;padding:5px 10px;background:rgba(255,255,255,.08);border:1px solid rgba(148,163,184,.14);color:var(--text-primary);font-size:.72rem;font-weight:800;text-transform:uppercase;letter-spacing:.08em;opacity:0;transform:translateX(4px);transition:opacity .18s ease,transform .18s ease,background .18s ease;flex-shrink:0}
+.episode-row:hover .episode-play-btn,.episode-row:focus-within .episode-play-btn{opacity:1;transform:translateX(0)}
+.episode-play-btn:hover{background:rgba(56,189,248,.16)}
+.episode-play-btn .play-icon{width:24px;height:24px;font-size:.68rem;box-shadow:none}
 .episode-progress{width:80px;height:4px;border-radius:2px;background:rgba(255,255,255,.1);flex-shrink:0}
 .episode-progress-fill{height:100%;border-radius:2px;background:var(--accent)}
 .episode-watched{color:var(--success);font-size:.75rem;font-weight:600;flex-shrink:0}
@@ -697,6 +701,7 @@ video::cue{background:rgba(0,0,0,.8);color:#fff;font-size:clamp(1.6rem, 3.5vw, 2
 .show-detail-poster{border-radius:22px;box-shadow:0 24px 70px rgba(0,0,0,.42)}
 .episode-row{border:1px solid rgba(148,163,184,.12);border-radius:16px;background:rgba(255,255,255,.045)}
 .episode-row:hover{background:rgba(56,189,248,.1)}
+@media (hover:none){.episode-play-btn{opacity:1;transform:none}.episode-play-btn span:last-child{display:none}}
 
 .media-detail-overlay{position:fixed;inset:0;z-index:2500;display:flex;justify-content:flex-end;background:rgba(0,0,0,.62);backdrop-filter:blur(10px);opacity:0;pointer-events:none;transition:opacity .18s ease}
 .media-detail-overlay.visible{opacity:1;pointer-events:auto}
