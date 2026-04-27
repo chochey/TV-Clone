@@ -570,6 +570,21 @@ function setFilter(f){
   renderView();
 }
 
+function openHeroStat(target){
+  const topViews=['home','movies','shows','continue'];
+  if(target==='unwatched'){
+    watchFilter='unwatched';
+    updateFilterButtons();
+    nav('movies',document.querySelector('[data-view="movies"]'));
+    return;
+  }
+  if(topViews.includes(target)){
+    if(target==='movies'||target==='shows')watchFilter='all';
+    updateFilterButtons();
+    nav(target,document.querySelector(`[data-view="${target}"]`));
+  }
+}
+
 // ── Home ───────────────────────────────────────────────────────────────
 function mediaTypeLabel(item){
   if(item.type==='movie')return 'Movie';
@@ -620,11 +635,11 @@ function renderHomeDashboard(extraClass=''){
   const inProgress=library.filter(m=>m.progress?.percent>0&&!m.watched).length;
   const unwatched=library.filter(m=>!m.watched).length;
   return `<div class="home-dashboard ${extraClass}" aria-label="Library snapshot">
-    <div class="home-stat"><span>${library.length}</span><small>Total titles</small></div>
-    <div class="home-stat"><span>${movies}</span><small>Movies</small></div>
-    <div class="home-stat"><span>${shows}</span><small>Shows</small></div>
-    <div class="home-stat accent"><span>${inProgress}</span><small>In progress</small></div>
-    <div class="home-stat cyan"><span>${unwatched}</span><small>Unwatched</small></div>
+    <button class="home-stat" onclick="openHeroStat('home')" aria-label="Show home library overview"><span>${library.length}</span><small>Total titles</small></button>
+    <button class="home-stat" onclick="openHeroStat('movies')" aria-label="Open movies"><span>${movies}</span><small>Movies</small></button>
+    <button class="home-stat" onclick="openHeroStat('shows')" aria-label="Open TV shows"><span>${shows}</span><small>Shows</small></button>
+    <button class="home-stat accent" onclick="openHeroStat('continue')" aria-label="Open in-progress titles"><span>${inProgress}</span><small>In progress</small></button>
+    <button class="home-stat cyan" onclick="openHeroStat('unwatched')" aria-label="Open unwatched movies"><span>${unwatched}</span><small>Unwatched</small></button>
   </div>`;
 }
 

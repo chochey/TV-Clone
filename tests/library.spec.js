@@ -14,6 +14,28 @@ test.describe('Library Browsing', () => {
     await expect(page.locator('.carousel .card').first()).toBeVisible();
   });
 
+  test('home stats navigate to matching library views', async ({ page }) => {
+    await loginAsUser(page);
+    await page.locator('.hero-dashboard .home-stat', { hasText: 'Movies' }).click();
+    await expect(page.locator('.section-title')).toContainText('Movies', { timeout: 5000 });
+    await expect(page.locator('.nav-item[data-view="movies"]')).toHaveClass(/active/);
+
+    await navigateTo(page, 'Home');
+    await page.locator('.hero-dashboard .home-stat', { hasText: 'Shows' }).click();
+    await expect(page.locator('.section-title')).toContainText('TV Shows', { timeout: 5000 });
+    await expect(page.locator('.nav-item[data-view="shows"]')).toHaveClass(/active/);
+
+    await navigateTo(page, 'Home');
+    await page.locator('.hero-dashboard .home-stat', { hasText: 'In progress' }).click();
+    await expect(page.locator('.section-title, .empty-title').first()).toContainText(/Continue Watching|Nothing in Progress/, { timeout: 5000 });
+    await expect(page.locator('.nav-item[data-view="home"]')).not.toHaveClass(/active/);
+
+    await navigateTo(page, 'Home');
+    await page.locator('.hero-dashboard .home-stat', { hasText: 'Unwatched' }).click();
+    await expect(page.locator('.nav-item[data-view="movies"]')).toHaveClass(/active/);
+    await expect(page.locator('#filterUnwatchedBtn')).toHaveClass(/active/);
+  });
+
   test('movies view shows movie cards', async ({ page }) => {
     await loginAsUser(page);
     await navigateTo(page, 'Movies');
