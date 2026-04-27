@@ -1,5 +1,5 @@
 const { test, expect } = require('@playwright/test');
-const { loginAsUser, navigateTo, showControls } = require('./helpers');
+const { loginAsUser, navigateTo, playMediaCard, showControls } = require('./helpers');
 
 // Find the first movie with subtitles to use across tests
 async function findSubtitleMovie(page) {
@@ -38,9 +38,7 @@ test.describe('Subtitle Feature', () => {
     }, movie.title.slice(0, 20));
     await page.waitForTimeout(1500);
 
-    await page.locator('.card', { hasText: movie.title.slice(0, 15) }).first().click();
-    await expect(page.locator('#playerModal')).toHaveClass(/active/, { timeout: 10000 });
-    await page.waitForTimeout(3000);
+    await playMediaCard(page, movie.title.slice(0, 15));
 
     await showControls(page);
     await page.locator('#subBtn').click();
@@ -64,9 +62,7 @@ test.describe('Subtitle Feature', () => {
     }, movie.title.slice(0, 20));
     await page.waitForTimeout(1500);
 
-    await page.locator('.card', { hasText: movie.title.slice(0, 15) }).first().click();
-    await expect(page.locator('#playerModal')).toHaveClass(/active/, { timeout: 10000 });
-    await page.waitForTimeout(3000);
+    await playMediaCard(page, movie.title.slice(0, 15));
 
     await showControls(page);
     await page.locator('#subBtn').click();
@@ -89,9 +85,7 @@ test.describe('Subtitle Feature', () => {
     }, movie.title.slice(0, 20));
     await page.waitForTimeout(1500);
 
-    await page.locator('.card', { hasText: movie.title.slice(0, 15) }).first().click();
-    await expect(page.locator('#playerModal')).toHaveClass(/active/, { timeout: 10000 });
-    await page.waitForTimeout(3000);
+    await playMediaCard(page, movie.title.slice(0, 15));
 
     await page.evaluate(() => { document.querySelector('video').currentTime = 120; });
     await page.waitForTimeout(2000);
@@ -125,9 +119,7 @@ test.describe('Subtitle Feature', () => {
     }, movie.title.slice(0, 20));
     await page.waitForTimeout(1500);
 
-    await page.locator('.card', { hasText: movie.title.slice(0, 15) }).first().click();
-    await expect(page.locator('#playerModal')).toHaveClass(/active/, { timeout: 10000 });
-    await page.waitForTimeout(3000);
+    await playMediaCard(page, movie.title.slice(0, 15));
 
     await showControls(page);
     await page.locator('#subBtn').click();

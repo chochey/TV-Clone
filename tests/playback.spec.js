@@ -1,13 +1,12 @@
 const { test, expect } = require('@playwright/test');
-const { loginAsUser, navigateTo, searchFor, showControls, closePlayer } = require('./helpers');
+const { loginAsUser, navigateTo, searchFor, playMediaCard, showControls, closePlayer } = require('./helpers');
 
 test.describe('Video Playback', () => {
 
-  test('clicking movie card opens player', async ({ page }) => {
+  test('clicking movie card play button opens player', async ({ page }) => {
     await loginAsUser(page);
     await navigateTo(page, 'Movies');
-    await page.locator('.card').first().click();
-    await expect(page.locator('#playerModal')).toHaveClass(/active/, { timeout: 10000 });
+    await playMediaCard(page);
     await expect(page.locator('#playerTitle')).not.toBeEmpty();
   });
 
@@ -15,9 +14,7 @@ test.describe('Video Playback', () => {
     await loginAsUser(page);
     await navigateTo(page, 'Movies');
     await searchFor(page, 'Ghosted');
-    await page.locator('.card', { hasText: 'Ghosted' }).first().click();
-    await expect(page.locator('#playerModal')).toHaveClass(/active/, { timeout: 10000 });
-    await page.waitForTimeout(3000);
+    await playMediaCard(page, 'Ghosted');
 
     const videoInfo = await page.evaluate(() => {
       const v = document.querySelector('video');
@@ -31,9 +28,7 @@ test.describe('Video Playback', () => {
   test('player controls are visible on hover', async ({ page }) => {
     await loginAsUser(page);
     await navigateTo(page, 'Movies');
-    await page.locator('.card').first().click();
-    await expect(page.locator('#playerModal')).toHaveClass(/active/, { timeout: 10000 });
-    await page.waitForTimeout(2000);
+    await playMediaCard(page);
     await showControls(page);
     await expect(page.locator('.player-controls')).toBeVisible();
     await expect(page.locator('.player-top-bar')).toBeVisible();
@@ -42,9 +37,7 @@ test.describe('Video Playback', () => {
   test('play/pause toggle works', async ({ page }) => {
     await loginAsUser(page);
     await navigateTo(page, 'Movies');
-    await page.locator('.card').first().click();
-    await expect(page.locator('#playerModal')).toHaveClass(/active/, { timeout: 10000 });
-    await page.waitForTimeout(3000);
+    await playMediaCard(page);
 
     // Video should be playing
     const isPlaying = await page.evaluate(() => !document.querySelector('video').paused);
@@ -66,9 +59,7 @@ test.describe('Video Playback', () => {
   test('seek with arrow keys works', async ({ page }) => {
     await loginAsUser(page);
     await navigateTo(page, 'Movies');
-    await page.locator('.card').first().click();
-    await expect(page.locator('#playerModal')).toHaveClass(/active/, { timeout: 10000 });
-    await page.waitForTimeout(3000);
+    await playMediaCard(page);
 
     const timeBefore = await page.evaluate(() => document.querySelector('video').currentTime);
     await page.keyboard.press('ArrowRight');
@@ -80,9 +71,7 @@ test.describe('Video Playback', () => {
   test('volume control works', async ({ page }) => {
     await loginAsUser(page);
     await navigateTo(page, 'Movies');
-    await page.locator('.card').first().click();
-    await expect(page.locator('#playerModal')).toHaveClass(/active/, { timeout: 10000 });
-    await page.waitForTimeout(2000);
+    await playMediaCard(page);
 
     // Press M to mute
     await page.keyboard.press('m');
@@ -100,9 +89,7 @@ test.describe('Video Playback', () => {
   test('audio boost control raises gain when needed', async ({ page }) => {
     await loginAsUser(page);
     await navigateTo(page, 'Movies');
-    await page.locator('.card').first().click();
-    await expect(page.locator('#playerModal')).toHaveClass(/active/, { timeout: 10000 });
-    await page.waitForTimeout(2000);
+    await playMediaCard(page);
     await showControls(page);
 
     await page.locator('#boostBtn').click();
@@ -126,9 +113,7 @@ test.describe('Video Playback', () => {
   test('close player returns to library', async ({ page }) => {
     await loginAsUser(page);
     await navigateTo(page, 'Movies');
-    await page.locator('.card').first().click();
-    await expect(page.locator('#playerModal')).toHaveClass(/active/, { timeout: 10000 });
-    await page.waitForTimeout(2000);
+    await playMediaCard(page);
 
     await page.keyboard.press('Escape');
     await page.waitForTimeout(1000);
@@ -138,9 +123,7 @@ test.describe('Video Playback', () => {
   test('speed menu shows all options', async ({ page }) => {
     await loginAsUser(page);
     await navigateTo(page, 'Movies');
-    await page.locator('.card').first().click();
-    await expect(page.locator('#playerModal')).toHaveClass(/active/, { timeout: 10000 });
-    await page.waitForTimeout(2000);
+    await playMediaCard(page);
     await showControls(page);
 
     await page.locator('#speedBtn').click();
@@ -154,9 +137,8 @@ test.describe('Video Playback', () => {
   test('time display updates during playback', async ({ page }) => {
     await loginAsUser(page);
     await navigateTo(page, 'Movies');
-    await page.locator('.card').first().click();
-    await expect(page.locator('#playerModal')).toHaveClass(/active/, { timeout: 10000 });
-    await page.waitForTimeout(4000);
+    await playMediaCard(page);
+    await page.waitForTimeout(1000);
     await showControls(page);
 
     const timeText = await page.locator('.time-display').textContent();

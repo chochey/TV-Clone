@@ -101,9 +101,10 @@ async function searchFor(page, query) {
   await page.waitForTimeout(1500);
 }
 
-// Play a media item by clicking its card
+// Play a media item from the card's in-poster play button.
 async function playMediaCard(page, title) {
-  await page.locator('.card', { hasText: title }).first().click();
+  const card = title ? page.locator('.card', { hasText: title }).first() : page.locator('.card').first();
+  await card.locator('.card-play-btn').click();
   await expect(page.locator('#playerModal')).toHaveClass(/active/, { timeout: 10000 });
   await page.waitForTimeout(3000);
 }

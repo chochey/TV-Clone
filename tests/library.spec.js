@@ -83,6 +83,24 @@ test.describe('Library Browsing', () => {
     expect(await episodes.count()).toBeGreaterThan(0);
   });
 
+  test('episode detail drawer can jump to all show episodes', async ({ page }) => {
+    await loginAsUser(page);
+    const episode = await page.evaluate(async () => {
+      const items = await (await fetch('/api/library', { credentials: 'include' })).json();
+      const item = Array.isArray(items) ? items.find(i => i.showName && i.type === 'show') : null;
+      return item ? { id: item.id, showName: item.showName } : null;
+    });
+    expect(episode).not.toBeNull();
+
+    await page.evaluate(id => window.openMediaDetail(id), episode.id);
+    await expect(page.locator('#mediaDetailOverlay')).toBeVisible({ timeout: 5000 });
+    await page.locator('.detail-actions .btn', { hasText: 'All Episodes' }).click();
+
+    await expect(page.locator('.show-detail')).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('.show-detail h1')).toHaveText(episode.showName);
+    expect(await page.locator('.episode-row').count()).toBeGreaterThan(0);
+  });
+
   test('library API returns items with expected fields', async ({ page }) => {
     await loginAsUser(page);
     const result = await apiCall(page, '/api/library');

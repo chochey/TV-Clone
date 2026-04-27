@@ -48,21 +48,21 @@
     <div class="sidebar-header"><div class="sidebar-logo">&#9654;</div><span class="sidebar-brand">Chochey's Media</span></div>
     <nav class="sidebar-nav">
       <div class="nav-label">Browse</div>
-      <button class="nav-item active" data-view="home" onclick="nav('home',this)"><span class="nav-icon">&#127968;</span> Home</button>
-      <button class="nav-item" data-view="movies" onclick="nav('movies',this)"><span class="nav-icon">&#127916;</span> Movies</button>
-      <button class="nav-item" data-view="shows" onclick="nav('shows',this)"><span class="nav-icon">&#128250;</span> TV Shows</button>
-      <button class="nav-item" data-view="queue" onclick="nav('queue',this)"><span class="nav-icon">&#128203;</span> Up Next <span class="nav-badge" id="queueBadge" style="display:none">0</span></button>
-      <button class="nav-item" data-view="history" onclick="nav('history',this)"><span class="nav-icon">&#128337;</span> History</button>
+      <button class="nav-item active" data-view="home" onclick="nav('home',this)"><span class="nav-icon">⌂</span> Home</button>
+      <button class="nav-item" data-view="movies" onclick="nav('movies',this)"><span class="nav-icon">▣</span> Movies</button>
+      <button class="nav-item" data-view="shows" onclick="nav('shows',this)"><span class="nav-icon">▤</span> TV Shows</button>
+      <button class="nav-item" data-view="queue" onclick="nav('queue',this)"><span class="nav-icon">≡</span> Up Next <span class="nav-badge" id="queueBadge" style="display:none">0</span></button>
+      <button class="nav-item" data-view="history" onclick="nav('history',this)"><span class="nav-icon">◷</span> History</button>
       <div id="customNavItems"></div>
       <div id="systemSection" class="system-section">
       <div class="nav-label">System</div>
-      <button class="nav-item" id="navSystem" data-view="system" onclick="nav('system',this)"><span class="nav-icon">&#128200;</span> Dashboard</button>
+      <button class="nav-item" id="navSystem" data-view="system" onclick="nav('system',this)"><span class="nav-icon">▥</span> Dashboard</button>
       <button class="nav-item" id="navDownloads" data-view="downloads" onclick="nav('downloads',this)"><span class="nav-icon">&#11015;</span> Downloads</button>
-      <button class="nav-item" id="navOrgLogs" data-view="orglogs" onclick="nav('orglogs',this)"><span class="nav-icon">&#128194;</span> Organizer Logs</button>
-      <button class="nav-item" id="navLogs" data-view="logs" onclick="nav('logs',this)"><span class="nav-icon">&#128203;</span> Logs</button>
-      <button class="nav-item" id="navSettings" data-view="settings" onclick="nav('settings',this)"><span class="nav-icon">&#9881;&#65039;</span> Media Folders</button>
-      <button class="nav-item" id="navScan" onclick="scanLibrary(event)"><span class="nav-icon">&#128269;</span> Scan Library</button>
-      <button class="nav-item" id="navRestart" onclick="restartServer()"><span class="nav-icon">&#128260;</span> Restart Server</button>
+      <button class="nav-item" id="navOrgLogs" data-view="orglogs" onclick="nav('orglogs',this)"><span class="nav-icon">▱</span> Organizer Logs</button>
+      <button class="nav-item" id="navLogs" data-view="logs" onclick="nav('logs',this)"><span class="nav-icon">☰</span> Logs</button>
+      <button class="nav-item" id="navSettings" data-view="settings" onclick="nav('settings',this)"><span class="nav-icon">⚙</span> Media Folders</button>
+      <button class="nav-item" id="navScan" onclick="scanLibrary(event)"><span class="nav-icon">⌕</span> Scan Library</button>
+      <button class="nav-item" id="navRestart" onclick="restartServer()"><span class="nav-icon">↻</span> Restart Server</button>
       </div>
     </nav>
     <div class="sidebar-profile" onclick="switchProfile()" role="button" tabindex="0" onkeydown="activateWithKeyboard(event)" aria-label="Sign out">
@@ -84,7 +84,7 @@
           <option value="year-asc">Year (Old)</option>
           <option value="recent">Recently Added</option>
         </select>
-        <button class="btn-ghost top-bar-shuffle" onclick="playRandom()" title="Random pick" aria-label="Play a random unwatched title">&#127922; Shuffle</button>
+        <button class="btn-ghost top-bar-shuffle" onclick="playRandom()" title="Random pick" aria-label="Play a random unwatched title">↯ Shuffle</button>
         <span class="lib-count" id="libCount"></span>
       </div>
       <div class="top-bar-filters" role="group" aria-label="Watch filters">

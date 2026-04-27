@@ -1,13 +1,12 @@
 const { test, expect } = require('@playwright/test');
-const { loginAsUser, navigateTo, showControls } = require('./helpers');
+const { loginAsUser, navigateTo, playMediaCard, showControls } = require('./helpers');
 
 test.describe('Progress & Continue Watching', () => {
 
   test('progress saves during playback', async ({ page }) => {
     await loginAsUser(page);
     await navigateTo(page, 'Movies');
-    await page.locator('.card').first().click();
-    await expect(page.locator('#playerModal')).toHaveClass(/active/, { timeout: 10000 });
+    await playMediaCard(page);
 
     // Seek forward and wait for progress save (interval is 5s)
     await page.evaluate(() => { document.querySelector('video').currentTime = 60; });
@@ -26,8 +25,7 @@ test.describe('Progress & Continue Watching', () => {
     await loginAsUser(page);
     // Play something to create in-progress state
     await navigateTo(page, 'Movies');
-    await page.locator('.card').first().click();
-    await expect(page.locator('#playerModal')).toHaveClass(/active/, { timeout: 10000 });
+    await playMediaCard(page);
     await page.evaluate(() => { document.querySelector('video').currentTime = 30; });
     await page.waitForTimeout(7000);
     await page.keyboard.press('Escape');
@@ -46,8 +44,7 @@ test.describe('Progress & Continue Watching', () => {
   test('progress bar shows on cards with progress', async ({ page }) => {
     await loginAsUser(page);
     await navigateTo(page, 'Movies');
-    await page.locator('.card').first().click();
-    await expect(page.locator('#playerModal')).toHaveClass(/active/, { timeout: 10000 });
+    await playMediaCard(page);
     await page.evaluate(() => { document.querySelector('video').currentTime = 30; });
     await page.waitForTimeout(7000);
     await page.keyboard.press('Escape');

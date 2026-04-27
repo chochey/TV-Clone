@@ -155,7 +155,7 @@ async function doLogin(){
   }
 }
 
-const AVATAR_COLORS=['#00a4dc','#e5484d','#30a46c','#aa64ff','#f5a623','#e879f9','#38bdf8','#fb923c'];
+const AVATAR_COLORS=['#38bdf8','#22d3ee','#6366f1','#a78bfa','#14b8a6','#4ade80','#f43f5e','#64748b'];
 let _selectedAvatar=AVATAR_COLORS[0];
 
 function closeModal(){
@@ -387,8 +387,8 @@ function customTypeLabel(type){
 }
 
 function customTypeIcon(type){
-  const icons={anime:'🎌',documentary:'🎬',documentaries:'🎬',sports:'⚽',music:'🎵',kids:'🧸',reality:'📺',standup:'🎤',comedy:'😂'};
-  return icons[type]||'📁';
+  const icons={anime:'あ',documentary:'▣',documentaries:'▣',sports:'●',music:'♪',kids:'☆',reality:'▤',standup:'◌',comedy:'◡'};
+  return icons[type]||'▱';
 }
 
 function updateCustomNav(){
@@ -531,8 +531,9 @@ function renderCustomTypeView(typeName){
     if(!showList.length)return `<div class="empty-state"><div class="empty-icon">${customTypeIcon(typeName)}</div><div class="empty-title">No ${label} Found</div></div>`;
     const cards=showList.map(s=>{
       const ep=s.items.length;
+      const first=firstEpisode(s.items);
       const poster=s.poster?`<img src="${s.poster}" alt="${esc(s.name)} poster" loading="lazy">`:`<div class="card-placeholder">${customTypeIcon(typeName)}</div>`;
-      return `<div class="card" onclick="openShow('${escAttr(s.name)}','${escAttr(typeName)}')" onkeydown="activateWithKeyboard(event)" role="button" tabindex="0" aria-label="Open ${escAttr(s.name)}"><div class="card-poster">${poster}<div class="card-overlay"><div class="play-icon">&#9654;</div></div></div><div class="card-info"><div class="card-title">${esc(s.name)}</div><div class="card-year">${ep} episode${ep>1?'s':''}</div><span class="card-type show">${label}</span></div></div>`;
+      return `<div class="card media-card" onclick="openShow('${escAttr(s.name)}','${escAttr(typeName)}')" onkeydown="activateWithKeyboard(event)" role="button" tabindex="0" aria-label="Open ${escAttr(s.name)}"><div class="card-poster">${poster}<div class="card-overlay"><button class="card-play-btn" onclick="event.stopPropagation();playMedia('${first.id}')" aria-label="Play ${escAttr(s.name)}"><span class="play-icon">&#9654;</span><span>Play</span></button></div></div><div class="card-info"><div class="card-title">${esc(s.name)}</div><div class="card-year">${ep} episode${ep>1?'s':''}</div><span class="card-type show">${label}</span></div></div>`;
     });
     return `<div class="section"><div class="section-header"><h2 class="section-title">${label} (${showList.length})</h2></div><div class="grid">${cards.join('')}</div></div>`;
   }
@@ -613,12 +614,12 @@ function getSmartPicks(){
     .slice(0,18);
 }
 
-function renderHomeDashboard(){
+function renderHomeDashboard(extraClass=''){
   const movies=library.filter(m=>m.type==='movie').length;
   const shows=new Set(library.filter(m=>m.type==='show').map(m=>m.showName||m.title)).size;
   const inProgress=library.filter(m=>m.progress?.percent>0&&!m.watched).length;
   const unwatched=library.filter(m=>!m.watched).length;
-  return `<div class="home-dashboard" aria-label="Library snapshot">
+  return `<div class="home-dashboard ${extraClass}" aria-label="Library snapshot">
     <div class="home-stat"><span>${library.length}</span><small>Total titles</small></div>
     <div class="home-stat"><span>${movies}</span><small>Movies</small></div>
     <div class="home-stat"><span>${shows}</span><small>Shows</small></div>
@@ -653,7 +654,7 @@ function renderHome(){
   const nextEpisodes=getNextEpisodes();
   const smartPicks=getSmartPicks();
   const hero=cw.length>0?cw[0]:library[Math.floor(Math.random()*library.length)];
-  let h=`<div class="home-shell">${renderHero(hero)}${renderHomeDashboard()}`;
+  let h=`<div class="home-shell">${renderHero(hero)}`;
   if(cw.length>0)h+=carouselWithDismiss('Continue Watching',cw,'continueWatching');
   if(nextEpisodes.length>0)h+=carousel('Next Episodes',nextEpisodes);
   if(recentlyAdded.length>0)h+=carouselWithDismiss('Recently Added',recentlyAdded,'recentlyAdded');
@@ -675,7 +676,7 @@ function renderHero(item){
   const progress=item.progress.percent>0?`<div class="hero-progress"><div class="hero-progress-fill" style="width:${item.progress.percent}%"></div></div>`:'';
   const deleteBtn=currentRole==='admin'?`<button class="btn-icon-ghost" data-title="${escAttr(item.title)}" onclick='event.stopPropagation();confirmDeleteMedia("${item.id}",this.dataset.title)' title="Delete from server" aria-label="Delete from server">&#128465;</button>`:'';
   const poster=posterSrc?`<img src="${escAttr(posterSrc)}" alt="${escAttr(item.title)} poster" loading="lazy">`:`<div class="card-placeholder">&#127916;</div>`;
-  return `<div class="hero premium-hero"><div class="hero-bg" style="${bg}"></div><div class="hero-content"><span class="hero-tag">${mediaTypeLabel(item)}</span><h1 class="hero-title">${esc(item.title)}</h1><p class="hero-meta">${esc(mediaMetaLine(item))}</p>${plot}<div class="hero-actions"><button class="btn btn-primary" onclick='playMedia("${item.id}")'>&#9654; ${rt}</button><button class="btn btn-secondary" onclick='openMediaDetail("${item.id}")'>&#9432; Details</button><button class="btn btn-secondary" onclick='addToQueue("${item.id}")'>+ Queue</button>${deleteBtn}</div>${progress}</div><div class="hero-poster">${poster}</div></div>`;
+  return `<div class="hero premium-hero"><div class="hero-bg" style="${bg}"></div><div class="hero-content"><span class="hero-tag">${mediaTypeLabel(item)}</span><h1 class="hero-title">${esc(item.title)}</h1><p class="hero-meta">${esc(mediaMetaLine(item))}</p>${plot}<div class="hero-actions"><button class="btn btn-primary" onclick='playMedia("${item.id}")'>&#9654; ${rt}</button><button class="btn btn-secondary" onclick='openMediaDetail("${item.id}")'>&#9432; Details</button><button class="btn btn-secondary" onclick='addToQueue("${item.id}")'>+ Queue</button>${deleteBtn}</div>${progress}</div><div class="hero-poster">${poster}</div>${renderHomeDashboard('hero-dashboard')}</div>`;
 }
 
 // ── Cards ──────────────────────────────────────────────────────────────
@@ -688,7 +689,7 @@ function card(item){
   const genres=item.genre?`<div class="card-genres">${esc(item.genre)}</div>`:item.genres&&item.genres.length?`<div class="genre-tags">${item.genres.slice(0,3).map(g=>`<span class="genre-tag">${esc(g)}</span>`).join('')}</div>`:'';
   const typeLabel=mediaTypeLabel(item);
   const delBtn=currentRole==='admin'?`<button class="card-action-btn card-delete-btn" data-title="${escAttr(item.title)}" onclick="event.stopPropagation();confirmDeleteMedia('${item.id}',this.dataset.title)" title="Delete from server" aria-label="Delete ${escAttr(item.title)} from server">&#128465;</button>`:'';
-  return `<div class="card media-card" data-id="${item.id}" onclick='playMedia("${item.id}")' onkeydown="activateWithKeyboard(event)" role="button" tabindex="0" aria-label="Play ${escAttr(item.title)}"><div class="card-poster">${poster}${prog}${watched}${ratingBadge}<div class="card-actions"><button class="card-action-btn card-info-btn" onclick="event.stopPropagation();openMediaDetail('${item.id}')" title="Details" aria-label="View details for ${escAttr(item.title)}">&#9432;</button><button class="card-action-btn" onclick="event.stopPropagation();toggleWatched('${item.id}',${!item.watched})" title="${item.watched?'Mark unwatched':'Mark watched'}" aria-label="${item.watched?'Mark as unwatched':'Mark as watched'}">&#128065;</button><button class="card-action-btn" onclick="event.stopPropagation();addToQueue('${item.id}')" title="Add to queue" aria-label="Add ${escAttr(item.title)} to queue">+Q</button>${delBtn}</div><div class="card-overlay"><div class="play-icon">&#9654;</div><span>Play</span></div></div><div class="card-info"><div class="card-title">${esc(item.title)}</div><div class="card-meta-line">${esc(mediaMetaLine(item))}</div><span class="card-type ${item.type}">${typeLabel}</span>${genres}</div></div>`;
+  return `<div class="card media-card" data-id="${item.id}" onclick='openMediaDetail("${item.id}")' onkeydown="activateWithKeyboard(event)" role="button" tabindex="0" aria-label="View details for ${escAttr(item.title)}"><div class="card-poster">${poster}${prog}${watched}${ratingBadge}<div class="card-actions"><button class="card-action-btn" onclick="event.stopPropagation();toggleWatched('${item.id}',${!item.watched})" title="${item.watched?'Mark unwatched':'Mark watched'}" aria-label="${item.watched?'Mark as unwatched':'Mark as watched'}">&#128065;</button><button class="card-action-btn" onclick="event.stopPropagation();addToQueue('${item.id}')" title="Add to queue" aria-label="Add ${escAttr(item.title)} to queue">+Q</button>${delBtn}</div><div class="card-overlay"><button class="card-play-btn" onclick="event.stopPropagation();playMedia('${item.id}')" aria-label="Play ${escAttr(item.title)}"><span class="play-icon">&#9654;</span><span>Play</span></button></div></div><div class="card-info"><div class="card-title">${esc(item.title)}</div><div class="card-meta-line">${esc(mediaMetaLine(item))}</div><span class="card-type ${item.type}">${typeLabel}</span>${genres}</div></div>`;
 }
 
 function carousel(title,items){
@@ -706,7 +707,7 @@ function cardDismissable(item,section){
   const typeLabel=mediaTypeLabel(item);
   const dismissBtn=`<button class="card-dismiss-btn" onclick="event.stopPropagation();dismissItem('${item.id}','${section}',this)" title="Hide from this list" aria-label="Hide ${escAttr(item.title)} from this list">&#10005;</button>`;
   const delBtn=currentRole==='admin'?`<button class="card-action-btn card-delete-btn" data-title="${escAttr(item.title)}" onclick="event.stopPropagation();confirmDeleteMedia('${item.id}',this.dataset.title)" title="Delete from server" aria-label="Delete ${escAttr(item.title)} from server">&#128465;</button>`:'';
-  return `<div class="card media-card" data-id="${item.id}" onclick='playMedia("${item.id}")' onkeydown="activateWithKeyboard(event)" role="button" tabindex="0" aria-label="Play ${escAttr(item.title)}"><div class="card-poster">${poster}${prog}${watched}${ratingBadge}${dismissBtn}<div class="card-actions"><button class="card-action-btn card-info-btn" onclick="event.stopPropagation();openMediaDetail('${item.id}')" title="Details" aria-label="View details for ${escAttr(item.title)}">&#9432;</button><button class="card-action-btn" onclick="event.stopPropagation();toggleWatched('${item.id}',${!item.watched})" title="${item.watched?'Mark unwatched':'Mark watched'}" aria-label="${item.watched?'Mark as unwatched':'Mark as watched'}">&#128065;</button><button class="card-action-btn" onclick="event.stopPropagation();addToQueue('${item.id}')" title="Add to queue" aria-label="Add ${escAttr(item.title)} to queue">+Q</button>${delBtn}</div><div class="card-overlay"><div class="play-icon">&#9654;</div><span>Play</span></div></div><div class="card-info"><div class="card-title">${esc(item.title)}</div><div class="card-meta-line">${esc(mediaMetaLine(item))}</div><span class="card-type ${item.type}">${typeLabel}</span>${genres}</div></div>`;
+  return `<div class="card media-card" data-id="${item.id}" onclick='openMediaDetail("${item.id}")' onkeydown="activateWithKeyboard(event)" role="button" tabindex="0" aria-label="View details for ${escAttr(item.title)}"><div class="card-poster">${poster}${prog}${watched}${ratingBadge}${dismissBtn}<div class="card-actions"><button class="card-action-btn" onclick="event.stopPropagation();toggleWatched('${item.id}',${!item.watched})" title="${item.watched?'Mark unwatched':'Mark watched'}" aria-label="${item.watched?'Mark as unwatched':'Mark as watched'}">&#128065;</button><button class="card-action-btn" onclick="event.stopPropagation();addToQueue('${item.id}')" title="Add to queue" aria-label="Add ${escAttr(item.title)} to queue">+Q</button>${delBtn}</div><div class="card-overlay"><button class="card-play-btn" onclick="event.stopPropagation();playMedia('${item.id}')" aria-label="Play ${escAttr(item.title)}"><span class="play-icon">&#9654;</span><span>Play</span></button></div></div><div class="card-info"><div class="card-title">${esc(item.title)}</div><div class="card-meta-line">${esc(mediaMetaLine(item))}</div><span class="card-type ${item.type}">${typeLabel}</span>${genres}</div></div>`;
 }
 
 function carouselWithDismiss(title,items,section){
@@ -722,6 +723,7 @@ function openMediaDetail(id){
   const poster=posterSrc?`<img src="${escAttr(posterSrc)}" alt="${escAttr(item.title)} poster">`:`<div class="card-placeholder">&#127916;</div>`;
   const plot=item.plot||'No synopsis yet. Press play and let the media do the convincing.';
   const progress=item.progress?.percent>0?`<div class="detail-progress"><div class="detail-progress-fill" style="width:${item.progress.percent}%"></div></div><div class="detail-progress-label">${item.progress.percent}% watched</div>`:'';
+  const showBtn=item.showName?`<button class="btn btn-secondary" onclick='openShowFromEpisode("${item.id}")'>All Episodes</button>`:'';
   const deleteBtn=currentRole==='admin'?`<button class="btn btn-danger-outline" data-title="${escAttr(item.title)}" onclick='confirmDeleteMedia("${item.id}",this.dataset.title);closeMediaDetail();'>Delete</button>`:'';
   const overlay=document.createElement('div');
   overlay.className='media-detail-overlay visible';
@@ -738,6 +740,7 @@ function openMediaDetail(id){
       <div class="detail-actions">
         <button class="btn btn-primary" onclick='playMedia("${item.id}");closeMediaDetail();'>&#9654; ${item.progress?.percent>0?'Resume':'Play'}</button>
         <button class="btn btn-secondary" onclick='addToQueue("${item.id}")'>+ Queue</button>
+        ${showBtn}
         <button class="btn btn-secondary" onclick='toggleWatched("${item.id}",${!item.watched});closeMediaDetail();'>${item.watched?'Mark Unwatched':'Mark Watched'}</button>
         ${deleteBtn}
       </div>
@@ -746,6 +749,13 @@ function openMediaDetail(id){
   overlay.addEventListener('click',e=>{if(e.target===overlay)closeMediaDetail();});
   document.body.appendChild(overlay);
   document.body.classList.add('detail-open');
+}
+
+function openShowFromEpisode(id){
+  const item=library.find(m=>m.id===id);
+  if(!item?.showName)return;
+  closeMediaDetail();
+  openShow(item.showName,item.type||'show');
 }
 
 function closeMediaDetail(){
@@ -869,6 +879,16 @@ function renderGrid(type,label){
   return `<div class="section"><div class="section-header"><h2 class="section-title">${label} (${items.length})</h2></div><div class="grid">${items.map(card).join('')}</div></div>`;
 }
 
+function firstEpisode(items){
+  return [...items].sort((a,b)=>{
+    const seasonSort=(a.epInfo?.season||0)-(b.epInfo?.season||0);
+    if(seasonSort)return seasonSort;
+    const episodeSort=(a.epInfo?.episode||0)-(b.epInfo?.episode||0);
+    if(episodeSort)return episodeSort;
+    return (a.filename||a.title).localeCompare(b.filename||b.title,undefined,{numeric:true});
+  })[0];
+}
+
 // Deduplicate Continue Watching: for shows, only show the most recently watched episode per show
 function getContinueWatching(){
   const cwd=dismissedItems.continueWatching||{};
@@ -934,8 +954,9 @@ function renderShowsView(){
   // Show as cards that open detail pages
   const cards=showList.map(s=>{
     const ep=s.items.length;
+    const first=firstEpisode(s.items);
     const poster=s.poster?`<img src="${s.poster}" alt="${esc(s.name)} poster" loading="lazy">`:`<div class="card-placeholder">&#128250;</div>`;
-    return `<div class="card" onclick="openShow('${escAttr(s.name)}','show')" onkeydown="activateWithKeyboard(event)" role="button" tabindex="0" aria-label="Open ${escAttr(s.name)}"><div class="card-poster">${poster}<div class="card-overlay"><div class="play-icon">&#9654;</div></div></div><div class="card-info"><div class="card-title">${esc(s.name)}</div><div class="card-year">${ep} episode${ep>1?'s':''}</div><span class="card-type show">TV Show</span></div></div>`;
+    return `<div class="card media-card" onclick="openShow('${escAttr(s.name)}','show')" onkeydown="activateWithKeyboard(event)" role="button" tabindex="0" aria-label="Open ${escAttr(s.name)}"><div class="card-poster">${poster}<div class="card-overlay"><button class="card-play-btn" onclick="event.stopPropagation();playMedia('${first.id}')" aria-label="Play ${escAttr(s.name)}"><span class="play-icon">&#9654;</span><span>Play</span></button></div></div><div class="card-info"><div class="card-title">${esc(s.name)}</div><div class="card-year">${ep} episode${ep>1?'s':''}</div><span class="card-type show">TV Show</span></div></div>`;
   });
 
   return `<div class="section"><div class="section-header"><h2 class="section-title">TV Shows (${showList.length})</h2></div><div class="grid">${cards.join('')}</div></div>`;
@@ -1393,7 +1414,7 @@ async function renderSettings(){
   else{
     fh='<div class="folder-list">';
     for(const f of folderConfig){
-      const ti={movie:'&#127916;',show:'&#128250;',auto:'&#128194;'};
+      const ti={movie:'▣',show:'▤',auto:'▱'};
       const tl={movie:'Movies',show:'TV Shows',auto:'Auto-detect'};
       const icon=ti[f.type]||customTypeIcon(f.type);
       const typeLabel=tl[f.type]||customTypeLabel(f.type);
@@ -1491,7 +1512,7 @@ async function renderSettings(){
   let dtOpts='<option value="movie">Movies</option><option value="show">TV Shows</option><option value="auto">Auto-detect</option>';
   for(const t of existingTypes){if(t!=='movie'&&t!=='show'&&t!=='auto')dtOpts+=`<option value="${esc(t)}">${customTypeLabel(t)}</option>`;}
 
-  a.innerHTML=`<div class="settings"><h1 class="settings-title">Media Folders</h1><p class="settings-subtitle">Link folders from anywhere on this computer. Use movie, show, auto, or type a custom category (e.g. anime).</p><div id="settingsAlert" class="alert"></div>${fh}<div class="add-folder-section"><h3>&#10010; Link a New Folder</h3><div class="form-row"><div class="form-group grow"><label class="form-label">Folder path</label><input class="form-input" type="text" id="addFolderPath" placeholder="/path/to/movies" oninput="onPathInput(this.value)"></div><div class="form-group"><label class="form-label">Type</label><input class="form-input" type="text" id="addFolderType" list="folderTypeList" value="auto" placeholder="movie, show, anime..." style="width:140px"><datalist id="folderTypeList">${dtOpts}</datalist></div><div class="form-group"><label class="form-label">Label</label><input class="form-input" type="text" id="addFolderLabel" placeholder="My Movies" style="width:140px"></div></div><div id="folderBrowser"></div><div style="display:flex;gap:8px;margin-top:4px"><button class="btn btn-primary btn-sm" onclick="addFolder()">&#10010; Link Folder</button><button class="btn btn-secondary btn-sm" onclick="toggleBrowser()">&#128194; Browse</button></div></div>${sh}${sph}${tsh}${cph}${sysh}${dockerh}${acctHtml}</div>`;
+  a.innerHTML=`<div class="settings"><h1 class="settings-title">Media Folders</h1><p class="settings-subtitle">Link folders from anywhere on this computer. Use movie, show, auto, or type a custom category (e.g. anime).</p><div id="settingsAlert" class="alert"></div>${fh}<div class="add-folder-section"><h3>&#10010; Link a New Folder</h3><div class="form-row"><div class="form-group grow"><label class="form-label">Folder path</label><input class="form-input" type="text" id="addFolderPath" placeholder="/path/to/movies" oninput="onPathInput(this.value)"></div><div class="form-group"><label class="form-label">Type</label><input class="form-input" type="text" id="addFolderType" list="folderTypeList" value="auto" placeholder="movie, show, anime..." style="width:140px"><datalist id="folderTypeList">${dtOpts}</datalist></div><div class="form-group"><label class="form-label">Label</label><input class="form-input" type="text" id="addFolderLabel" placeholder="My Movies" style="width:140px"></div></div><div id="folderBrowser"></div><div style="display:flex;gap:8px;margin-top:4px"><button class="btn btn-primary btn-sm" onclick="addFolder()">&#10010; Link Folder</button><button class="btn btn-secondary btn-sm" onclick="toggleBrowser()">▱ Browse</button></div></div>${sh}${sph}${tsh}${cph}${sysh}${dockerh}${acctHtml}</div>`;
   // Auto-refresh sprite progress + system stats
   startSettingsRefresh();
   if(folderConfig.length===0)toggleBrowser();
@@ -1572,7 +1593,7 @@ function scanLibrary(e){
   const rawTarget=e&&e.target?e.target:event.target;
   const btn=rawTarget.closest('.nav-item')||rawTarget.closest('button');
   const orig=btn?btn.innerHTML:'';
-  if(btn){btn.innerHTML='<span class="nav-icon">&#8987;</span> Scanning...';btn.disabled=true;}
+  if(btn){btn.innerHTML='<span class="nav-icon">↻</span> Scanning...';btn.disabled=true;}
   adminFetch('/api/scan',{method:'POST'}).then(r=>r.json()).then(d=>{
     if(d.ok){
       // Poll until scan completes by waiting for library-updated SSE event
