@@ -2445,16 +2445,29 @@ function showControls(){modal.classList.add('controls-visible');clearTimeout(con
 // When user presses Escape in fullscreen, the browser exits fullscreen (swallowing the
 // keydown event). A second Escape press then closes the player via the keydown handler.
 
-// Touch support: tap video to toggle controls, auto-hide after 3s
+// Touch support: single tap toggles controls; double tap skips forward.
+let _touchTapCount=0,_touchTapTimer=null;
 document.getElementById('videoWrapper').addEventListener('click',function(e){
   if(!_isTouch)return; // desktop uses mousemove
   if(e.target.closest('.player-controls,.player-top-bar,.sub-menu,.audio-menu,.boost-menu,.speed-menu,.skip-menu,.quality-menu'))return;
-  e.stopPropagation(); // prevent togglePlay on mobile
-  if(modal.classList.contains('controls-visible')){
-    modal.classList.remove('controls-visible');clearTimeout(controlsTimeout);
-  } else {
-    showControls();
+  e.preventDefault();
+  e.stopPropagation(); // prevent desktop play/fullscreen behavior on mobile
+  _touchTapCount++;
+  if(_touchTapCount===1){
+    _touchTapTimer=setTimeout(()=>{
+      _touchTapCount=0;
+      if(modal.classList.contains('controls-visible')){
+        modal.classList.remove('controls-visible');clearTimeout(controlsTimeout);
+      } else {
+        showControls();
+      }
+    },260);
+    return;
   }
+  clearTimeout(_touchTapTimer);
+  _touchTapCount=0;
+  skipFwd();
+  showControls();
 });
 
 // Re-show controls on orientation change so user doesn't lose them

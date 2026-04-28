@@ -68,6 +68,48 @@ test.describe('Video Playback', () => {
     expect(timeAfter).toBeGreaterThan(timeBefore);
   });
 
+  test('mobile double tap skips forward without toggling play', async ({ page }) => {
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, 'maxTouchPoints', { get: () => 1 });
+    });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await loginAsUser(page);
+    const mediaId = await page.evaluate(async () => {
+      const profile = window.activeProfile || '7a5c11512779';
+      const lib = await fetch(`/api/library?profile=${profile}`).then(r => r.json());
+      const item = lib.find(m => m.type === 'movie' && m.title.includes('Ghosted')) || lib.find(m => m.type === 'movie') || lib[0];
+      return item.id;
+    });
+    await page.evaluate(id => playMedia(id), mediaId);
+    await expect(page.locator('#playerModal')).toHaveClass(/active/, { timeout: 10000 });
+    await page.waitForTimeout(3000);
+
+    await page.evaluate(() => {
+      const v = document.querySelector('video');
+      v.currentTime = Math.max(5, v.currentTime || 0);
+    });
+    const before = await page.evaluate(() => document.querySelector('video').currentTime);
+
+    const wrapper = page.locator('#videoWrapper');
+    await wrapper.click({ position: { x: 195, y: 360 } });
+    await page.waitForTimeout(90);
+    await wrapper.click({ position: { x: 195, y: 360 } });
+    await page.waitForTimeout(500);
+
+    const state = await page.evaluate(() => {
+      const v = document.querySelector('video');
+      return {
+        currentTime: v.currentTime,
+        paused: v.paused,
+        controlsVisible: document.getElementById('playerModal').classList.contains('controls-visible'),
+      };
+    });
+
+    expect(state.currentTime).toBeGreaterThan(before + 5);
+    expect(state.paused).toBe(false);
+    expect(state.controlsVisible).toBe(true);
+  });
+
   test('volume control works', async ({ page }) => {
     await loginAsUser(page);
     await navigateTo(page, 'Movies');
