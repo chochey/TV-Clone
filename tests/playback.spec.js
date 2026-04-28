@@ -90,10 +90,15 @@ test.describe('Video Playback', () => {
     });
     const before = await page.evaluate(() => document.querySelector('video').currentTime);
 
-    const wrapper = page.locator('#videoWrapper');
-    await wrapper.click({ position: { x: 195, y: 360 } });
+    await page.evaluate(() => {
+      const wrapper = document.getElementById('videoWrapper');
+      wrapper.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+    });
     await page.waitForTimeout(90);
-    await wrapper.click({ position: { x: 195, y: 360 } });
+    await page.evaluate(() => {
+      const wrapper = document.getElementById('videoWrapper');
+      wrapper.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+    });
     await page.waitForTimeout(500);
 
     const state = await page.evaluate(() => {
@@ -108,6 +113,9 @@ test.describe('Video Playback', () => {
     expect(state.currentTime).toBeGreaterThan(before + 5);
     expect(state.paused).toBe(false);
     expect(state.controlsVisible).toBe(true);
+
+    await page.waitForTimeout(3500);
+    await expect(page.locator('#playerModal')).toHaveClass(/controls-visible/);
   });
 
   test('volume control works', async ({ page }) => {

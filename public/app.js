@@ -2440,7 +2440,12 @@ document.addEventListener('keydown',e=>{
   }
 });
 
-function showControls(){modal.classList.add('controls-visible');clearTimeout(controlsTimeout);controlsTimeout=setTimeout(()=>{modal.classList.remove('controls-visible');},3000);}
+function showControls(durationMs){
+  const hideAfter=durationMs||(_isTouch?8000:3000);
+  modal.classList.add('controls-visible');
+  clearTimeout(controlsTimeout);
+  controlsTimeout=setTimeout(()=>{modal.classList.remove('controls-visible');},hideAfter);
+}
 
 // When user presses Escape in fullscreen, the browser exits fullscreen (swallowing the
 // keydown event). A second Escape press then closes the player via the keydown handler.
@@ -2469,6 +2474,9 @@ document.getElementById('videoWrapper').addEventListener('click',function(e){
   skipFwd();
   showControls();
 });
+
+document.querySelector('.player-controls')?.addEventListener('pointerdown',()=>{if(_isTouch)showControls(9000);},{passive:true});
+document.querySelector('.player-top-bar')?.addEventListener('pointerdown',()=>{if(_isTouch)showControls(9000);},{passive:true});
 
 // Re-show controls on orientation change so user doesn't lose them
 screen.orientation?.addEventListener('change',()=>{if(modal.classList.contains('active'))showControls();});
