@@ -40,7 +40,7 @@ test.describe('Permissions — Create & Edit UI', () => {
 
   test('create account modal shows permission checkboxes', async ({ page }) => {
     await loginAsAdmin(page);
-    await navigateTo(page, 'Media Folders');
+    await navigateTo(page, 'System');
     await page.waitForTimeout(1000);
     await page.locator('button', { hasText: 'Add Account' }).click();
     await page.waitForTimeout(500);
@@ -62,7 +62,7 @@ test.describe('Permissions — Create & Edit UI', () => {
 
   test('permission checkboxes hide when role is Admin', async ({ page }) => {
     await loginAsAdmin(page);
-    await navigateTo(page, 'Media Folders');
+    await navigateTo(page, 'System');
     await page.waitForTimeout(1000);
     await page.locator('button', { hasText: 'Add Account' }).click();
     await page.waitForTimeout(500);
@@ -89,8 +89,8 @@ test.describe('Permissions — Create & Edit UI', () => {
     const created = await createPermUser(page, ['canDownload', 'canScan', 'canLogs']);
     expect(created.status).toBe(200);
 
-    // Go to settings and edit the new user
-    await navigateTo(page, 'Media Folders');
+    // Go to the admin dashboard and edit the new user
+    await navigateTo(page, 'System');
     await page.waitForTimeout(2000);
 
     // Find the PermTest account row and click Edit
@@ -118,7 +118,7 @@ test.describe('Permissions — Create & Edit UI', () => {
     await deletePermUser(page);
     await createPermUser(page, ['canDownload', 'canScan', 'canRestart', 'canLogs']);
 
-    await navigateTo(page, 'Media Folders');
+    await navigateTo(page, 'System');
     await page.waitForTimeout(1000);
 
     const content = await page.locator('#contentArea').textContent();
@@ -437,12 +437,12 @@ test.describe('Permissions — Nav Visibility', () => {
     await deletePermUser(page);
   });
 
-  test('admin sees all system nav items', async ({ page }) => {
+  test('admin sees current system nav items', async ({ page }) => {
     await loginAsAdmin(page);
 
     await expect(page.locator('#systemSection')).toBeVisible();
     await expect(page.locator('#navDownloads')).toBeVisible();
-    await expect(page.locator('#navSettings')).toBeVisible();
+    await expect(page.locator('#navSettings')).toBeHidden();
     await expect(page.locator('#navScan')).toBeVisible();
     await expect(page.locator('#navRestart')).toBeVisible();
     await expect(page.locator('#navLogs')).toBeVisible();

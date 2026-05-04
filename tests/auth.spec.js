@@ -187,7 +187,7 @@ test.describe('Account Management (Admin)', () => {
 
   test('settings shows accounts with usernames', async ({ page }) => {
     await loginAsAdmin(page);
-    await navigateTo(page, 'Media Folders');
+    await navigateTo(page, 'System');
     await page.waitForTimeout(1000);
     // Should show @username for each account
     const accountsText = await page.locator('#contentArea').textContent();
@@ -197,7 +197,7 @@ test.describe('Account Management (Admin)', () => {
 
   test('create account modal has username field', async ({ page }) => {
     await loginAsAdmin(page);
-    await navigateTo(page, 'Media Folders');
+    await navigateTo(page, 'System');
     await page.waitForTimeout(1000);
     await page.locator('button', { hasText: 'Add Account' }).click();
     await page.waitForTimeout(500);
@@ -211,7 +211,7 @@ test.describe('Account Management (Admin)', () => {
 
   test('create account requires password', async ({ page }) => {
     await loginAsAdmin(page);
-    await navigateTo(page, 'Media Folders');
+    await navigateTo(page, 'System');
     await page.waitForTimeout(1000);
     await page.locator('button', { hasText: 'Add Account' }).click();
     await page.waitForTimeout(500);
@@ -239,7 +239,7 @@ test.describe('Account Management (Admin)', () => {
       return { cleaned: false, status: 0 };
     });
 
-    await navigateTo(page, 'Media Folders');
+    await navigateTo(page, 'System');
     await page.waitForTimeout(1000);
 
     // Create a new account
@@ -275,7 +275,7 @@ test.describe('Account Management (Admin)', () => {
 
     // Refresh settings and verify it's gone
     await navigateTo(page, 'Home');
-    await navigateTo(page, 'Media Folders');
+    await navigateTo(page, 'System');
     await page.waitForTimeout(1000);
     const afterText = await page.locator('#contentArea').textContent();
     expect(afterText).not.toContain('@e2etestuser');
@@ -283,7 +283,7 @@ test.describe('Account Management (Admin)', () => {
 
   test('edit account modal has username field', async ({ page }) => {
     await loginAsAdmin(page);
-    await navigateTo(page, 'Media Folders');
+    await navigateTo(page, 'System');
     await page.waitForTimeout(1000);
     // Click Edit on first account
     await page.locator('button', { hasText: 'Edit' }).first().click();

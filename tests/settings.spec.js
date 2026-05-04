@@ -3,16 +3,16 @@ const { loginAsAdmin, loginAsUser, navigateTo } = require('./helpers');
 
 test.describe('Settings & Admin', () => {
 
-  test('settings page loads for admin', async ({ page }) => {
+  test('system dashboard loads for admin', async ({ page }) => {
     await loginAsAdmin(page);
-    await navigateTo(page, 'Media Folders');
+    await navigateTo(page, 'System');
     await page.waitForTimeout(1000);
-    await expect(page.locator('.settings')).toBeVisible();
+    await expect(page.locator('.admin-dashboard')).toBeVisible();
   });
 
   test('settings shows linked folders', async ({ page }) => {
     await loginAsAdmin(page);
-    await navigateTo(page, 'Media Folders');
+    await navigateTo(page, 'System');
     await page.waitForTimeout(1000);
     const folderCards = page.locator('.folder-card');
     expect(await folderCards.count()).toBeGreaterThan(0);
@@ -23,16 +23,17 @@ test.describe('Settings & Admin', () => {
 
   test('settings shows library stats', async ({ page }) => {
     await loginAsAdmin(page);
-    await navigateTo(page, 'Media Folders');
+    await navigateTo(page, 'System');
     await page.waitForTimeout(1000);
-    // Stats grid should show total files
-    const statsText = await page.locator('.stats-grid, .library-stats').first().textContent();
+    // Library panel should show numeric media metrics.
+    const libraryPanel = page.locator('.admin-panel').filter({ hasText: 'Library' });
+    const statsText = await libraryPanel.locator('.admin-metric').first().textContent();
     expect(statsText).toMatch(/\d+/); // Should contain numbers
   });
 
   test('settings shows sprite progress', async ({ page }) => {
     await loginAsAdmin(page);
-    await navigateTo(page, 'Media Folders');
+    await navigateTo(page, 'System');
     await page.waitForTimeout(1000);
     const spriteSection = page.locator('.sprite-progress');
     await expect(spriteSection).toBeVisible();
@@ -42,9 +43,9 @@ test.describe('Settings & Admin', () => {
 
   test('settings shows system stats', async ({ page }) => {
     await loginAsAdmin(page);
-    await navigateTo(page, 'Media Folders');
+    await navigateTo(page, 'System');
     await page.waitForTimeout(3500); // wait for auto-refresh to populate
-    const sysStats = page.locator('#sysStatsGrid');
+    const sysStats = page.locator('.admin-panel').filter({ hasText: 'System Health' }).locator('.admin-health-grid');
     await expect(sysStats).toBeVisible();
     const text = await sysStats.textContent();
     expect(text).toMatch(/CPU|Memory|Disk/i);
@@ -52,7 +53,7 @@ test.describe('Settings & Admin', () => {
 
   test('settings shows accounts section', async ({ page }) => {
     await loginAsAdmin(page);
-    await navigateTo(page, 'Media Folders');
+    await navigateTo(page, 'System');
     await page.waitForTimeout(1000);
     const accountsSection = page.locator('text=Accounts');
     await expect(accountsSection).toBeVisible();
@@ -60,7 +61,7 @@ test.describe('Settings & Admin', () => {
 
   test('add folder form is present', async ({ page }) => {
     await loginAsAdmin(page);
-    await navigateTo(page, 'Media Folders');
+    await navigateTo(page, 'System');
     await page.waitForTimeout(1000);
     await expect(page.locator('#addFolderPath')).toBeVisible();
     await expect(page.locator('#addFolderType')).toBeVisible();
@@ -70,7 +71,7 @@ test.describe('Settings & Admin', () => {
 
   test('browse button opens file browser', async ({ page }) => {
     await loginAsAdmin(page);
-    await navigateTo(page, 'Media Folders');
+    await navigateTo(page, 'System');
     await page.waitForTimeout(1000);
     await page.locator('button', { hasText: 'Browse' }).click();
     await page.waitForTimeout(1000);
@@ -90,11 +91,12 @@ test.describe('Settings & Admin', () => {
 
   test('user cannot access settings', async ({ page }) => {
     await loginAsUser(page);
-    // Settings (Media Folders) nav item is admin-only
+    // Media Folders now lives in the admin-only System dashboard.
     await expect(page.locator('#navSettings')).toBeHidden();
-    // Navigating to settings redirects to home
+    // Navigating to the old settings route should not expose admin settings.
     await page.evaluate(() => { window.nav && nav('settings', null); });
     await page.waitForTimeout(500);
     await expect(page.locator('.settings')).not.toBeVisible({ timeout: 2000 }).catch(() => {});
+    await expect(page.locator('.admin-dashboard')).not.toBeVisible({ timeout: 2000 }).catch(() => {});
   });
 });

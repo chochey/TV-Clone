@@ -90,6 +90,11 @@ async function loginAsUser(page) {
 
 // Navigate to a sidebar view
 async function navigateTo(page, viewName) {
+  if (viewName === 'System') {
+    await page.locator('#navSystem').click();
+    await page.waitForTimeout(1000);
+    return;
+  }
   await page.locator('.nav-item', { hasText: viewName }).click();
   await page.waitForTimeout(1000);
 }

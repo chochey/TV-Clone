@@ -45,6 +45,39 @@ const SESSION_CLEANUP_INTERVAL_MS = 3600000; // clean expired sessions every hou
 const LOGIN_RATE_WINDOW_MS = 300000;      // rate-limit window (5 min)
 const LOGIN_MAX_ATTEMPTS = 10;            // max login attempts per window
 const COOKIE_SECURE = process.env.COOKIE_SECURE === 'true' || process.env.NODE_ENV === 'production';
+const MIN_BACKGROUND_MEM_MB = parseInt(process.env.MIN_BACKGROUND_MEM_MB, 10) || 1536;
+const MIN_BACKGROUND_SWAP_MB = parseInt(process.env.MIN_BACKGROUND_SWAP_MB, 10) || 512;
+const FFMPEG_TRANSCODE_THREADS = Math.max(1, parseInt(process.env.FFMPEG_TRANSCODE_THREADS, 10) || 2);
+
+function readMemInfoMb() {
+  try {
+    const text = fs.readFileSync('/proc/meminfo', 'utf8');
+    const values = {};
+    for (const line of text.split('\n')) {
+      const match = line.match(/^(\w+):\s+(\d+)/);
+      if (match) values[match[1]] = Math.round(parseInt(match[2], 10) / 1024);
+    }
+    return {
+      memAvailable: values.MemAvailable || 0,
+      swapFree: values.SwapFree || 0,
+    };
+  } catch {
+    return { memAvailable: 0, swapFree: 0 };
+  }
+}
+
+function hasBackgroundHeadroom() {
+  const mem = readMemInfoMb();
+  return mem.memAvailable >= MIN_BACKGROUND_MEM_MB && mem.swapFree >= MIN_BACKGROUND_SWAP_MB;
+}
+
+async function waitForBackgroundHeadroom(label = 'background work') {
+  while (!hasBackgroundHeadroom()) {
+    const mem = readMemInfoMb();
+    console.warn(`[RESOURCE] Pausing ${label}: MemAvailable=${mem.memAvailable}MB SwapFree=${mem.swapFree}MB`);
+    await new Promise(r => setTimeout(r, 15000));
+  }
+}
 
 // ── Pure filename parsing (lib/filename-parse.js) ───────────────────────
 const {
@@ -179,7 +212,7 @@ const {
 
 // Background probe: runs after scan, probes uncached files without blocking
 let bgProbeRunning = false;
-const PROBE_CONCURRENCY = parseInt(process.env.PROBE_CONCURRENCY, 10) || 4;
+const PROBE_CONCURRENCY = Math.max(1, Math.min(4, parseInt(process.env.PROBE_CONCURRENCY, 10) || 2));
 async function backgroundProbe() {
   if (bgProbeRunning) return;
   bgProbeRunning = true;
@@ -1466,32 +1499,34 @@ try {
 const SPRITE_COLS = 5, SPRITE_ROWS = 5, SPRITE_INTERVAL = 10;
 const SPRITE_W = 160, SPRITE_H = 90;
 const FRAMES_PER_SPRITE = SPRITE_COLS * SPRITE_ROWS; // 25
-// Detect which physical drive files are on (for mergerfs setups) — batch version
+// Detect which physical drive files are on (for mergerfs setups) without
+// spawning helper processes. This runs during resource-sensitive background
+// sprite work, so keep it in-process and best-effort.
 function getDriveIds(filePaths) {
   const result = {};
+  let physicalRoots = [];
   try {
-    const script = `
-import os, sys, json
-paths = json.loads(sys.stdin.read())
-out = {}
-for p in paths:
-    try:
-        real = os.getxattr(p, b"user.mergerfs.allpaths").decode()
-        parts = real.split("/")
-        out[p] = "/".join(parts[:4])
-    except:
-        out[p] = "default"
-print(json.dumps(out))
-`;
-    const json_out = execFileSync('python3', ['-c', script],
-      { encoding: 'utf8', timeout: 120000, maxBuffer: 50 * 1024 * 1024,
-        input: JSON.stringify(filePaths) }).trim();
-    return JSON.parse(json_out);
-  } catch (e) {
-    console.log(`[SPRITE] Drive detection failed: ${e.message.slice(0, 100)}`);
-    for (const p of filePaths) result[p] = 'default';
-    return result;
+    physicalRoots = fs.readdirSync('/media/blue', { withFileTypes: true })
+      .filter(entry => entry.isDirectory())
+      .map(entry => path.join('/media/blue', entry.name));
+  } catch {}
+
+  for (const filePath of filePaths) {
+    result[filePath] = 'default';
+    for (const folder of config.folders) {
+      if (!folder.path || !filePath.startsWith(folder.path + path.sep)) continue;
+      const relativePath = path.relative(folder.path, filePath);
+      for (const root of physicalRoots) {
+        const candidate = path.join(root, path.basename(folder.path), relativePath);
+        if (fs.existsSync(candidate)) {
+          result[filePath] = root;
+          break;
+        }
+      }
+      if (result[filePath] !== 'default') break;
+    }
   }
+  return result;
 }
 
 // Pause sprite generation when any playback is active to prioritize disk I/O
@@ -1558,6 +1593,7 @@ function extractFrame(filePath, timestamp, outFile) {
   return new Promise((resolve) => {
     const proc = spawn('ionice', ['-c', '3', 'nice', '-n', '19', 'ffmpeg',
       '-hide_banner', '-loglevel', 'error',
+      '-threads', '1',
       '-ss', String(timestamp), '-i', filePath,
       '-vframes', '1', '-vf', `scale=${SPRITE_W}:${SPRITE_H}:force_original_aspect_ratio=decrease,pad=${SPRITE_W}:${SPRITE_H}:(ow-iw)/2:(oh-ih)/2`,
       '-q:v', '5', '-y', outFile,
@@ -1571,8 +1607,9 @@ function extractFrame(filePath, timestamp, outFile) {
   });
 }
 
-// Extract all frames using parallel fast-seeking (multiple concurrent ffmpeg processes)
-const SPRITE_PARALLEL = parseInt(process.env.SPRITE_PARALLEL, 10) || 2; // concurrent frame extractions per file
+// Extract all frames using fast-seeking. Default to one ffmpeg at a time on this
+// 8GB host; higher values are opt-in via SPRITE_PARALLEL.
+const SPRITE_PARALLEL = Math.max(1, Math.min(2, parseInt(process.env.SPRITE_PARALLEL, 10) || 1));
 async function extractAllFrames(filePath, tmpDir, totalFrames) {
   // Collect frames that still need extracting
   const pending = [];
@@ -1588,6 +1625,7 @@ async function extractAllFrames(filePath, tmpDir, totalFrames) {
     if (Object.keys(transcodeSessions).length > 0) {
       await waitForTranscodeIdle();
     }
+    await waitForBackgroundHeadroom('sprite frame extraction');
     const batch = pending.slice(i, i + SPRITE_PARALLEL);
     const results = await Promise.all(batch.map(f => extractFrame(filePath, f.ts, f.outFile)));
     if (results.some(r => !r)) allOk = false;
@@ -1603,6 +1641,7 @@ function stitchSprite(frameFiles, outFile, cols, rows) {
     const filterInputs = frameFiles.map((_, i) => `[${i}:v]`).join('');
     const proc = spawn('ffmpeg', [
       '-hide_banner', '-loglevel', 'error',
+      '-threads', '1',
       ...inputs,
       '-filter_complex', `${filterInputs}xstack=inputs=${frameFiles.length}:layout=${generateXstackLayout(frameFiles.length, cols, rows)}`,
       '-q:v', '5', '-update', '1', '-y', outFile,
@@ -1655,6 +1694,7 @@ async function startSpriteGen(id, filePath, title) {
 
   // Wait for any active transcoding to finish before starting
   await waitForTranscodeIdle();
+  await waitForBackgroundHeadroom('sprite generation');
 
   // Single-pass: extract all frames at once (much faster than per-frame seeking)
   let ok = await extractAllFrames(filePath, tmpDir, totalFrames);
@@ -1684,6 +1724,7 @@ async function startSpriteGen(id, filePath, title) {
   // Stitch frames into sprite sheets (ffmpeg outputs frame_00001.jpg, 1-indexed)
   for (let s = 0; s < totalSheets; s++) {
     await waitForTranscodeIdle();
+    await waitForBackgroundHeadroom('sprite stitching');
     const spriteOut = spriteFilePath(thumbId, s);
     if (fs.existsSync(spriteOut)) continue;
     const startFrame = s * FRAMES_PER_SPRITE;
@@ -1762,6 +1803,7 @@ function queueAllSpriteGen() {
         while (!spriteGenEnabled) {
           await new Promise(r => setTimeout(r, 5000));
         }
+        await waitForBackgroundHeadroom('sprite queue');
         spriteQueue.current = item.title;
         console.log(`[SPRITE] Processing: ${item.title}`);
         try {
@@ -1955,7 +1997,11 @@ app.post('/api/sprites/:id/generate', requireAuth, ensureLibrary, async (req, re
 
   if (!allExist && (!job || job.done === true)) {
     // Not started or previously failed — kick it off
-    startSpriteGen(req.params.id, filePath);
+    startSpriteGen(req.params.id, filePath).catch(err => {
+      console.error(`[SPRITE] Manual generation failed for ${req.params.id}:`, err);
+      recordError(`sprite:${req.params.id}`, err.message || String(err));
+      if (spriteJobs[req.params.id]) spriteJobs[req.params.id].done = true;
+    });
   }
 
   res.json({
@@ -2003,7 +2049,7 @@ app.get('/subtitle/embedded/:fileId/:streamIndex', requireAuth, ensureLibrary, (
 // ══════════════════════════════════════════════════════════════════════
 
 const transcodeSessions = {}; // id -> { process, dir, timeout, startSeg, lastRestartAt }
-const MAX_TRANSCODE_SESSIONS = 5;
+const MAX_TRANSCODE_SESSIONS = Math.max(1, Math.min(5, parseInt(process.env.MAX_TRANSCODE_SESSIONS, 10) || 2));
 const HLS_SEG_DURATION = 4;
 
 function cleanupSession(id, keepFiles) {
@@ -2038,7 +2084,7 @@ function startFfmpeg(id, filePath, sessionDir, seekTime, startSegNum, audioStrea
 
   const mode = getStreamMode(filePath);
   const preset = QUALITY_PRESETS[quality] || QUALITY_PRESETS.auto;
-  const ffmpegArgs = ['-hide_banner', '-loglevel', 'error', '-threads', '0'];
+  const ffmpegArgs = ['-hide_banner', '-loglevel', 'error', '-threads', String(FFMPEG_TRANSCODE_THREADS)];
   if (seekTime > 0) ffmpegArgs.push('-ss', String(seekTime));
   ffmpegArgs.push('-i', filePath);
 
@@ -2102,6 +2148,11 @@ function startFfmpeg(id, filePath, sessionDir, seekTime, startSegNum, audioStrea
     const msg = d.toString().trim();
     _ffmpegStderr = msg; // keep last stderr line
     console.error(`[transcode ${id.slice(0,8)}] ${msg}`);
+  });
+  proc.on('error', err => {
+    console.error(`[transcode ${id.slice(0,8)}] failed to start ffmpeg: ${err.message}`);
+    recordError(`transcode:${id.slice(0,8)}`, `Failed to start FFmpeg: ${err.message}`);
+    cleanupSession(id);
   });
   proc.on('close', code => {
     if (code !== 0 && code !== 255 && code !== null) {
@@ -2538,7 +2589,7 @@ const sys = require('./lib/system-control')({
   ALLOWED_CONTAINERS: ['qbittorrent', 'gluetun'],
   ALLOWED_DOCKER_ACTIONS: ['start', 'stop', 'restart'],
 });
-const { organizerServiceCmd, dockerCmd, dockerInspect } = sys;
+const { organizerServiceCmd, dockerCmd, dockerInspect, dockerComposeRepair } = sys;
 
 app.get('/api/organizer/status', requireAdminSession, async (_req, res) => {
   const result = await organizerServiceCmd('status');
@@ -2569,6 +2620,11 @@ app.post('/api/docker/:action/:container', requireAdminSession, async (req, res)
   const { action, container } = req.params;
   const result = await dockerCmd(action, container);
   res.json({ ok: result.ok, error: result.ok ? undefined : result.stderr });
+});
+
+app.post('/api/docker/repair', requireAdminSession, async (_req, res) => {
+  const result = await dockerComposeRepair();
+  res.json(result);
 });
 
 // ── Restart endpoint ────────────────────────────────────────────────────
@@ -2653,6 +2709,14 @@ app.listen(PORT, '0.0.0.0', () => {
   serverReady = true;
   serverReadyStatus = 'ready';
   console.log('[Startup] Server ready');
+  setTimeout(async () => {
+    try {
+      const dockerStatus = await dockerInspect([...sys.ALLOWED_CONTAINERS]);
+      if (dockerStatus.warning) console.warn(`[Startup] Docker warning: ${dockerStatus.warning}`);
+    } catch (err) {
+      console.warn(`[Startup] Docker status check failed: ${err.message}`);
+    }
+  }, 5000);
   // Resume sprite generation for any items that still need it
   setTimeout(() => { try { queueAllSpriteGen(); } catch {} }, 5000);
 });

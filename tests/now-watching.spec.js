@@ -24,20 +24,20 @@ test.describe('Now Watching', () => {
 
   test('appears in admin panel', async ({ page }) => {
     await loginAsAdmin(page);
-    await page.locator('.nav-item', { hasText: 'Media Folders' }).click();
+    await page.locator('#navSystem').click();
     await page.waitForTimeout(1500);
-    const section = page.locator('.transcode-section');
+    const section = page.locator('.admin-panel').filter({ hasText: 'Now Watching' });
     await expect(section).toBeVisible();
     await expect(section).toContainText('Now Watching');
   });
 
   test('shows idle badge when nobody is watching', async ({ page }) => {
     await loginAsAdmin(page);
-    await page.locator('.nav-item', { hasText: 'Media Folders' }).click();
+    await page.locator('#navSystem').click();
     await page.waitForTimeout(1500);
-    // Badge is either "Nobody" (idle) or "N watching" (active)
-    const badge = page.locator('.transcode-badge');
-    await expect(badge).toBeVisible();
+    // Badge is either "Idle" or "N live".
+    const section = page.locator('.admin-panel').filter({ hasText: 'Now Watching' });
+    await expect(section.locator('.admin-pill')).toBeVisible();
   });
 
   test('progress ping registers viewer in now-watching', async ({ page }) => {
@@ -92,19 +92,19 @@ test.describe('Now Watching', () => {
       });
     });
 
-    // Navigate to settings and check the section
-    await page.locator('.nav-item', { hasText: 'Media Folders' }).click();
+    // Navigate to the admin dashboard and check the section
+    await page.locator('#navSystem').click();
     await page.waitForTimeout(1500);
 
-    const section = page.locator('.transcode-section');
+    const section = page.locator('.admin-panel').filter({ hasText: 'Now Watching' });
     await expect(section).toBeVisible();
-    // Should show "1 watching" badge
-    await expect(section.locator('.transcode-badge.active')).toBeVisible();
+    // Should show a live badge
+    await expect(section.locator('.admin-pill')).toContainText(/live/i);
     // Should show the viewer's name and title
-    const item = page.locator('.transcode-item');
+    const item = section.locator('.admin-list-row').first();
     await expect(item).toBeVisible();
-    await expect(item.locator('.transcode-item-file')).toBeVisible();
-    await expect(item.locator('.transcode-item-meta')).toContainText('Admin');
+    await expect(item.locator('.admin-list-body strong')).toBeVisible();
+    await expect(item.locator('.admin-list-body span')).toContainText('Admin');
   });
 
   test('two different profiles both show as watching', async ({ page }) => {

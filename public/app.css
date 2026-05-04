@@ -233,6 +233,8 @@ button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible,.c
 .folder-card-status.ok{color:var(--success)}.folder-card-status.err{color:var(--danger)}
 .add-folder-section{background:var(--bg-secondary);border:1px dashed rgba(255,255,255,.12);border-radius:12px;padding:20px;margin-bottom:20px}
 .add-folder-section h3{font-size:.95rem;font-weight:700;margin-bottom:14px}
+.dashboard-folder-list{margin-bottom:16px}
+.dashboard-add-folder{margin:0;background:rgba(0,0,0,.14)}
 .form-row{display:flex;gap:10px;margin-bottom:10px;align-items:flex-end;flex-wrap:wrap}
 .form-group{display:flex;flex-direction:column;gap:4px}.form-group.grow{flex:1;min-width:180px}
 .form-label{font-size:.72rem;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.04em}

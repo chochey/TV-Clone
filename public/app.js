@@ -30,18 +30,17 @@ async function adminFetch(url,opts={}){
 function updateSystemVisibility(){
   const isAdmin=currentRole==='admin';
   const showDownloads=isAdmin||currentPermissions.includes('canDownload');
-  const showSettings=isAdmin; // settings/folders always admin-only
   const showScan=isAdmin||currentPermissions.includes('canScan');
   const showRestart=isAdmin||currentPermissions.includes('canRestart');
   const showLogs=isAdmin||currentPermissions.includes('canLogs');
-  const showSystem=showDownloads||showSettings||showScan||showRestart||showLogs||isAdmin;
+  const showSystem=showDownloads||showScan||showRestart||showLogs||isAdmin;
   const el=document.getElementById('systemSection');
   if(el){showSystem?el.classList.add('visible'):el.classList.remove('visible');}
   const ndash=document.getElementById('navSystem');if(ndash)ndash.style.display=isAdmin?'':'none';
   const nd=document.getElementById('navDownloads');if(nd)nd.style.display=showDownloads?'':'none';
   const nl=document.getElementById('navLogs');if(nl)nl.style.display=showLogs?'':'none';
   const nol=document.getElementById('navOrgLogs');if(nol)nol.style.display=isAdmin?'':'none';
-  const ns=document.getElementById('navSettings');if(ns)ns.style.display=showSettings?'':'none';
+  const ns=document.getElementById('navSettings');if(ns)ns.style.display='none';
   const nsc=document.getElementById('navScan');if(nsc)nsc.style.display=showScan?'':'none';
   const nr=document.getElementById('navRestart');if(nr)nr.style.display=showRestart?'':'none';
 }
@@ -249,7 +248,8 @@ async function submitCreateProfile(){
   if(!password){document.getElementById('modalPassword').style.borderColor='#e5484d';return;}
   closeModal();
   await adminFetch('/api/profiles',{method:'POST',headers:adminHeaders(),body:JSON.stringify({name,username:username||'',password,role,avatar:_selectedAvatar,permissions})});
-  if(currentView==='settings')renderSettings();
+  if(currentView==='system')renderAdminDashboard();
+  else if(currentView==='settings')renderSettings();
   else showProfileScreen(true);
 }
 
@@ -316,7 +316,8 @@ async function submitEditAccount(profileId){
   if(password) body.password=password; // only update password if provided
   closeModal();
   await adminFetch('/api/profiles/'+profileId,{method:'PUT',headers:adminHeaders(),body:JSON.stringify(body)});
-  if(currentView==='settings')renderSettings();
+  if(currentView==='system')renderAdminDashboard();
+  else if(currentView==='settings')renderSettings();
 }
 
 async function deleteAccount(profileId,name){
@@ -334,7 +335,8 @@ async function deleteAccount(profileId,name){
 async function confirmDeleteAccount(profileId){
   closeModal();
   await adminFetch('/api/profiles/'+profileId,{method:'DELETE',headers:adminHeaders()});
-  if(currentView==='settings')renderSettings();
+  if(currentView==='system')renderAdminDashboard();
+  else if(currentView==='settings')renderSettings();
 }
 
 async function switchProfile(){
@@ -477,7 +479,7 @@ function renderView(){
     case 'queue':a.innerHTML=renderQueue();break;
     case 'history':renderHistory();return;
     case 'system':if(currentRole!=='admin'){nav('home',document.querySelector('[data-view="home"]'));return;}renderAdminDashboard();return;
-    case 'settings':if(currentRole!=='admin'){nav('home',document.querySelector('[data-view="home"]'));return;}renderSettings();return;
+    case 'settings':nav('system',document.querySelector('[data-view="system"]'));return;
     case 'downloads':if(!hasPerm('canDownload')){nav('home',document.querySelector('[data-view="home"]'));return;}renderDownloads();return;
     case 'logs':if(currentRole!=='admin'&&!hasPerm('canLogs')){nav('home',document.querySelector('[data-view="home"]'));return;}renderLogs();return;
     case 'orglogs':if(currentRole!=='admin'){nav('home',document.querySelector('[data-view="home"]'));return;}renderOrgLogsPage();return;
@@ -647,7 +649,7 @@ function renderHomeDashboard(extraClass=''){
 function renderHome(){
   if(library.length===0){
     const hf=folderConfig.length>0;
-    return `<div class="empty-state"><div class="empty-icon">&#127916;</div><div class="empty-title">${hf?'No Media Found':"Welcome to Chochey's Media Server"}</div><div class="empty-text">${hf?'No video files found in your linked folders.':'Get started by linking your media folders.'}</div><div style="margin-top:18px"><button class="btn btn-primary" onclick="nav('settings',document.querySelector('[data-view=settings]'))">&#9881;&#65039; ${hf?'Manage':'Add'} Folders</button></div></div>`;
+    return `<div class="empty-state"><div class="empty-icon">&#127916;</div><div class="empty-title">${hf?'No Media Found':"Welcome to Chochey's Media Server"}</div><div class="empty-text">${hf?'No video files found in your linked folders.':'Get started by linking your media folders.'}</div><div style="margin-top:18px"><button class="btn btn-primary" onclick="nav('system',document.querySelector('[data-view=system]'))">&#9881;&#65039; ${hf?'Manage':'Add'} Folders</button></div></div>`;
   }
   const cw=getContinueWatching();
   const rad=dismissedItems.recentlyAdded||{};
@@ -1255,13 +1257,14 @@ function renderSysStats(){
   return html;
 }
 
-let dashboardData={downloads:null,docker:null,errors:null,scans:null};
+let dashboardData={downloads:null,docker:null,errors:null,scans:null,profiles:null};
 async function fetchDashboardData(){
   const tasks=[fetchStats(),fetchSpriteProgress(),fetchSysStats()];
   if(currentRole==='admin')tasks.push(fetchConfig(),fetchCorrupted());
   if(currentRole==='admin'||hasPerm('canLogs'))tasks.push(fetchNowWatching(),fetchDashboardLogs());
   if(currentRole==='admin'||hasPerm('canDownload'))tasks.push(fetchDashboardDownloads());
   if(currentRole==='admin')tasks.push(fetchDashboardDocker());
+  if(currentRole==='admin')tasks.push(fetchDashboardProfiles());
   await Promise.allSettled(tasks);
 }
 
@@ -1281,6 +1284,11 @@ async function fetchDashboardDownloads(){
 async function fetchDashboardDocker(){
   dashboardData.docker=null;
   try{const r=await adminFetch('/api/docker/status');if(r.ok)dashboardData.docker=await r.json();}catch{}
+}
+
+async function fetchDashboardProfiles(){
+  dashboardData.profiles=[];
+  try{dashboardData.profiles=await loadProfiles();}catch{}
 }
 
 async function fetchDashboardLogs(){
@@ -1329,7 +1337,37 @@ function renderAdminLibraryPanel(){
     </div>
     <div class="admin-actions">
       ${hasPerm('canScan')?'<button class="btn btn-primary btn-sm" onclick="scanLibrary(event)">Scan Library</button>':''}
-      ${currentRole==='admin'?'<button class="btn btn-secondary btn-sm" onclick="nav(\'settings\',document.querySelector(\'[data-view=settings]\'))">Manage Folders</button>':''}
+    </div>
+  </div>`;
+}
+
+function renderMediaFoldersSection(){
+  if(currentRole!=='admin')return '';
+  let folderHtml='';
+  if(folderConfig.length===0)folderHtml='<div class="admin-empty">No folders linked yet.</div>';
+  else{
+    folderHtml='<div class="folder-list dashboard-folder-list">';
+    for(const f of folderConfig){
+      const ti={movie:'▣',show:'▤',auto:'▱'};
+      const tl={movie:'Movies',show:'TV Shows',auto:'Auto-detect'};
+      const icon=ti[f.type]||customTypeIcon(f.type);
+      const typeLabel=tl[f.type]||customTypeLabel(f.type);
+      folderHtml+=`<div class="folder-card"><div class="folder-card-icon ${f.type}">${icon}</div><div class="folder-card-body"><div class="folder-card-label">${esc(f.label)}</div><div class="folder-card-path" title="${esc(f.path)}">${esc(f.path)}</div><div class="folder-card-meta"><span class="folder-meta-tag ${f.type}">${typeLabel}</span><span class="folder-meta-count">${f.fileCount||0} videos</span><span class="folder-card-status ${f.exists?'ok':'err'}">${f.exists?'✓ Connected':'✗ Not found'}</span></div></div><button class="btn btn-danger btn-sm" onclick="removeFolder('${escAttr(f.path)}')">Remove</button></div>`;
+    }
+    folderHtml+='</div>';
+  }
+  const existingTypes=new Set(folderConfig.map(f=>f.type));
+  getCustomTypes().forEach(t=>existingTypes.add(t));
+  let dtOpts='<option value="movie">Movies</option><option value="show">TV Shows</option><option value="auto">Auto-detect</option>';
+  for(const t of existingTypes){if(t!=='movie'&&t!=='show'&&t!=='auto')dtOpts+=`<option value="${esc(t)}">${customTypeLabel(t)}</option>`;}
+  return `<div class="admin-panel admin-panel-wide">
+    <div class="admin-panel-head"><div><div class="admin-eyebrow">Library Sources</div><h2>Media Folders</h2></div>${statusPill(folderConfig.length+' linked','info')}</div>
+    ${folderHtml}
+    <div class="add-folder-section dashboard-add-folder">
+      <h3>&#10010; Link a New Folder</h3>
+      <div class="form-row"><div class="form-group grow"><label class="form-label">Folder path</label><input class="form-input" type="text" id="addFolderPath" placeholder="/path/to/movies" oninput="onPathInput(this.value)"></div><div class="form-group"><label class="form-label">Type</label><input class="form-input" type="text" id="addFolderType" list="folderTypeList" value="auto" placeholder="movie, show, anime..." style="width:140px"><datalist id="folderTypeList">${dtOpts}</datalist></div><div class="form-group"><label class="form-label">Label</label><input class="form-input" type="text" id="addFolderLabel" placeholder="My Movies" style="width:140px"></div></div>
+      <div id="folderBrowser"></div>
+      <div style="display:flex;gap:8px;margin-top:4px"><button class="btn btn-primary btn-sm" onclick="addFolder()">&#10010; Link Folder</button><button class="btn btn-secondary btn-sm" onclick="toggleBrowser()">▱ Browse</button></div>
     </div>
   </div>`;
 }
@@ -1379,20 +1417,72 @@ function renderAdminMaintenancePanel(){
       ${metricCard('Errors',dashboardData.errors?.length||0,'Recent entries',dashboardData.errors?.length?'bad':'ok')}
     </div>
     <div class="admin-actions">
-      ${currentRole==='admin'?'<button class="btn btn-secondary btn-sm" onclick="nav(\'settings\',document.querySelector(\'[data-view=settings]\'))">Maintenance Tools</button>':''}
       ${(currentRole==='admin'||hasPerm('canLogs'))?'<button class="btn btn-secondary btn-sm" onclick="nav(\'logs\',document.querySelector(\'[data-view=logs]\'))">Review Logs</button>':''}
     </div>
   </div>`;
 }
 
+function renderSpriteControlsPanel(){
+  if(currentRole!=='admin'||!spriteProgress)return '';
+  const sp=spriteProgress;
+  const paused=!sp.enabled;
+  const badge=paused?'<span class="sprite-badge paused">Paused</span>':sp.running?'<span class="sprite-badge running">Generating</span>':'<span class="sprite-badge done">Complete</span>';
+  const toggleBtn=`<button class="btn btn-sm ${paused?'btn-primary':'btn-secondary'}" onclick="toggleSpriteGen()" style="font-size:.75rem;padding:4px 12px">${paused?'&#9654; Start Sprites':'&#9646;&#9646; Stop Sprites'}</button>`;
+  return `<div class="admin-panel">
+    <div class="admin-panel-head"><div><div class="admin-eyebrow">Thumbnails</div><h2>Sprite Generator</h2></div>${badge}</div>
+    <div class="sprite-progress${paused?' paused':''}"><div class="sprite-progress-title"><span>Progress</span><div style="display:flex;align-items:center;gap:8px">${toggleBtn}</div></div><div class="sprite-progress-bar"><div class="sprite-progress-fill" style="width:${sp.percent}%"></div></div><div class="sprite-progress-info"><span>${sp.completed} / ${sp.total} media</span><span>${sp.percent}%</span></div>${!paused&&sp.running&&sp.current?`<div class="sprite-progress-current">Currently: ${esc(sp.current)}</div>`:paused?'<div class="sprite-progress-current">Paused — click Start Sprites to resume</div>':''}</div>
+  </div>`;
+}
+
+function renderCorruptedFilesPanel(){
+  if(currentRole!=='admin')return '';
+  return `<div class="admin-panel admin-panel-wide"><div id="corruptedSection">${renderCorruptedSection()}</div></div>`;
+}
+
+function dockerState(item){
+  if(!item)return {status:'unknown',health:null,ok:false,error:''};
+  if(typeof item==='string')return {status:item,health:null,ok:item==='running',error:''};
+  return item;
+}
+
+function dockerStatusText(item){
+  const d=dockerState(item);
+  if(d.status==='running'&&d.health)return `${d.status} / ${d.health}`;
+  return d.status||'unknown';
+}
+
 function renderAdminDockerPanel(){
   if(currentRole!=='admin'||!dashboardData.docker)return '';
   const d=dashboardData.docker;
-  const row=(name,label)=>`<div class="admin-service-row"><div><strong>${label}</strong><span>${name}</span></div>${statusPill(d[name]||'unknown',d[name]==='running'?'ok':'bad')}</div>`;
-  return `<div class="admin-panel">
-    <div class="admin-panel-head"><div><div class="admin-eyebrow">Services</div><h2>Containers</h2></div></div>
-    <div class="admin-service-list">${row('gluetun','VPN Tunnel')}${row('qbittorrent','Torrent Client')}</div>
-    <div class="admin-actions"><button class="btn btn-secondary btn-sm" onclick="nav('settings',document.querySelector('[data-view=settings]'))">Container Controls</button></div>
+  function dockerBadge(item){
+    const s=dockerState(item);
+    const text=dockerStatusText(s);
+    if(s.ok)return statusPill(text,'ok');
+    if(s.status==='exited'||s.status==='stopped'||s.status==='created')return statusPill(s.status==='created'?'created':'stopped','bad');
+    return statusPill(text,'warn');
+  }
+  function dockerBtns(name,item){
+    const running=dockerState(item).status==='running';
+    return running
+      ?`<button class="btn btn-sm" onclick="dockerAction('stop','${name}')" style="font-size:.75rem;padding:5px 11px;background:#c0392b">Stop</button><button class="btn btn-sm" onclick="dockerAction('restart','${name}')" style="font-size:.75rem;padding:5px 11px">Restart</button>`
+      :`<button class="btn btn-sm" onclick="dockerAction('start','${name}')" style="font-size:.75rem;padding:5px 11px;background:#27ae60">Start</button>`;
+  }
+  function dockerDetail(item,fallback){
+    const s=dockerState(item);
+    if(s.error)return s.error;
+    if(s.exitCode&&s.exitCode!==0)return `Last exit code ${s.exitCode}`;
+    if(s.restart)return `${fallback} · restart: ${s.restart}`;
+    return fallback;
+  }
+  const row=(name,label,description)=>{
+    const s=dockerState(d[name]);
+    return `<div class="admin-service-row"><div><strong>${label}</strong><span>${esc(dockerDetail(s,description))}</span></div><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end">${dockerBadge(s)}${dockerBtns(name,s)}</div></div>`;
+  };
+  const web=d.qbittorrentWeb?`<div class="admin-service-row"><div><strong>qBittorrent Web</strong><span>${esc(d.qbittorrentWeb.error||'http://127.0.0.1:8080')}</span></div>${statusPill(d.qbittorrentWeb.status||'unknown',d.qbittorrentWeb.ok?'ok':'bad')}</div>`:'';
+  const warning=d.warning?`<div class="admin-empty" style="border-color:rgba(244,67,54,.25);color:#ff9c9c">${esc(d.warning)}</div>`:'';
+  return `<div class="admin-panel admin-panel-wide">
+    <div class="admin-panel-head"><div><div class="admin-eyebrow">Services</div><h2>Docker Containers</h2></div><button class="btn btn-secondary btn-sm" onclick="dockerRepair()">Repair Stack</button></div>
+    <div class="admin-service-list" id="dockerSection">${warning}${row('gluetun','VPN Tunnel','VPN tunnel')}${row('qbittorrent','Torrent Client','Torrent client via gluetun')}${web}</div>
   </div>`;
 }
 
@@ -1411,6 +1501,32 @@ function renderAdminRecentPanel(){
   </div>`;
 }
 
+function renderAccountsPanel(){
+  if(currentRole!=='admin')return '';
+  const profiles=dashboardData.profiles||[];
+  const rows=profiles.map(p=>{
+    const perms=p.permissions||[];
+    let roleBadge;
+    if(p.role==='admin'){
+      roleBadge='<span style="background:var(--accent);color:#fff;padding:2px 8px;border-radius:4px;font-size:.7rem;font-weight:700">ADMIN</span>';
+    } else {
+      const permTags=[];
+      if(perms.includes('canDownload'))permTags.push('<span style="background:rgba(59,130,246,.2);color:#60a5fa;padding:2px 6px;border-radius:4px;font-size:.65rem;font-weight:600">DL</span>');
+      if(perms.includes('canScan'))permTags.push('<span style="background:rgba(16,185,129,.2);color:#34d399;padding:2px 6px;border-radius:4px;font-size:.65rem;font-weight:600">SCAN</span>');
+      if(perms.includes('canRestart'))permTags.push('<span style="background:rgba(245,158,11,.2);color:#fbbf24;padding:2px 6px;border-radius:4px;font-size:.65rem;font-weight:600">RST</span>');
+      if(perms.includes('canLogs'))permTags.push('<span style="background:rgba(168,85,247,.2);color:#c084fc;padding:2px 6px;border-radius:4px;font-size:.65rem;font-weight:600">LOGS</span>');
+      roleBadge='<span style="background:rgba(255,255,255,.1);color:var(--text-secondary);padding:2px 8px;border-radius:4px;font-size:.7rem;font-weight:700">USER</span>'+(permTags.length?' '+permTags.join(' '):'');
+    }
+    const lockIcon=p.hasPassword?'&#128274;':'<span style="color:var(--text-muted)">None</span>';
+    const deleteBtn=profiles.length<=1?'':`<button class="btn btn-danger btn-sm" onclick="deleteAccount('${escAttr(p.id)}','${escAttr(p.name)}')" style="padding:4px 10px;font-size:.75rem">Delete</button>`;
+    return `<div class="admin-list-row"><div style="width:40px;height:40px;border-radius:10px;background:${p.avatar};display:flex;align-items:center;justify-content:center;font-weight:700;font-size:1.1rem;color:#fff;flex-shrink:0">${p.name[0].toUpperCase()}</div><div class="admin-list-body"><strong>${esc(p.name)}</strong><span>@${esc(p.username||'')} · Password: ${lockIcon}</span></div><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end">${roleBadge}<button class="btn btn-secondary btn-sm" onclick="editAccount('${escAttr(p.id)}')" style="padding:4px 10px;font-size:.75rem">Edit</button>${deleteBtn}</div></div>`;
+  }).join('');
+  return `<div class="admin-panel admin-panel-wide">
+    <div class="admin-panel-head"><div><div class="admin-eyebrow">Access</div><h2>Accounts</h2></div><button class="btn btn-primary btn-sm" onclick="createProfile()">&#10010; Add Account</button></div>
+    <div class="admin-list">${rows||'<div class="admin-empty">No accounts found.</div>'}</div>
+  </div>`;
+}
+
 function buildAdminDashboardHtml(){
   const canRestart=currentRole==='admin'||hasPerm('canRestart');
   return `<div class="admin-dashboard">
@@ -1425,14 +1541,19 @@ function buildAdminDashboardHtml(){
         ${canRestart?'<button class="btn btn-secondary" onclick="restartServer()">Restart Server</button>':''}
       </div>
     </div>
+    <div id="settingsAlert" class="alert"></div>
     <div class="admin-grid">
       ${renderAdminSystemPanel()}
       ${renderAdminLibraryPanel()}
+      ${renderMediaFoldersSection()}
       ${renderAdminWatchingPanel()}
       ${renderAdminDownloadsPanel()}
       ${currentRole==='admin'?renderAdminMaintenancePanel():''}
+      ${renderSpriteControlsPanel()}
+      ${renderCorruptedFilesPanel()}
       ${renderAdminDockerPanel()}
       ${renderAdminRecentPanel()}
+      ${renderAccountsPanel()}
     </div>
   </div>`;
 }
@@ -1449,6 +1570,7 @@ function startDashboardRefresh(){
   clearInterval(window._dashboardInterval);
   window._dashboardInterval=setInterval(async()=>{
     if(currentView!=='system'){clearInterval(window._dashboardInterval);return;}
+    if(document.activeElement&&document.activeElement.closest('#addFolderPath,#addFolderType,#addFolderLabel,.modal-dialog'))return;
     await fetchDashboardData();
     if(currentView==='system')document.getElementById('contentArea').innerHTML=buildAdminDashboardHtml();
   },15000);
@@ -1504,28 +1626,48 @@ async function renderSettings(){
   // Docker container controls
   let dockerStatus={qbittorrent:'unknown',gluetun:'unknown'};
   try{const r=await adminFetch('/api/docker/status');if(r.ok)dockerStatus=await r.json();}catch{}
-  function dockerBadge(s){
-    if(s==='running')return`<span style="background:#1a3a1a;color:#4caf50;border:1px solid #4caf50;border-radius:20px;padding:2px 9px;font-size:.72rem;font-weight:600">● running</span>`;
-    if(s==='exited'||s==='stopped')return`<span style="background:#3a1a1a;color:#f44336;border:1px solid #f44336;border-radius:20px;padding:2px 9px;font-size:.72rem;font-weight:600">● stopped</span>`;
-    return`<span style="background:rgba(255,255,255,.07);color:var(--text-muted);border-radius:20px;padding:2px 9px;font-size:.72rem">● ${s}</span>`;
+  function dockerBadge(item){
+    const d=dockerState(item);
+    const text=dockerStatusText(d);
+    if(d.ok)return`<span style="background:#1a3a1a;color:#4caf50;border:1px solid #4caf50;border-radius:20px;padding:2px 9px;font-size:.72rem;font-weight:600">● ${esc(text)}</span>`;
+    if(d.status==='exited'||d.status==='stopped'||d.status==='created')return`<span style="background:#3a1a1a;color:#f44336;border:1px solid #f44336;border-radius:20px;padding:2px 9px;font-size:.72rem;font-weight:600">● ${esc(d.status==='created'?'created':'stopped')}</span>`;
+    return`<span style="background:rgba(255,255,255,.07);color:var(--text-muted);border-radius:20px;padding:2px 9px;font-size:.72rem">● ${esc(text)}</span>`;
   }
-  function dockerBtns(name,s){
-    const running=s==='running';
+  function dockerBtns(name,item){
+    const running=dockerState(item).status==='running';
     return running
       ?`<button class="btn btn-sm" onclick="dockerAction('stop','${name}')" style="font-size:.75rem;padding:5px 11px;background:#c0392b">Stop</button><button class="btn btn-sm" onclick="dockerAction('restart','${name}')" style="font-size:.75rem;padding:5px 11px">Restart</button>`
       :`<button class="btn btn-sm" onclick="dockerAction('start','${name}')" style="font-size:.75rem;padding:5px 11px;background:#27ae60">Start</button>`;
   }
+  function dockerDetail(item,fallback){
+    const d=dockerState(item);
+    if(d.error)return d.error;
+    if(d.exitCode&&d.exitCode!==0)return `Last exit code ${d.exitCode}`;
+    if(d.restart)return `${fallback} · restart: ${d.restart}`;
+    return fallback;
+  }
+  const qbtWeb=dockerStatus.qbittorrentWeb||{status:'unknown',ok:false};
+  const dockerWarning=dockerStatus.warning?`<div style="padding:10px 12px;background:rgba(244,67,54,.10);border:1px solid rgba(244,67,54,.28);border-radius:8px;color:#ffb2b2;font-size:.82rem">${esc(dockerStatus.warning)}</div>`:'';
   const dockerh=`<h3 style="font-size:1rem;font-weight:700;margin:28px 0 12px">Docker Containers</h3>
   <div style="display:flex;flex-direction:column;gap:8px" id="dockerSection">
+    ${dockerWarning}
+    <div style="display:flex;justify-content:flex-end;gap:8px">
+      <button class="btn btn-secondary btn-sm" onclick="dockerRepair()" style="font-size:.75rem;padding:5px 11px">Repair Stack</button>
+    </div>
     <div style="display:flex;align-items:center;gap:12px;padding:12px 16px;background:var(--bg-card);border-radius:10px;border:1px solid rgba(255,255,255,.06)">
       <div style="font-size:1.3rem">&#127758;</div>
-      <div style="flex:1"><div style="font-weight:600;font-size:.9rem">gluetun</div><div style="font-size:.75rem;color:var(--text-muted)">VPN tunnel</div></div>
+      <div style="flex:1"><div style="font-weight:600;font-size:.9rem">gluetun</div><div style="font-size:.75rem;color:var(--text-muted)">${esc(dockerDetail(dockerStatus.gluetun,'VPN tunnel'))}</div></div>
       ${dockerBadge(dockerStatus.gluetun)}<div style="display:flex;gap:6px">${dockerBtns('gluetun',dockerStatus.gluetun)}</div>
     </div>
     <div style="display:flex;align-items:center;gap:12px;padding:12px 16px;background:var(--bg-card);border-radius:10px;border:1px solid rgba(255,255,255,.06)">
       <div style="font-size:1.3rem">&#127987;</div>
-      <div style="flex:1"><div style="font-weight:600;font-size:.9rem">qbittorrent</div><div style="font-size:.75rem;color:var(--text-muted)">Torrent client (via gluetun)</div></div>
+      <div style="flex:1"><div style="font-weight:600;font-size:.9rem">qbittorrent</div><div style="font-size:.75rem;color:var(--text-muted)">${esc(dockerDetail(dockerStatus.qbittorrent,'Torrent client via gluetun'))}</div></div>
       ${dockerBadge(dockerStatus.qbittorrent)}<div style="display:flex;gap:6px">${dockerBtns('qbittorrent',dockerStatus.qbittorrent)}</div>
+    </div>
+    <div style="display:flex;align-items:center;gap:12px;padding:12px 16px;background:var(--bg-card);border-radius:10px;border:1px solid rgba(255,255,255,.06)">
+      <div style="font-size:1.3rem">&#128279;</div>
+      <div style="flex:1"><div style="font-weight:600;font-size:.9rem">qBittorrent Web UI</div><div style="font-size:.75rem;color:var(--text-muted)">${esc(qbtWeb.error||'http://127.0.0.1:8080')}</div></div>
+      ${qbtWeb.ok?'<span style="background:#1a3a1a;color:#4caf50;border:1px solid #4caf50;border-radius:20px;padding:2px 9px;font-size:.72rem;font-weight:600">● reachable</span>':`<span style="background:#3a1a1a;color:#f44336;border:1px solid #f44336;border-radius:20px;padding:2px 9px;font-size:.72rem;font-weight:600">● ${esc(qbtWeb.status||'unreachable')}</span>`}
     </div>
   </div>`;
 
@@ -1632,9 +1774,9 @@ async function addFolder(){
   const p=document.getElementById('addFolderPath'),t=document.getElementById('addFolderType'),l=document.getElementById('addFolderLabel');
   if(!p.value.trim()){showSettingsAlert('Enter a folder path.','error');return;}
   try{const r=await adminFetch('/api/config/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:p.value.trim(),type:t.value,label:l.value.trim()})});const d=await r.json();if(!r.ok){showSettingsAlert(d.error||'Error','error');return;}
-  showSettingsAlert('Folder linked!','success');p.value='';t.value='auto';l.value='';browserOpen=false;await renderSettings();fetchLib();}catch{showSettingsAlert('Server error.','error');}
+  showSettingsAlert('Folder linked!','success');p.value='';t.value='auto';l.value='';browserOpen=false;if(currentView==='system')await renderAdminDashboard();else await renderSettings();fetchLib();}catch{showSettingsAlert('Server error.','error');}
 }
-async function removeFolder(fp){try{await adminFetch('/api/config/remove',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:fp})});await renderSettings();fetchLib();}catch{}}
+async function removeFolder(fp){try{await adminFetch('/api/config/remove',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:fp})});if(currentView==='system')await renderAdminDashboard();else await renderSettings();fetchLib();}catch{}}
 function showSettingsAlert(m,t){const e=document.getElementById('settingsAlert');if(!e)return;e.className=`alert ${t}`;e.textContent=m;setTimeout(()=>{e.className='alert';},3500);}
 
 function scanLibrary(e){
@@ -3180,10 +3322,37 @@ function dlSwitchTab(tab){dlActiveTab=tab;renderDownloads();}
 async function dockerAction(action,container){
   const section=document.getElementById('dockerSection');
   if(section)section.style.opacity='0.5';
-  try{await adminFetch('/api/docker/'+action+'/'+container,{method:'POST'});}catch{}
-  // Wait for container to settle then re-render settings
+  let error='';
+  try{
+    const r=await adminFetch('/api/docker/'+action+'/'+container,{method:'POST'});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok||!d.ok)error=d.error||`Docker ${action} failed.`;
+  }catch{error='Docker request failed.';}
+  // Wait for container to settle then re-render controls
   await new Promise(r=>setTimeout(r,2000));
-  renderSettings();
+  if(currentView==='system')await renderAdminDashboard();else await renderSettings();
+  if(error){
+    showSettingsAlert(error,'error');
+    showToast(error,'error');
+  }
+}
+
+async function dockerRepair(){
+  const section=document.getElementById('dockerSection');
+  if(section)section.style.opacity='0.5';
+  let error='';
+  try{
+    const r=await adminFetch('/api/docker/repair',{method:'POST'});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok||!d.ok)error=d.error||'Docker stack repair failed.';
+    else showToast(d.repaired?'Docker stack repaired.':'Docker stack is already up.','success');
+  }catch{error='Docker repair request failed.';}
+  await new Promise(r=>setTimeout(r,2000));
+  if(currentView==='system')await renderAdminDashboard();else await renderSettings();
+  if(error){
+    showSettingsAlert(error,'error');
+    showToast(error,'error');
+  }
 }
 
 async function orgServiceAction(action){
