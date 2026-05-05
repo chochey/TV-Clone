@@ -1589,6 +1589,15 @@ function requestSpriteQueue() {
 }
 
 // Extract a single frame via fast input seeking
+function killSpawnedGroup(proc, signal = 'SIGTERM') {
+  if (!proc?.pid) return;
+  try {
+    process.kill(-proc.pid, signal);
+  } catch {
+    try { proc.kill(signal); } catch {}
+  }
+}
+
 function extractFrame(filePath, timestamp, outFile) {
   return new Promise((resolve) => {
     const proc = spawn('ionice', ['-c', '3', 'nice', '-n', '19', 'ffmpeg',
@@ -1597,13 +1606,22 @@ function extractFrame(filePath, timestamp, outFile) {
       '-ss', String(timestamp), '-i', filePath,
       '-vframes', '1', '-vf', `scale=${SPRITE_W}:${SPRITE_H}:force_original_aspect_ratio=decrease,pad=${SPRITE_W}:${SPRITE_H}:(ow-iw)/2:(oh-ih)/2`,
       '-q:v', '5', '-y', outFile,
-    ]);
+    ], { detached: true, stdio: 'ignore' });
+    let done = false;
+    let forceKill = null;
+    const finish = (ok) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timeout);
+      clearTimeout(forceKill);
+      resolve(ok);
+    };
     const timeout = setTimeout(() => {
-      proc.kill();
-      resolve(false);
+      killSpawnedGroup(proc, 'SIGTERM');
+      forceKill = setTimeout(() => killSpawnedGroup(proc, 'SIGKILL'), 5000);
     }, 5 * 60 * 1000); // 5min max per frame (large files with slow seeking need more time)
-    proc.on('close', (code) => { clearTimeout(timeout); resolve(code === 0); });
-    proc.on('error', () => { clearTimeout(timeout); resolve(false); });
+    proc.on('close', (code) => finish(code === 0));
+    proc.on('error', () => finish(false));
   });
 }
 
@@ -1628,7 +1646,7 @@ async function extractAllFrames(filePath, tmpDir, totalFrames) {
     await waitForBackgroundHeadroom('sprite frame extraction');
     const batch = pending.slice(i, i + SPRITE_PARALLEL);
     const results = await Promise.all(batch.map(f => extractFrame(filePath, f.ts, f.outFile)));
-    if (results.some(r => !r)) allOk = false;
+    if (results.some(r => !r)) return false;
   }
   return allOk;
 }
@@ -1645,9 +1663,22 @@ function stitchSprite(frameFiles, outFile, cols, rows) {
       ...inputs,
       '-filter_complex', `${filterInputs}xstack=inputs=${frameFiles.length}:layout=${generateXstackLayout(frameFiles.length, cols, rows)}`,
       '-q:v', '5', '-update', '1', '-y', outFile,
-    ]);
-    proc.on('close', (code) => resolve(code === 0));
-    proc.on('error', () => resolve(false));
+    ], { detached: true, stdio: 'ignore' });
+    let done = false;
+    let forceKill = null;
+    const finish = (ok) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timeout);
+      clearTimeout(forceKill);
+      resolve(ok);
+    };
+    const timeout = setTimeout(() => {
+      killSpawnedGroup(proc, 'SIGTERM');
+      forceKill = setTimeout(() => killSpawnedGroup(proc, 'SIGKILL'), 5000);
+    }, 2 * 60 * 1000);
+    proc.on('close', (code) => finish(code === 0));
+    proc.on('error', () => finish(false));
   });
 }
 
