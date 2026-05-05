@@ -34,6 +34,20 @@ test.describe('Video Playback', () => {
     await expect(page.locator('.player-top-bar')).toBeVisible();
   });
 
+  test('player controls stay visible while using the control bar', async ({ page }) => {
+    await loginAsUser(page);
+    await navigateTo(page, 'Movies');
+    await playMediaCard(page);
+    await showControls(page);
+
+    const controlsBox = await page.locator('.player-controls').boundingBox();
+    expect(controlsBox).toBeTruthy();
+    await page.mouse.move(controlsBox.x + controlsBox.width / 2, controlsBox.y + controlsBox.height / 2);
+
+    await page.waitForTimeout(3500);
+    await expect(page.locator('#playerModal')).toHaveClass(/controls-visible/);
+  });
+
   test('play/pause toggle works', async ({ page }) => {
     await loginAsUser(page);
     await navigateTo(page, 'Movies');

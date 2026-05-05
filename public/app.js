@@ -2177,7 +2177,7 @@ async function autoDetectIntro(){
   }
 }
 
-function toggleMenu(id,e){e.stopPropagation();const m=document.getElementById(id);const o=m.classList.contains('open');closeMenus();if(!o)m.classList.add('open');}
+function toggleMenu(id,e){e.stopPropagation();const m=document.getElementById(id);const o=m.classList.contains('open');closeMenus();if(!o)m.classList.add('open');showControls(_isTouch?12000:5000);}
 function closeMenus(){document.querySelectorAll('.speed-menu,.skip-menu,.sub-menu,.audio-menu,.boost-menu,.quality-menu').forEach(m=>m.classList.remove('open'));}
 document.addEventListener('click',e=>{if(!e.target.closest('.ctrl-btn-wrap'))closeMenus();});
 
@@ -2323,7 +2323,8 @@ async function closePlayer(){
   document.getElementById('skipIntroBox').classList.remove('visible','fade-out');
   document.getElementById('markIntroPanel').classList.remove('visible');
   document.getElementById('markIntroBtn').style.display='none';
-  clearInterval(progressSaveInterval);modal.removeEventListener('mousemove',showControls);
+  clearInterval(progressSaveInterval);clearTimeout(controlsTimeout);modal.removeEventListener('mousemove',showControls);
+  modal.classList.remove('controls-visible');
   closeMenus();fetchLib();fetchQueue();
 }
 
@@ -2354,12 +2355,12 @@ document.getElementById('videoWrapper').addEventListener('click',function(e){
 // Progress bar
 let isSeeking=false;
 let _hlsSeekPending=false;
-progContainer.addEventListener('mousedown',e=>{isSeeking=true;seekVisual(e);});
+progContainer.addEventListener('mousedown',e=>{isSeeking=true;showControls(6000);seekVisual(e);});
 document.addEventListener('mousemove',e=>{if(isSeeking)seekVisual(e);});
-document.addEventListener('mouseup',()=>{if(isSeeking){isSeeking=false;seekCommit();}});
-progContainer.addEventListener('touchstart',e=>{isSeeking=true;seekVisual(e.touches[0]);},{passive:true});
+document.addEventListener('mouseup',()=>{if(isSeeking){isSeeking=false;seekCommit();showControls();}});
+progContainer.addEventListener('touchstart',e=>{isSeeking=true;showControls(12000);seekVisual(e.touches[0]);},{passive:true});
 document.addEventListener('touchmove',e=>{if(isSeeking)seekVisual(e.touches[0]);},{passive:true});
-document.addEventListener('touchend',()=>{if(isSeeking){isSeeking=false;seekCommit();}});
+document.addEventListener('touchend',()=>{if(isSeeking){isSeeking=false;seekCommit();showControls();}});
 
 // YouTube-style sprite sheet seek preview
 const seekPreview=document.getElementById('seekPreview');
@@ -2582,11 +2583,34 @@ document.addEventListener('keydown',e=>{
   }
 });
 
+const PLAYER_INTERACTION_SELECTOR='.player-controls,.player-top-bar,.speed-menu,.skip-menu,.sub-menu,.audio-menu,.boost-menu,.quality-menu';
+const PLAYER_HOVER_SELECTOR='.player-controls:hover,.player-top-bar:hover,.speed-menu:hover,.skip-menu:hover,.sub-menu:hover,.audio-menu:hover,.boost-menu:hover,.quality-menu:hover';
+
+function playerMenuOpen(){
+  return !!document.querySelector('.speed-menu.open,.skip-menu.open,.sub-menu.open,.audio-menu.open,.boost-menu.open,.quality-menu.open');
+}
+
+function controlsInteractionActive(){
+  if(!modal.classList.contains('active'))return false;
+  if(isSeeking||playerMenuOpen()||V.paused)return true;
+  const active=document.activeElement;
+  if(active&&active.closest&&active.closest(PLAYER_INTERACTION_SELECTOR))return true;
+  return !_isTouch&&!!document.querySelector(PLAYER_HOVER_SELECTOR);
+}
+
+function hideControlsIfIdle(){
+  if(controlsInteractionActive()){
+    controlsTimeout=setTimeout(hideControlsIfIdle,1000);
+    return;
+  }
+  modal.classList.remove('controls-visible');
+}
+
 function showControls(durationMs){
   const hideAfter=durationMs||(_isTouch?8000:3000);
   modal.classList.add('controls-visible');
   clearTimeout(controlsTimeout);
-  controlsTimeout=setTimeout(()=>{modal.classList.remove('controls-visible');},hideAfter);
+  controlsTimeout=setTimeout(hideControlsIfIdle,hideAfter);
 }
 
 // When user presses Escape in fullscreen, the browser exits fullscreen (swallowing the
@@ -2617,8 +2641,12 @@ document.getElementById('videoWrapper').addEventListener('click',function(e){
   showControls();
 });
 
-document.querySelector('.player-controls')?.addEventListener('pointerdown',()=>{if(_isTouch)showControls(9000);},{passive:true});
-document.querySelector('.player-top-bar')?.addEventListener('pointerdown',()=>{if(_isTouch)showControls(9000);},{passive:true});
+document.querySelectorAll(PLAYER_INTERACTION_SELECTOR).forEach(el=>{
+  el.addEventListener('pointerdown',()=>showControls(_isTouch?12000:5000),{passive:true});
+  el.addEventListener('pointerenter',()=>showControls(_isTouch?12000:5000),{passive:true});
+  el.addEventListener('focusin',()=>showControls(_isTouch?12000:5000));
+  el.addEventListener('pointerleave',()=>showControls(),{passive:true});
+});
 
 // Re-show controls on orientation change so user doesn't lose them
 screen.orientation?.addEventListener('change',()=>{if(modal.classList.contains('active'))showControls();});
