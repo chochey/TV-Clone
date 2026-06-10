@@ -2745,38 +2745,62 @@ function saveOrganizerAliases(aliases) {
   return organizerTools.saveAliases(saveJSONSync, ORGANIZER_ALIAS_FILE, aliases);
 }
 
-function readOrganizerLogLines() {
+// Read only the tail of the organizer log — the file grows unbounded
+// (5MB+, mostly heartbeats) and these endpoints are hit on every refresh.
+function readOrganizerLogLines(maxBytes = 1536 * 1024) {
   try {
-    const data = fs.readFileSync(ORGANIZER_LOG, 'utf-8');
-    return data.split('\n').filter(l => l.trim());
+    const st = fs.statSync(ORGANIZER_LOG);
+    const start = Math.max(0, st.size - maxBytes);
+    const fd = fs.openSync(ORGANIZER_LOG, 'r');
+    const buf = Buffer.alloc(st.size - start);
+    fs.readSync(fd, buf, 0, buf.length, start);
+    fs.closeSync(fd);
+    let text = buf.toString('utf-8');
+    if (start > 0) text = text.slice(text.indexOf('\n') + 1); // drop partial first line
+    return text.split('\n').filter(l => l.trim());
   } catch {
     return [];
   }
 }
 
+function organizerLogTimestamp(line) {
+  const m = line.match(/^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]/);
+  if (!m) return 0;
+  const t = Date.parse(m[1].replace(' ', 'T'));
+  return Number.isFinite(t) ? t : 0;
+}
+
 app.get('/api/organizer/logs', requireAdminSession, async (req, res) => {
-  const lines = parseInt(req.query.lines) || 200;
+  const lines = Math.min(parseInt(req.query.lines) || 200, 1000);
   const filter = req.query.filter || 'all'; // all, moves, errors, scans
+  const q = String(req.query.q || '').toLowerCase().slice(0, 100);
   try {
-    await fs.promises.access(ORGANIZER_LOG);
-    const data = await fs.promises.readFile(ORGANIZER_LOG, 'utf-8');
-    let allLines = data.split('\n').filter(l => l.trim());
-    // Filter out heartbeat noise by default
-    if (filter !== 'all') {
-      allLines = allLines.filter(l => {
-        if (filter === 'moves') return /Moved ->|MOVIE.*Found|TV.*Found|Parsed:|OMDb match:|Scan complete/.test(l);
-        if (filter === 'errors') return /SKIP|ERROR|FAIL|No confident|rate limit/i.test(l);
-        if (filter === 'scans') return /Scan complete|Watching|============/.test(l);
-        return true;
-      });
-    } else {
-      // Even in 'all' mode, strip "Still watching..." heartbeats
-      allLines = allLines.filter(l => !/Still watching\.\.\./.test(l));
+    if (!fs.existsSync(ORGANIZER_LOG)) return res.json({ ok: false, error: 'Log file not found' });
+    const allLines = readOrganizerLogLines();
+    const isHeartbeat = l => /Still watching\.\.\./.test(l);
+
+    // Activity summary over the tail: heartbeat freshness + last 24h counts
+    const meta = { lastHeartbeat: 0, lastActivity: 0, moves24h: 0, skips24h: 0, errors24h: 0 };
+    const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
+    for (const l of allLines) {
+      const ts = organizerLogTimestamp(l);
+      if (isHeartbeat(l)) { if (ts > meta.lastHeartbeat) meta.lastHeartbeat = ts; continue; }
+      if (ts > meta.lastActivity) meta.lastActivity = ts;
+      if (ts < dayAgo) continue;
+      if (/Moved ->/.test(l)) meta.moves24h++;
+      else if (/SKIP|No confident/i.test(l)) meta.skips24h++;
+      else if (/ERROR|FAIL|rate limit/i.test(l)) meta.errors24h++;
     }
-    const result = allLines.slice(-lines);
-    res.json({ ok: true, lines: result, total: allLines.length });
+
+    let out;
+    if (filter === 'moves') out = allLines.filter(l => /Moved ->|MOVIE.*Found|TV.*Found|Parsed:|OMDb match:|Scan complete/.test(l));
+    else if (filter === 'errors') out = allLines.filter(l => /SKIP|ERROR|FAIL|No confident|rate limit/i.test(l));
+    else if (filter === 'scans') out = allLines.filter(l => /Scan complete|Watching|============/.test(l));
+    else out = allLines.filter(l => !isHeartbeat(l)); // 'all' still hides heartbeats
+    if (q) out = out.filter(l => l.toLowerCase().includes(q));
+
+    res.json({ ok: true, lines: out.slice(-lines), total: out.length, meta });
   } catch (err) {
-    if (err.code === 'ENOENT') return res.json({ ok: false, error: 'Log file not found' });
     res.json({ ok: false, error: err.message });
   }
 });

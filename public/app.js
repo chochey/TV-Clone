@@ -3957,35 +3957,105 @@ async function orgServiceAction(action){
     renderOrgLogs();
   }catch{renderOrgLogs();}
 }
+let orgLogSearch='',orgLogLive=false,_orgLogTimer=null,_orgLogSearchDebounce=null;
+
+function timeAgoShort(ms){
+  if(!ms)return 'never';
+  const s=Math.floor((Date.now()-ms)/1000);
+  if(s<60)return s+'s ago';
+  if(s<3600)return Math.floor(s/60)+'m ago';
+  if(s<86400)return Math.floor(s/3600)+'h ago';
+  return Math.floor(s/86400)+'d ago';
+}
+
 async function renderOrgLogsPage(){
   const a=document.getElementById('contentArea');
   a.innerHTML=`<div class="dl-page">
     <h2 style="font-size:1.3rem;font-weight:700;margin-bottom:4px">Organizer Logs</h2>
     <p style="color:var(--text-muted);font-size:.82rem;margin-bottom:12px">Media organizer activity — moves, matches, errors and scans</p>
-    <div id="dlTabContent"></div>
+    <div id="orgLogChrome"></div>
   </div>`;
-  renderOrgLogs();
+  await renderOrgLogs();
+  if(orgLogLive)startOrgLogTimer();
+}
+
+// Live tail is opt-in (the organizer runs on prod; no need to poll by default).
+function startOrgLogTimer(){
+  if(_orgLogTimer)clearInterval(_orgLogTimer);
+  _orgLogTimer=setInterval(()=>{
+    if(currentView!=='orglogs'||!orgLogLive){clearInterval(_orgLogTimer);_orgLogTimer=null;return;}
+    refreshOrgLogs();
+  },5000);
+}
+
+function toggleOrgLogLive(){
+  orgLogLive=!orgLogLive;
+  if(orgLogLive){startOrgLogTimer();refreshOrgLogs();}
+  else if(_orgLogTimer){clearInterval(_orgLogTimer);_orgLogTimer=null;refreshOrgLogs();}
 }
 
 async function renderOrgLogs(){
-  const c=document.getElementById('dlTabContent');
+  const c=document.getElementById('orgLogChrome');
   if(!c)return;
+  c.innerHTML=`<div id="orgLogStatusRow" style="display:flex;align-items:center;gap:10px;padding:10px 0 6px;flex-wrap:wrap"></div>
+    <div class="org-log-controls">
+      <select id="orgLogFilter" onchange="orgLogFilter=this.value;refreshOrgLogs(true)">
+        <option value="all"${orgLogFilter==='all'?' selected':''}>All Activity</option>
+        <option value="moves"${orgLogFilter==='moves'?' selected':''}>Moves &amp; Matches</option>
+        <option value="errors"${orgLogFilter==='errors'?' selected':''}>Errors &amp; Skips</option>
+        <option value="scans"${orgLogFilter==='scans'?' selected':''}>Scan Summaries</option>
+      </select>
+      <input type="text" id="orgLogSearch" placeholder="Search log..." value="${escAttr(orgLogSearch)}" oninput="orgLogSearchInput(this.value)" aria-label="Search organizer log">
+      <div id="orgLogMeta" class="org-log-meta"></div>
+    </div>
+    <div class="org-log-container" id="orgLogArea"><div style="text-align:center;padding:40px"><span class="dl-spinner" style="width:24px;height:24px;border-width:2px"></span></div></div>`;
+  await refreshOrgLogs(true);
+}
+
+function orgLogSearchInput(v){
+  orgLogSearch=v.trim();
+  clearTimeout(_orgLogSearchDebounce);
+  _orgLogSearchDebounce=setTimeout(()=>refreshOrgLogs(true),300);
+}
+
+// Updates status/meta/log lines only — leaves the filter + search controls
+// alone so the 5s live tail never steals focus or wipes typed input.
+async function refreshOrgLogs(resetScroll){
+  if(currentView!=='orglogs')return;
   let active=false;
   try{const r=await adminFetch('/api/organizer/status');const d=await r.json();active=d.active;}catch{}
-  const statusBadge=active
-    ?`<span style="background:#1a3a1a;color:#4caf50;border:1px solid #4caf50;border-radius:20px;padding:3px 10px;font-size:.78rem;font-weight:600">● Running</span>`
-    :`<span style="background:#3a1a1a;color:#f44336;border:1px solid #f44336;border-radius:20px;padding:3px 10px;font-size:.78rem;font-weight:600">● Stopped</span>`;
-  const ctrlBtns=active
-    ?`<button class="btn btn-sm" onclick="orgServiceAction('stop')" style="font-size:.78rem;padding:6px 12px;background:#c0392b">Stop</button><button class="btn btn-sm" onclick="orgServiceAction('restart')" style="font-size:.78rem;padding:6px 12px">Restart</button>`
-    :`<button class="btn btn-sm" onclick="orgServiceAction('start')" style="font-size:.78rem;padding:6px 12px;background:#27ae60">Start</button>`;
-  c.innerHTML=`<div style="display:flex;align-items:center;gap:10px;padding:10px 14px 6px;flex-wrap:wrap">${statusBadge}<div style="display:flex;gap:6px;margin-left:auto">${ctrlBtns}<button class="btn btn-sm" onclick="renderOrgLogs()" style="font-size:.78rem;padding:6px 10px">&#8635;</button></div></div><div class="org-log-controls"><select id="orgLogFilter" onchange="orgLogFilter=this.value;renderOrgLogs()"><option value="all"${orgLogFilter==='all'?' selected':''}>All Activity</option><option value="moves"${orgLogFilter==='moves'?' selected':''}>Moves &amp; Matches</option><option value="errors"${orgLogFilter==='errors'?' selected':''}>Errors &amp; Skips</option><option value="scans"${orgLogFilter==='scans'?' selected':''}>Scan Summaries</option></select></div><div class="org-log-container" id="orgLogArea"><div style="text-align:center;padding:40px"><span class="dl-spinner" style="width:24px;height:24px;border-width:2px"></span></div></div>`;
+  const row=document.getElementById('orgLogStatusRow');
+  if(row){
+    const statusBadge=active
+      ?`<span style="background:#1a3a1a;color:#4caf50;border:1px solid #4caf50;border-radius:20px;padding:3px 10px;font-size:.78rem;font-weight:600">● Running</span>`
+      :`<span style="background:#3a1a1a;color:#f44336;border:1px solid #f44336;border-radius:20px;padding:3px 10px;font-size:.78rem;font-weight:600">● Stopped</span>`;
+    const ctrlBtns=active
+      ?`<button class="btn btn-sm" onclick="orgServiceAction('stop')" style="font-size:.78rem;padding:6px 12px;background:#c0392b">Stop</button><button class="btn btn-sm" onclick="orgServiceAction('restart')" style="font-size:.78rem;padding:6px 12px">Restart</button>`
+      :`<button class="btn btn-sm" onclick="orgServiceAction('start')" style="font-size:.78rem;padding:6px 12px;background:#27ae60">Start</button>`;
+    const liveBtn=`<button class="btn btn-sm" onclick="toggleOrgLogLive()" style="font-size:.78rem;padding:6px 12px;${orgLogLive?'background:#27ae60':''}" aria-pressed="${orgLogLive}" title="Auto-refresh every 5 seconds">Live: ${orgLogLive?'On':'Off'}</button>`;
+    row.innerHTML=`${statusBadge}${orgLogLive?'<span style="color:var(--text-muted);font-size:.74rem">refreshing every 5s</span>':''}<div style="display:flex;gap:6px;margin-left:auto">${ctrlBtns}${liveBtn}<button class="btn btn-sm" onclick="refreshOrgLogs(true)" style="font-size:.78rem;padding:6px 10px" aria-label="Refresh now">&#8635;</button></div>`;
+  }
   try{
-    const r=await fetch('/api/organizer/logs?lines=500&filter='+orgLogFilter);
+    const params=new URLSearchParams({lines:'500',filter:orgLogFilter});
+    if(orgLogSearch)params.set('q',orgLogSearch);
+    const r=await fetch('/api/organizer/logs?'+params.toString());
     const d=await r.json();
     const area=document.getElementById('orgLogArea');
-    if(!area)return;
-    if(!d.ok){area.innerHTML=`<div style="text-align:center;padding:40px;color:var(--text-muted)">${d.error||'Could not load logs'}</div>`;return;}
-    if(!d.lines.length){area.innerHTML='<div style="text-align:center;padding:40px;color:var(--text-muted)">No log entries found</div>';return;}
+    if(!area||currentView!=='orglogs')return;
+    const metaEl=document.getElementById('orgLogMeta');
+    if(metaEl&&d.meta){
+      const hb=d.meta.lastHeartbeat;
+      const hbFresh=hb&&(Date.now()-hb)<11*60*1000; // heartbeats land every 5 min
+      metaEl.innerHTML=[
+        statusPill('Heartbeat '+timeAgoShort(hb),hbFresh?'ok':'bad'),
+        statusPill('Last activity '+timeAgoShort(d.meta.lastActivity),'info'),
+        statusPill(d.meta.moves24h+' move'+(d.meta.moves24h===1?'':'s')+' / 24h',d.meta.moves24h?'ok':'info'),
+        (d.meta.skips24h+d.meta.errors24h)?statusPill((d.meta.skips24h+d.meta.errors24h)+' skips+errors / 24h','warn'):'',
+      ].join('');
+    }
+    if(!d.ok){area.innerHTML=`<div style="text-align:center;padding:40px;color:var(--text-muted)">${esc(d.error||'Could not load logs')}</div>`;return;}
+    if(!d.lines.length){area.innerHTML=`<div style="text-align:center;padding:40px;color:var(--text-muted)">${orgLogSearch?'No matches for &ldquo;'+esc(orgLogSearch)+'&rdquo;':'No log entries found'}</div>`;return;}
+    const nearBottom=area.scrollHeight-area.scrollTop-area.clientHeight<80;
     area.innerHTML=d.lines.map(l=>{
       let cls='log-info';
       if(/Moved ->/.test(l))cls='log-move';
@@ -3997,7 +4067,7 @@ async function renderOrgLogs(){
       if(tsMatch)return `<div class="org-log-line ${cls}"><span class="org-log-ts">${tsMatch[1]}</span>${esc(tsMatch[2])}</div>`;
       return `<div class="org-log-line ${cls}">${esc(l)}</div>`;
     }).join('');
-    area.scrollTop=area.scrollHeight;
+    if(resetScroll||nearBottom)area.scrollTop=area.scrollHeight;
   }catch{
     const area=document.getElementById('orgLogArea');
     if(area)area.innerHTML='<div style="text-align:center;padding:40px;color:var(--text-muted)">Could not reach the server</div>';

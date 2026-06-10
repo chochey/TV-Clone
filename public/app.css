@@ -530,6 +530,9 @@ video::cue{background:rgba(0,0,0,.8);color:#fff;font-size:clamp(1.6rem, 3.5vw, 2
 .dl-sort-arrow{font-size:.6rem}
 .org-log-controls{display:flex;gap:8px;margin:16px 0;align-items:center;flex-wrap:wrap}
 .org-log-controls select{padding:8px 12px;border-radius:8px;background:var(--bg-card);border:1px solid rgba(255,255,255,.1);color:var(--text-secondary);font-size:.82rem}
+.org-log-controls input{flex:0 1 220px;min-width:140px;padding:8px 12px;border-radius:8px;background:var(--bg-card);border:1px solid rgba(255,255,255,.1);color:var(--text-primary);font-size:.82rem;outline:none}
+.org-log-controls input:focus{border-color:var(--accent)}
+.org-log-meta{display:flex;gap:6px;margin-left:auto;flex-wrap:wrap}
 .org-log-container{background:var(--bg-card);border:1px solid rgba(255,255,255,.06);border-radius:10px;padding:16px;max-height:70vh;overflow-y:auto;font-family:'SF Mono',Monaco,Consolas,monospace;font-size:.78rem;line-height:1.7}
 .org-log-line{padding:2px 0;border-bottom:1px solid rgba(255,255,255,.03)}
 .org-log-line.log-move{color:#4caf50}
