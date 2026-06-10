@@ -3,7 +3,7 @@
 // ══════════════════════════════════════════════════════════════════════
 let library=[],currentView='home',currentMedia=null,controlsTimeout=null,progressSaveInterval=null;
 let folderConfig=[],activeProfile=null,profileQueue=[];
-let skipInterval=10,playbackSpeed=1,watchFilter='all';
+let skipInterval=10,playbackSpeed=1,watchFilter='all',genreFilter='all';
 let _currentQuality='auto'; // 'low', 'auto', 'high'
 let subtitleOffset=0,_currentSubIdx=-1,_subLoadToken=0,_subBlobUrl='',_subOffsetSaveTimer=null;
 let dismissedItems={continueWatching:{},recentlyAdded:{}};
@@ -97,6 +97,7 @@ async function showProfileScreen(skipSessionCheck){
     await Promise.all([fetchLib(),fetchDismissed()]);
     renderView();
     await fetchQueue();
+    fetchRequests();
     setupSSE();
     if(hasPerm('canDownload'))dlFetchPlugins();
     return;
@@ -149,6 +150,7 @@ async function doLogin(){
     await Promise.all([fetchLib(),fetchDismissed()]);
     renderView();
     await fetchQueue();
+    fetchRequests();
     setupSSE();
     if(hasPerm('canDownload'))dlFetchPlugins();
   }catch(e){
@@ -375,6 +377,134 @@ async function fetchQueue(){
   }catch{profileQueue=[];}
 }
 
+// ── Content requests ───────────────────────────────────────────────────
+let myRequests=[],requestsIsAdmin=false;
+
+async function fetchRequests(){
+  try{
+    const d=await(await fetch('/api/requests')).json();
+    if(!d.ok)return;
+    myRequests=d.requests||[];requestsIsAdmin=!!d.isAdmin;
+    const badge=document.getElementById('requestsBadge');
+    if(badge){
+      const pending=requestsIsAdmin?myRequests.filter(r=>r.status==='pending').length:0;
+      badge.style.display=pending?'':'none';badge.textContent=pending;
+    }
+  }catch{}
+}
+
+const REQUEST_STATUS_META={
+  pending:{label:'Pending',tone:'warn'},
+  downloading:{label:'Downloading',tone:'ok'},
+  fulfilled:{label:'Fulfilled',tone:'ok'},
+  declined:{label:'Declined',tone:'bad'},
+};
+
+function requestRow(r){
+  const meta=REQUEST_STATUS_META[r.status]||REQUEST_STATUS_META.pending;
+  const display=r.omdb?.title||r.title;
+  const year=r.omdb?.year||r.year;
+  const poster=r.omdb?.posterUrl?`<img class="request-poster" src="${escAttr(r.omdb.posterUrl)}" alt="" loading="lazy">`:`<div class="request-poster request-poster-empty">${r.type==='show'?'&#128250;':'&#127916;'}</div>`;
+  const who=requestsIsAdmin?`${esc(r.profileName||r.profileId)} · `:'';
+  const note=r.note?`<div class="request-note">&ldquo;${esc(r.note)}&rdquo;</div>`:'';
+  const canDelete=requestsIsAdmin||r.status==='pending';
+  const actions=[];
+  if(r.status==='fulfilled'&&r.matchedId)actions.push(`<button class="btn btn-primary btn-sm" onclick="openMediaDetail('${escJsArg(r.matchedId)}')">View</button>`);
+  if(requestsIsAdmin&&r.status==='pending'){
+    actions.push(`<button class="btn btn-primary btn-sm" onclick="requestSearchDownloads('${escJsArg(display)}','${escJsArg(year||'')}')">Search</button>`);
+    actions.push(`<button class="btn btn-secondary btn-sm" onclick="setRequestStatus('${escJsArg(r.id)}','downloading')">Downloading</button>`);
+    actions.push(`<button class="btn btn-secondary btn-sm" onclick="setRequestStatus('${escJsArg(r.id)}','declined')">Decline</button>`);
+  }
+  if(canDelete)actions.push(`<button class="btn btn-secondary btn-sm" onclick="deleteRequest('${escJsArg(r.id)}')" aria-label="Remove request">&#10005;</button>`);
+  return `<div class="request-row">
+    ${poster}
+    <div class="request-body">
+      <strong>${esc(display)}${year?` (${esc(year)})`:''}</strong>
+      <span>${who}${r.type==='show'?'TV show':r.type==='movie'?'Movie':'Movie or show'} · ${fmtDate(r.createdAt)}</span>
+      ${note}
+    </div>
+    ${statusPill(meta.label,meta.tone)}
+    <div class="request-actions">${actions.join('')}</div>
+  </div>`;
+}
+
+async function renderRequestsView(){
+  const a=document.getElementById('contentArea');
+  a.innerHTML='<div class="loading"><div class="spinner"></div> Loading...</div>';
+  await fetchRequests();
+  if(currentView!=='requests')return;
+  const order=['pending','downloading','fulfilled','declined'];
+  const sorted=[...myRequests].sort((x,y)=>order.indexOf(x.status)-order.indexOf(y.status)||y.createdAt-x.createdAt);
+  const rows=sorted.map(requestRow).join('');
+  a.innerHTML=`<div class="section requests-page">
+    <div class="section-header"><h2 class="section-title">Requests${requestsIsAdmin?' (all profiles)':''}</h2>
+      <button class="btn btn-primary btn-sm" onclick="openRequestModal('')">+ New Request</button></div>
+    ${rows||'<div class="empty-state"><div class="empty-icon">&#9993;</div><div class="empty-title">No Requests Yet</div><div class="empty-text">Search the library and request anything that is missing.</div></div>'}
+  </div>`;
+}
+
+function openRequestModal(prefill){
+  openModal(`
+    <h2>Request a Title</h2>
+    <div class="modal-field"><label>Title</label><input type="text" id="reqTitle" placeholder="e.g. Dune Part Three (2026)" value="${escAttr(prefill||'')}" autofocus></div>
+    <div class="modal-field"><label>Type</label>
+      <select id="reqType" class="form-input"><option value="movie">Movie</option><option value="show">TV Show</option><option value="unknown">Not sure</option></select></div>
+    <div class="modal-field"><label>Note (optional)</label><input type="text" id="reqNote" maxlength="300" placeholder="e.g. the 4K version if possible"></div>
+    <div class="modal-actions"><button class="btn btn-secondary" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" id="reqSubmitBtn" onclick="submitRequest()">Request</button></div>`);
+}
+
+async function submitRequest(){
+  const title=document.getElementById('reqTitle').value.trim();
+  if(!title){showToast('Enter a title','error');return;}
+  const btn=document.getElementById('reqSubmitBtn');
+  btn.disabled=true;btn.textContent='Requesting...';
+  try{
+    const r=await fetch('/api/requests',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({title,type:document.getElementById('reqType').value,note:document.getElementById('reqNote').value.trim()})});
+    const d=await r.json().catch(()=>({}));
+    if(r.ok&&d.ok){
+      closeModal();showToast('Request sent','success');
+      fetchRequests().then(()=>{if(currentView==='requests')renderRequestsView();});
+    }else if(d.code==='available'&&d.itemId){
+      closeModal();showToast(d.error||'Already in the library','info');openMediaDetail(d.itemId);
+    }else{
+      showToast(d.error||'Could not send request','error');
+      btn.disabled=false;btn.textContent='Request';
+    }
+  }catch{showToast('Could not send request','error');btn.disabled=false;btn.textContent='Request';}
+}
+
+async function setRequestStatus(id,status){
+  try{
+    const r=await fetch('/api/requests/'+encodeURIComponent(id),{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({status})});
+    if(!r.ok)throw new Error();
+    await fetchRequests();
+    if(currentView==='requests')renderRequestsView();
+    else if(currentView==='system')renderAdminDashboard();
+  }catch{showToast('Could not update request','error');}
+}
+
+async function deleteRequest(id){
+  try{
+    const r=await fetch('/api/requests/'+encodeURIComponent(id),{method:'DELETE'});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok)throw new Error(d.error);
+    await fetchRequests();
+    if(currentView==='requests')renderRequestsView();
+    else if(currentView==='system')renderAdminDashboard();
+  }catch(e){showToast(e.message||'Could not remove request','error');}
+}
+
+async function requestSearchDownloads(title,year){
+  if(!hasPerm('canDownload')){showToast('Downloads permission required','error');return;}
+  dlActiveTab='search';
+  nav('downloads',document.getElementById('navDownloads'));
+  for(let i=0;i<20&&!document.getElementById('dlSearchInput');i++)await new Promise(r=>setTimeout(r,150));
+  const input=document.getElementById('dlSearchInput');
+  if(input){input.value=year?`${title} ${year}`:title;dlStartSearch();}
+}
+
 async function fetchDismissed(){
   try{dismissedItems=await(await fetch(`/api/dismissed?profile=${activeProfile}`)).json();}
   catch{dismissedItems={continueWatching:{},recentlyAdded:{}};}
@@ -409,6 +539,7 @@ function updateStats(){
   const extra=custom.map(t=>{const c=library.filter(i=>i.type===t).length;return `${c} ${customTypeLabel(t).toLowerCase()}`;}).join(' · ');
   document.getElementById('libraryStats').textContent=`${library.length} items · ${m} movies · ${s} shows${extra?' · '+extra:''}`;
   document.getElementById('libCount').textContent=`${library.length} items`;
+  populateGenreSelect();
 }
 
 function activateWithKeyboard(event){
@@ -448,7 +579,10 @@ function updateFilterButtons(){
 // SSE for live updates
 function setupSSE(){
   const es=new EventSource('/api/events');
-  es.addEventListener('library-updated',()=>{fetchLib();});
+  es.addEventListener('library-updated',()=>{fetchLib();fetchRequests();});
+  es.addEventListener('requests-updated',()=>{
+    fetchRequests().then(()=>{if(currentView==='requests')renderRequestsView();});
+  });
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -459,6 +593,11 @@ function nav(view,btn,opts={}){
   if(!opts.preserveFilter&&(view==='movies'||view==='shows'||view.startsWith('custom_'))){
     watchFilter='all';
     updateFilterButtons();
+  }
+  if(!opts.preserveFilter){
+    genreFilter='all';
+    const gs=document.getElementById('genreSelect');
+    if(gs)gs.value='all';
   }
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
   if(btn)btn.classList.add('active');
@@ -483,6 +622,7 @@ function renderView(){
     case 'continue':a.innerHTML=renderContinue();break;
     case 'queue':a.innerHTML=renderQueue();break;
     case 'history':renderHistory();return;
+    case 'requests':renderRequestsView();return;
     case 'system':if(currentRole!=='admin'){nav('home',document.querySelector('[data-view="home"]'));return;}renderAdminDashboard();return;
     case 'settings':nav('system',document.querySelector('[data-view="system"]'));return;
     case 'downloads':if(!hasPerm('canDownload')){nav('home',document.querySelector('[data-view="home"]'));return;}renderDownloads();return;
@@ -515,7 +655,7 @@ function renderCustomTypeView(typeName){
   const hasShows=items.some(i=>i.showName);
   if(hasShows){
     const shows={};
-    for(const item of items){
+    for(const item of items.filter(matchesGenre)){
       const name=item.showName||item.title;
       if(!shows[name])shows[name]={name,items:[],poster:null,year:null,imdbRating:null,watched:true};
       shows[name].items.push(item);
@@ -552,10 +692,37 @@ function renderCustomTypeView(typeName){
 }
 
 // ── Sorting & filtering helpers ────────────────────────────────────────
+function itemGenres(item){
+  const out=[];
+  if(Array.isArray(item.genres))out.push(...item.genres);
+  if(item.genre)out.push(...item.genre.split(','));
+  return out.map(g=>g.trim()).filter(Boolean);
+}
+function matchesGenre(item){
+  if(genreFilter==='all')return true;
+  return itemGenres(item).some(g=>g.toLowerCase()===genreFilter.toLowerCase());
+}
+function setGenre(v){
+  genreFilter=v||'all';
+  renderView();
+}
+function populateGenreSelect(){
+  const sel=document.getElementById('genreSelect');
+  if(!sel)return;
+  const counts={};
+  for(const item of library)for(const g of itemGenres(item))counts[g]=(counts[g]||0)+1;
+  const genres=Object.keys(counts).sort((a,b)=>counts[b]-counts[a]);
+  const current=genreFilter;
+  sel.innerHTML='<option value="all">All Genres</option>'+genres.map(g=>`<option value="${escAttr(g)}">${esc(g)}</option>`).join('');
+  sel.value=genres.some(g=>g.toLowerCase()===current.toLowerCase())?current:'all';
+  if(sel.value==='all')genreFilter='all';
+}
+
 function getFiltered(items){
   let f=items;
   if(watchFilter==='watched')f=f.filter(i=>i.watched);
   if(watchFilter==='unwatched')f=f.filter(i=>!i.watched);
+  if(genreFilter!=='all')f=f.filter(matchesGenre);
   return sortItems(f);
 }
 
@@ -568,6 +735,7 @@ function sortItems(items){
     case 'year-desc':return copy.sort((a,b)=>(b.year||0)-(a.year||0));
     case 'year-asc':return copy.sort((a,b)=>(a.year||9999)-(b.year||9999));
     case 'recent':return copy.sort((a,b)=>(b.addedAt||0)-(a.addedAt||0));
+    case 'rating-desc':return copy.sort((a,b)=>(parseFloat(b.imdbRating)||0)-(parseFloat(a.imdbRating)||0));
   }
   return copy;
 }
@@ -943,7 +1111,7 @@ let currentShowName=null;
 let currentShowType='show'; // track which type opened the show detail
 
 function renderShowsView(){
-  const showItems=library.filter(m=>m.type==='show');
+  const showItems=library.filter(m=>m.type==='show'&&matchesGenre(m));
   // Group by showName
   const shows={};
   for(const item of showItems){
@@ -1092,11 +1260,31 @@ async function toggleWatched(id,watched){
 }
 
 // ── Random / Shuffle ───────────────────────────────────────────────────
-function playRandom(){
-  const pool=library.filter(m=>!m.watched);
-  if(!pool.length){showToast('Everything is watched!','info');return;}
-  const pick=pool[Math.floor(Math.random()*pool.length)];
-  playMedia(pick.id);
+function surpriseMe(){
+  // Scope to the current view's type, then honor the genre + watch filters.
+  let pool=library;
+  if(currentView==='movies')pool=pool.filter(m=>m.type==='movie');
+  else if(currentView==='shows')pool=pool.filter(m=>m.type==='show');
+  else if(currentView.startsWith('custom_'))pool=pool.filter(m=>m.type===currentView.slice(7));
+  if(genreFilter!=='all')pool=pool.filter(matchesGenre);
+  if(watchFilter==='watched')pool=pool.filter(m=>m.watched);
+  else if(watchFilter==='unwatched')pool=pool.filter(m=>!m.watched);
+  const unwatched=pool.filter(m=>!m.watched);
+  if(unwatched.length)pool=unwatched;
+  if(!pool.length){showToast('Nothing matches the current filters','info');return;}
+  // For shows pick a show, not a random mid-season episode.
+  const shows=[...new Set(pool.filter(m=>m.showName).map(m=>m.type+'::'+m.showName))];
+  const standalone=pool.filter(m=>!m.showName);
+  const idx=Math.floor(Math.random()*(shows.length+standalone.length));
+  if(idx<shows.length){
+    const [type,name]=shows[idx].split('::');
+    showToast(`How about ${name}?`,'info');
+    openShow(name,type);
+  }else{
+    const pick=standalone[idx-shows.length];
+    showToast(`How about ${pick.title}${pick.year?' ('+pick.year+')':''}?`,'info');
+    openMediaDetail(pick.id);
+  }
 }
 
 // ── Search ─────────────────────────────────────────────────────────────
@@ -1121,7 +1309,10 @@ async function _doSearch(){
     if(!Array.isArray(r))r=r.items||[];
   }catch(e){console.error('Search error:',e);r=[];}
   const a=document.getElementById('contentArea');
-  if(!r.length){a.innerHTML='<div class="empty-state"><div class="empty-icon">&#128269;</div><div class="empty-title">No Results</div></div>';return;}
+  if(!r.length){
+    a.innerHTML=`<div class="empty-state"><div class="empty-icon">&#128269;</div><div class="empty-title">No Results</div><div class="empty-text">Not in the library yet?</div><button class="btn btn-primary" style="margin-top:14px" onclick="openRequestModal('${escJsArg(q)}')">Request &ldquo;${esc(q)}&rdquo;</button></div>`;
+    return;
+  }
   // Group items with showName into single cards (TV shows + custom series)
   const standalone=r.filter(m=>!m.showName);
   const showMap={};
@@ -1270,6 +1461,7 @@ async function fetchDashboardData(){
   if(currentRole==='admin'||hasPerm('canDownload'))tasks.push(fetchDashboardDownloads());
   if(currentRole==='admin')tasks.push(fetchDashboardDocker());
   if(currentRole==='admin')tasks.push(fetchReliabilityStatus());
+  if(currentRole==='admin')tasks.push(fetchRequests());
   if(currentRole==='admin')tasks.push(fetchDashboardProfiles());
   if(currentRole==='admin')tasks.push(fetchDashboardOrganizerTools());
   await Promise.allSettled(tasks);
@@ -1441,6 +1633,31 @@ function renderAdminMaintenancePanel(){
     <div class="admin-actions">
       ${(currentRole==='admin'||hasPerm('canLogs'))?'<button class="btn btn-secondary btn-sm" onclick="nav(\'logs\',document.querySelector(\'[data-view=logs]\'))">Review Logs</button>':''}
     </div>
+  </div>`;
+}
+
+function renderRequestsPanel(){
+  if(currentRole!=='admin')return '';
+  const pending=myRequests.filter(r=>r.status==='pending');
+  const downloading=myRequests.filter(r=>r.status==='downloading');
+  const rows=[...pending,...downloading].slice(0,6).map(r=>{
+    const display=r.omdb?.title||r.title;
+    const year=r.omdb?.year||r.year;
+    const meta=REQUEST_STATUS_META[r.status]||REQUEST_STATUS_META.pending;
+    return `<div class="organizer-fix-row">
+      <div class="admin-list-body"><strong>${esc(display)}${year?` (${esc(year)})`:''}</strong><span>${esc(r.profileName||r.profileId)} · ${r.type==='show'?'TV show':r.type==='movie'?'Movie':'Unspecified'} · ${fmtDate(r.createdAt)}</span></div>
+      ${statusPill(meta.label,meta.tone)}
+      <div class="organizer-fix-actions">
+        <button class="btn btn-primary btn-sm" onclick="requestSearchDownloads('${escJsArg(display)}','${escJsArg(year||'')}')">Search</button>
+        ${r.status==='pending'?`<button class="btn btn-secondary btn-sm" onclick="setRequestStatus('${escJsArg(r.id)}','downloading')">Downloading</button>`:''}
+        <button class="btn btn-secondary btn-sm" onclick="setRequestStatus('${escJsArg(r.id)}','declined')">Decline</button>
+      </div>
+    </div>`;
+  }).join('');
+  return `<div class="admin-panel admin-panel-wide">
+    <div class="admin-panel-head"><div><div class="admin-eyebrow">From Profiles</div><h2>Requests</h2></div>${statusPill(pending.length?pending.length+' pending':'Clear',pending.length?'warn':'ok')}</div>
+    <div class="admin-list">${rows||'<div class="admin-empty">No open requests.</div>'}</div>
+    <div class="admin-actions"><button class="btn btn-secondary btn-sm" onclick="nav('requests',document.querySelector('[data-view=&quot;requests&quot;]'))">View All</button></div>
   </div>`;
 }
 
@@ -1655,6 +1872,7 @@ function buildAdminDashboardHtml(){
       ${renderAdminWatchingPanel()}
       ${renderAdminDownloadsPanel()}
       ${currentRole==='admin'?renderAdminMaintenancePanel():''}
+      ${renderRequestsPanel()}
       ${renderOrganizerFixPanel()}
       ${renderSpriteControlsPanel()}
       ${renderCorruptedFilesPanel()}

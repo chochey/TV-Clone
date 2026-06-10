@@ -622,6 +622,21 @@ video::cue{background:rgba(0,0,0,.8);color:#fff;font-size:clamp(1.6rem, 3.5vw, 2
 .organizer-alias-chip button{border:0;background:transparent;color:var(--text-muted);cursor:pointer;font-size:1rem;line-height:1}
 .organizer-alias-chip button:hover{color:var(--danger)}
 .organizer-preview-output{margin-top:12px;max-height:300px;overflow:auto;white-space:pre-wrap;border:1px solid rgba(148,163,184,.14);border-radius:14px;background:rgba(0,0,0,.28);padding:12px;font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--text-secondary)}
+/* Requests */
+.requests-page{max-width:880px}
+.requests-page .section-header{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.request-row{display:flex;align-items:center;gap:14px;border:1px solid rgba(148,163,184,.12);border-radius:16px;background:rgba(0,0,0,.14);padding:12px;margin-bottom:10px}
+.request-poster{width:46px;height:69px;border-radius:8px;object-fit:cover;flex-shrink:0;background:var(--bg-card)}
+.request-poster-empty{display:flex;align-items:center;justify-content:center;font-size:1.3rem}
+.request-body{flex:1;min-width:0}
+.request-body strong{display:block;font-size:.92rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.request-body span{display:block;font-size:.74rem;color:var(--text-muted);margin-top:3px}
+.request-note{font-size:.78rem;color:var(--text-secondary);margin-top:4px;font-style:italic}
+.request-actions{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+@media(max-width:760px){
+  .request-row{flex-wrap:wrap}
+  .request-actions{width:100%;justify-content:flex-start}
+}
 @media(max-width:1180px){
   .admin-panel,.admin-panel-wide{grid-column:span 6}
   .admin-health-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
