@@ -136,7 +136,7 @@ const DEFAULT_CONFIG = {
   genres: {},  // fileId -> [genre strings]
 };
 
-const { loadJSON, saveJSON, saveJSONSync } = require('./lib/json-store');
+const { loadJSON, saveJSON, saveJSONSync, saveRaw } = require('./lib/json-store');
 
 // ── Auth module (sessions, admin/cast tokens, password hashing) ───────
 const auth = require('./lib/auth')({
@@ -297,12 +297,9 @@ const LIBRARY_CACHE_FILE = path.join(DATA_DIR, 'library_cache.json');
 
 function saveLibraryCache() {
   if (!libraryCache) return;
-  const content = JSON.stringify(libraryCache);
-  const tmpPath = LIBRARY_CACHE_FILE + '.tmp';
-  fs.writeFile(tmpPath, content, (err) => {
-    if (err) return;
-    fs.rename(tmpPath, LIBRARY_CACHE_FILE, () => {});
-  });
+  // Queued async atomic write — this file is ~10MB, so a sync write would
+  // stall the event loop (and HLS segment delivery) for the duration.
+  saveRaw(LIBRARY_CACHE_FILE, JSON.stringify(libraryCache));
 }
 
 function loadLibraryCache() {
@@ -715,6 +712,20 @@ function getRequestProfile(req) {
   return requested || sessionProfileId;
 }
 
+app.put('/api/subtitle-offset/:id', requireAuth, (req, res) => {
+  const profileId = getRequestProfile(req);
+  if (!profileId) return res.status(403).json({ error: 'Cannot modify other profiles' });
+  const rawOffset = Number(req.body?.offset);
+  if (!Number.isFinite(rawOffset)) return res.status(400).json({ error: 'Invalid subtitle offset' });
+  const offset = Math.round(Math.max(-60, Math.min(60, rawOffset)) * 10) / 10;
+  const data = loadProfileData(profileId);
+  if (!data.subtitleOffsets || typeof data.subtitleOffsets !== 'object') data.subtitleOffsets = {};
+  if (Math.abs(offset) < 0.05) delete data.subtitleOffsets[req.params.id];
+  else data.subtitleOffsets[req.params.id] = offset;
+  saveProfileData(profileId, data);
+  res.json({ ok: true, offset });
+});
+
 app.get('/api/library', requireAuth, (req, res) => {
   const profileId = getRequestProfile(req);
   if (!profileId) return res.status(403).json({ error: 'Cannot access other profiles' });
@@ -819,7 +830,7 @@ app.get('/api/library', requireAuth, (req, res) => {
     if (v && v.updatedAt > maxProgressAt) maxProgressAt = v.updatedAt;
   }
   const profileVersion = Object.keys(profileData.progress).length + '-' + Object.keys(profileData.watched).length + '-' + maxProgressAt;
-  const omdbVersion = omdb.cacheSize;
+  const omdbVersion = omdb.cacheVersion || omdb.cacheSize;
   const overrideVersion = Object.keys(metadataOverrides.all()).length;
   const cacheTag = (libraryCache ? libraryCache.length : 0) + '-' + profileVersion + '-' + omdbVersion + '-' + overrideVersion;
   const etag = '"lib-' + crypto.createHash('md5').update(cacheTag).digest('hex').slice(0, 12) + '"';
@@ -847,6 +858,7 @@ app.get('/api/item/:id', requireAuth, (req, res) => {
     ...safeItem,
     progress: profileData.progress[item.id] || { currentTime: 0, duration: 0, percent: 0 },
     watched: !!profileData.watched[item.id],
+    subtitleOffset: profileData.subtitleOffsets?.[item.id] || 0,
     ...(omdb || {}),
   });
 });
@@ -1191,6 +1203,20 @@ app.delete('/api/media/:id', requireAdminSession, async (req, res) => {
     }
   } catch {}
 
+  // 6b. Remove the parent media folder if deleting the file left it empty.
+  // This prevents the organizer from treating an empty movie folder as an
+  // existing destination when a replacement copy is downloaded later.
+  try {
+    const parentDir = path.dirname(filePath);
+    if (parentDir && parentDir !== path.dirname(parentDir)) {
+      const remaining = fs.readdirSync(parentDir);
+      if (remaining.length === 0) {
+        fs.rmdirSync(parentDir);
+        console.log(`[Delete] Removed empty folder: ${parentDir}`);
+      }
+    }
+  } catch {}
+
   // 7. Remove from all profile data
   for (const [profileId] of profileDataCache) {
     const data = loadProfileData(profileId);
@@ -1287,9 +1313,9 @@ app.get('/api/metadata/:id', requireAuth, async (req, res) => {
 
   let cached = omdb.getCached(searchTitle, searchYear);
 
-  // If not cached or was a miss, try fetching
+  // If not cached or was a miss, try fetching.
   if (!cached || cached._miss) {
-    const result = await fetchOmdbData(searchTitle, searchYear, itemType);
+    const result = await fetchOmdbData(searchTitle, searchYear, itemType, { force: !!cached?._miss });
     saveOmdbCache();
     if (!result || result._miss) {
       return res.json({ found: false, title: searchTitle, year: searchYear });
@@ -1499,6 +1525,7 @@ try {
 const SPRITE_COLS = 5, SPRITE_ROWS = 5, SPRITE_INTERVAL = 10;
 const SPRITE_W = 160, SPRITE_H = 90;
 const FRAMES_PER_SPRITE = SPRITE_COLS * SPRITE_ROWS; // 25
+const SPRITE_IDLE_WAIT_MS = Math.max(5000, parseInt(process.env.SPRITE_IDLE_WAIT_MS, 10) || 30000);
 // Detect which physical drive files are on (for mergerfs setups) without
 // spawning helper processes. This runs during resource-sensitive background
 // sprite work, so keep it in-process and best-effort.
@@ -1530,7 +1557,7 @@ function getDriveIds(filePaths) {
 }
 
 // Pause sprite generation when any playback is active to prioritize disk I/O
-function waitForTranscodeIdle(timeoutMs = 10 * 60 * 1000) {
+function waitForTranscodeIdle(timeoutMs = SPRITE_IDLE_WAIT_MS) {
   return new Promise((resolve) => {
     const deadline = Date.now() + timeoutMs;
     const check = () => {
@@ -1538,7 +1565,7 @@ function waitForTranscodeIdle(timeoutMs = 10 * 60 * 1000) {
       const playbackRecent = (Date.now() - lastPlaybackAt) < 60000;
       if (!transcodeActive && !playbackRecent) return resolve();
       if (Date.now() >= deadline) {
-        console.warn('[SPRITE] waitForTranscodeIdle timed out after 10 min, resuming anyway');
+        console.warn(`[SPRITE] waitForTranscodeIdle timed out after ${Math.round(timeoutMs / 1000)}s, resuming anyway`);
         return resolve();
       }
       setTimeout(check, 2000);
@@ -1548,6 +1575,7 @@ function waitForTranscodeIdle(timeoutMs = 10 * 60 * 1000) {
 }
 
 const spriteJobs = {}; // id -> { done, thumbId, totalSheets, duration }
+const spriteJobPromises = {}; // id -> in-flight generation promise
 const spriteQueue = { total: 0, completed: 0, current: '', running: false };
 let lastPlaybackAt = 0; // timestamp of last segment/stream request — used to pause sprite gen during playback
 const nowWatching = {}; // profileId -> { profileName, id, title, currentTime, duration, updatedAt }
@@ -1576,6 +1604,7 @@ function clearSpriteArtifacts(id, filePath) {
   } catch {}
   try { fs.rmSync(path.join(THUMB_DIR, `_tmp_${thumbId}`), { recursive: true, force: true }); } catch {}
   delete spriteJobs[id];
+  delete spriteJobPromises[id];
   return removed;
 }
 
@@ -1694,7 +1723,14 @@ function generateXstackLayout(count, cols, rows) {
 
 async function startSpriteGen(id, filePath, title) {
   const thumbId = getThumbId(filePath);
-  if (spriteJobs[id] && spriteJobs[id].thumbId === thumbId) return spriteJobs[id];
+  const existing = spriteJobs[id];
+  if (existing && existing.thumbId === thumbId) {
+    if (existing.done) return existing;
+    if (spriteJobPromises[id]) return spriteJobPromises[id];
+  }
+  if (spriteJobPromises[id]) return spriteJobPromises[id];
+
+  const run = (async () => {
 
   const { duration, reason: probeReason } = await probeDurationWithReason(filePath);
   if (duration <= 0) {
@@ -1774,6 +1810,13 @@ async function startSpriteGen(id, filePath, title) {
   if (spriteJobs[id]) spriteJobs[id].done = true;
   console.log(`[SPRITE] Complete for ${path.basename(filePath)}: ${totalSheets} sheets`);
   return spriteJobs[id];
+  })();
+  spriteJobPromises[id] = run;
+  try {
+    return await run;
+  } finally {
+    if (spriteJobPromises[id] === run) delete spriteJobPromises[id];
+  }
 }
 
 // Background: generate sprites for all movies in library
@@ -1796,7 +1839,8 @@ function queueAllSpriteGen() {
     // Skip files already known to be corrupted
     if (corruptedFiles[item.id]) { skippedCorrupted++; alreadyDone++; continue; }
     const thumbId = getThumbId(filePath);
-    if (fs.existsSync(spriteFilePath(thumbId, 0))) { alreadyDone++; continue; }
+    const tmpDir = path.join(THUMB_DIR, `_tmp_${thumbId}`);
+    if (fs.existsSync(spriteFilePath(thumbId, 0)) && !fs.existsSync(tmpDir)) { alreadyDone++; continue; }
     pending.push({ id: item.id, filePath, title: item.title });
   }
   if (skippedCorrupted > 0) console.log(`[SPRITE] Skipping ${skippedCorrupted} corrupted file(s)`);
@@ -1871,6 +1915,7 @@ app.get('/api/sprites/progress', requireAuth, (_req, res) => {
     const filePath = fileIndex[item.id];
     if (!filePath) continue;
     total++;
+    if (corruptedFiles[item.id]) { completed++; continue; }
     const thumbId = getThumbId(filePath);
     if (fs.existsSync(spriteFilePath(thumbId, 0))) completed++;
   }
@@ -1880,7 +1925,7 @@ app.get('/api/sprites/progress', requireAuth, (_req, res) => {
     current: spriteQueue.current,
     running: spriteQueue.running,
     enabled: spriteGenEnabled,
-    percent: total > 0 ? Math.round((completed / total) * 100) : 100,
+    percent: total > 0 ? (completed >= total ? 100 : Math.floor((completed / total) * 100)) : 100,
   });
 });
 
@@ -2008,6 +2053,15 @@ app.get('/api/system/stats', requireAdminSession, (_req, res) => {
   res.json(systemStats.snapshot({ activeTranscodes: Object.keys(transcodeSessions).length }));
 });
 
+const reliability = require('./lib/reliability');
+app.get('/api/reliability/status', requireAdminSession, async (_req, res) => {
+  try {
+    res.json(await reliability.status({ repoDir: __dirname, port: PORT }));
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 // Trigger sprite generation + return sprite metadata
 app.post('/api/sprites/:id/generate', requireAuth, ensureLibrary, async (req, res) => {
   const filePath = fileIndex[req.params.id];
@@ -2105,6 +2159,13 @@ const QUALITY_PRESETS = {
   high: { vaapiQp: 18, maxrate: '8M', bufsize: '16M', crf: 18 },
 };
 
+const VAAPI_DECODE_CODECS = new Set(['h264', 'hevc', 'vp8', 'vp9']);
+
+function canVaapiDecode(filePath) {
+  const codec = (probeCache[filePath] || '').toLowerCase();
+  return VAAPI_DECODE_CODECS.has(codec);
+}
+
 function startFfmpeg(id, filePath, sessionDir, seekTime, startSegNum, audioStreamIndex, quality) {
   // Kill existing process but keep files (segments already produced are still valid)
   if (transcodeSessions[id]) {
@@ -2136,9 +2197,10 @@ function startFfmpeg(id, filePath, sessionDir, seekTime, startSegNum, audioStrea
   } else if (vaapiAvailable()) {
     const pixFmt = pixFmtCache[filePath] || '';
     const is10bit = pixFmt.includes('10le') || pixFmt.includes('10be') || pixFmt.includes('p010');
-    if (is10bit) {
-      // 10-bit source: software decode → convert to 8-bit nv12 → upload to GPU → VAAPI encode
-      // (Intel UHD 630 can't encode 10-bit H.264, only 8-bit)
+    if (is10bit || !canVaapiDecode(filePath)) {
+      // Software decode, then upload frames to the GPU for H.264 encode. This
+      // handles 10-bit sources and legacy AVI/XVID MPEG-4 files that VAAPI
+      // cannot reliably hardware-decode.
       ffmpegArgs.push(
         '-vaapi_device', '/dev/dri/renderD128',
         '-vf', 'format=nv12,hwupload',
@@ -2487,10 +2549,16 @@ app.get('/api/qbt/torrents', requirePermission('canDownload'), requireQbt, async
 app.post('/api/qbt/torrents/add', requirePermission('canDownload'), requireQbt, async (req, res) => {
   try {
     const { urls, savepath } = req.body;
-    let body = `urls=${encodeURIComponent(urls)}`;
+    if (!urls || typeof urls !== 'string') return res.status(400).json({ ok: false, error: 'Missing torrent URL' });
+    const cleanUrls = urls.trim();
+    if (!/^magnet:\?/i.test(cleanUrls) && !/^https?:\/\//i.test(cleanUrls)) {
+      return res.status(400).json({ ok: false, error: 'Use a magnet link or torrent URL' });
+    }
+    let body = `urls=${encodeURIComponent(cleanUrls)}`;
     if (savepath) body += `&savepath=${encodeURIComponent(savepath)}`;
     const r = await qbt('POST', '/api/v2/torrents/add', body);
-    res.json({ ok: r.data === 'Ok.' });
+    if (r.status >= 400 || r.data !== 'Ok.') return res.status(502).json({ ok: false, error: r.data || 'qBittorrent rejected the torrent' });
+    res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -2583,9 +2651,51 @@ app.post('/api/scan', requirePermission('canScan'), async (_req, res) => {
   scanRunning = false;
 });
 
+app.post('/api/metadata/refresh-missing', requirePermission('canScan'), async (req, res) => {
+  if (scanRunning) return res.status(409).json({ ok: false, message: 'Scan already in progress' });
+  scanRunning = true;
+  try {
+    invalidateLibrary();
+    const library = scanLibrary('metadata-refresh');
+    const limit = Math.min(parseInt(req.body?.limit || '150', 10) || 150, 500);
+    const forceMisses = req.body?.forceMisses !== false;
+    const forcePosterless = req.body?.forcePosterless === true;
+    const result = await omdb.refreshMissingMetadata(library, { limit, forceMisses, forcePosterless });
+    invalidateLibrary();
+    scanLibrary('metadata-refresh');
+    notifyClients('library-updated');
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  } finally {
+    scanRunning = false;
+  }
+});
+
 // ── Media Organizer ──────────────────────────────────────────────────────
 const ORGANIZER_LOG     = process.env.ORGANIZER_LOG     || '/home/blue/Desktop/Repos/TV-Clone-prod/media-organizer/media-organizer.log';
 const ORGANIZER_SERVICE = process.env.ORGANIZER_SERVICE || 'tvclone-organizer.service';
+const ORGANIZER_SCRIPT  = process.env.ORGANIZER_SCRIPT  || path.join(path.dirname(ORGANIZER_LOG), 'movie_renamer.py');
+const ORGANIZER_ALIAS_FILE = process.env.ORGANIZER_ALIAS_FILE || path.join(path.dirname(ORGANIZER_LOG), 'organizer_aliases.json');
+const organizerTools = require('./lib/organizer-tools');
+
+function getOrganizerAliases() {
+  return organizerTools.loadAliases(loadJSON, ORGANIZER_ALIAS_FILE);
+}
+
+function saveOrganizerAliases(aliases) {
+  try { fs.mkdirSync(path.dirname(ORGANIZER_ALIAS_FILE), { recursive: true }); } catch {}
+  return organizerTools.saveAliases(saveJSONSync, ORGANIZER_ALIAS_FILE, aliases);
+}
+
+function readOrganizerLogLines() {
+  try {
+    const data = fs.readFileSync(ORGANIZER_LOG, 'utf-8');
+    return data.split('\n').filter(l => l.trim());
+  } catch {
+    return [];
+  }
+}
 
 app.get('/api/organizer/logs', requireAdminSession, async (req, res) => {
   const lines = parseInt(req.query.lines) || 200;
@@ -2612,6 +2722,69 @@ app.get('/api/organizer/logs', requireAdminSession, async (req, res) => {
     if (err.code === 'ENOENT') return res.json({ ok: false, error: 'Log file not found' });
     res.json({ ok: false, error: err.message });
   }
+});
+
+app.get('/api/organizer/aliases', requireAdminSession, (_req, res) => {
+  res.json({ ok: true, aliases: getOrganizerAliases(), path: ORGANIZER_ALIAS_FILE });
+});
+
+app.post('/api/organizer/aliases', requireAdminSession, (req, res) => {
+  const aliases = getOrganizerAliases();
+  const saved = organizerTools.upsertAlias(aliases, req.body || {});
+  if (!saved) return res.status(400).json({ ok: false, error: 'Alias needs both a parsed title and an OMDb title.' });
+  saveOrganizerAliases(aliases);
+  res.json({ ok: true, alias: saved, aliases });
+});
+
+app.delete('/api/organizer/aliases/:id', requireAdminSession, (req, res) => {
+  const aliases = getOrganizerAliases();
+  const next = aliases.filter(a => a.id !== req.params.id);
+  if (next.length === aliases.length) return res.status(404).json({ ok: false, error: 'Alias not found' });
+  saveOrganizerAliases(next);
+  res.json({ ok: true, aliases: next });
+});
+
+app.get('/api/organizer/fix-queue', requireAdminSession, (_req, res) => {
+  const aliases = getOrganizerAliases();
+  const queue = organizerTools.parseOrganizerFixQueue(readOrganizerLogLines(), aliases).slice(0, 100);
+  res.json({ ok: true, queue, aliases });
+});
+
+app.post('/api/organizer/preview', requireAdminSession, async (_req, res) => {
+  if (!fs.existsSync(ORGANIZER_SCRIPT)) {
+    return res.status(404).json({ ok: false, error: `Organizer script not found: ${ORGANIZER_SCRIPT}` });
+  }
+  const cwd = path.dirname(ORGANIZER_SCRIPT);
+  const child = spawn(process.env.ORGANIZER_PYTHON || 'python3', [ORGANIZER_SCRIPT, '--dry-run'], {
+    cwd,
+    env: { ...process.env, ORGANIZER_ALIAS_FILE },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let output = '';
+  const append = chunk => {
+    output += chunk.toString();
+    if (output.length > 60000) output = output.slice(-60000);
+  };
+  child.stdout.on('data', append);
+  child.stderr.on('data', append);
+  const timeout = setTimeout(() => {
+    try { child.kill('SIGTERM'); } catch {}
+  }, 60000);
+  // A failed spawn emits 'error' and then 'close' — only respond once.
+  let responded = false;
+  child.on('error', err => {
+    clearTimeout(timeout);
+    if (responded) return;
+    responded = true;
+    res.status(500).json({ ok: false, error: err.message });
+  });
+  child.on('close', code => {
+    clearTimeout(timeout);
+    if (responded) return;
+    responded = true;
+    const lines = output.split('\n').filter(l => l.trim()).slice(-300);
+    res.json({ ok: code === 0, code, lines, truncated: output.length >= 60000 });
+  });
 });
 
 // System control — docker + systemctl wrappers (lib/system-control.js)
@@ -2656,6 +2829,46 @@ app.post('/api/docker/:action/:container', requireAdminSession, async (req, res)
 app.post('/api/docker/repair', requireAdminSession, async (_req, res) => {
   const result = await dockerComposeRepair();
   res.json(result);
+});
+
+app.post('/api/reliability/repair', requireAdminSession, async (req, res) => {
+  const result = { ok: true, steps: [] };
+  try {
+    const localRepair = await reliability.repair({ repoDir: __dirname, port: PORT });
+    result.steps.push({ step: 'local-repair', ok: localRepair.ok, results: localRepair.results, warnings: localRepair.after?.warnings || [] });
+    if (!localRepair.ok) result.ok = false;
+
+    const dockerRepair = await dockerComposeRepair();
+    result.steps.push({ step: 'download-stack', ...dockerRepair });
+    if (!dockerRepair.ok) result.ok = false;
+
+    const orgRestart = await organizerServiceCmd('restart');
+    result.steps.push({ step: 'organizer-restart', ok: orgRestart.ok, error: orgRestart.ok ? undefined : orgRestart.stderr });
+    if (!orgRestart.ok) result.ok = false;
+
+    let scanCount = null;
+    try {
+      libraryCache = null;
+      const lib = scanLibrary('repair');
+      scanCount = lib.length;
+      notifyClients('library-updated');
+    } catch (err) {
+      result.ok = false;
+      result.steps.push({ step: 'library-scan', ok: false, error: err.message });
+    }
+    if (scanCount !== null) result.steps.push({ step: 'library-scan', ok: true, count: scanCount });
+
+    if (req.body?.restartApp === true) {
+      result.appRestartQueued = true;
+      setTimeout(() => {
+        Object.keys(transcodeSessions).forEach(cleanupSession);
+        process.exit(process.env.INVOCATION_ID ? 1 : 0);
+      }, 1200);
+    }
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message, steps: result.steps });
+  }
 });
 
 // ── Restart endpoint ────────────────────────────────────────────────────

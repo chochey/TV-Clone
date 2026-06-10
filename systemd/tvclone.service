@@ -1,0 +1,29 @@
+[Unit]
+Description=TV-Clone Media Server
+Wants=network-online.target
+After=network-online.target local-fs.target
+# Set this to the real media/download folders on the target machine.
+RequiresMountsFor=/mnt/media/Movies /mnt/media/TV /mnt/media/Share
+
+[Service]
+Type=simple
+User=tvclone
+Group=tvclone
+WorkingDirectory=/opt/tvclone
+EnvironmentFile=-/etc/tvclone/tvclone.env
+Environment=NODE_ENV=production
+Environment=PORT=4800
+ExecStartPre=/usr/bin/node /opt/tvclone/scripts/tvclone-reliability.js preflight --repo /opt/tvclone
+ExecStart=/usr/bin/node /opt/tvclone/server.js
+Restart=always
+RestartSec=10
+TimeoutStartSec=180
+TimeoutStopSec=45
+KillSignal=SIGTERM
+MemoryHigh=5G
+MemoryMax=6G
+MemorySwapMax=2G
+TasksMax=512
+
+[Install]
+WantedBy=multi-user.target

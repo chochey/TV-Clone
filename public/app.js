@@ -5,6 +5,7 @@ let library=[],currentView='home',currentMedia=null,controlsTimeout=null,progres
 let folderConfig=[],activeProfile=null,profileQueue=[];
 let skipInterval=10,playbackSpeed=1,watchFilter='all';
 let _currentQuality='auto'; // 'low', 'auto', 'high'
+let subtitleOffset=0,_currentSubIdx=-1,_subLoadToken=0,_subBlobUrl='',_subOffsetSaveTimer=null;
 let dismissedItems={continueWatching:{},recentlyAdded:{}};
 let currentRole='user'; // 'admin' or 'user'
 let currentPermissions=[]; // ['canDownload','canScan','canRestart','canLogs']
@@ -453,8 +454,12 @@ function setupSSE(){
 // ══════════════════════════════════════════════════════════════════════
 // Navigation & Rendering
 // ══════════════════════════════════════════════════════════════════════
-function nav(view,btn){
+function nav(view,btn,opts={}){
   currentView=view;
+  if(!opts.preserveFilter&&(view==='movies'||view==='shows'||view.startsWith('custom_'))){
+    watchFilter='all';
+    updateFilterButtons();
+  }
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
   if(btn)btn.classList.add('active');
   document.getElementById('searchInput').value='';
@@ -473,7 +478,7 @@ function renderView(){
   const a=document.getElementById('contentArea');
   switch(currentView){
     case 'home':a.innerHTML=renderHome();break;
-    case 'movies':a.innerHTML=renderPaginatedGrid('movie','Movies');setupGridObserver('movie');break;
+    case 'movies':a.innerHTML=renderGrid('movie','Movies');break;
     case 'shows':a.innerHTML=renderShowsView();break;
     case 'continue':a.innerHTML=renderContinue();break;
     case 'queue':a.innerHTML=renderQueue();break;
@@ -578,7 +583,7 @@ function openHeroStat(target){
   if(target==='unwatched'){
     watchFilter='unwatched';
     updateFilterButtons();
-    nav('movies',document.querySelector('[data-view="movies"]'));
+    nav('movies',document.querySelector('[data-view="movies"]'),{preserveFilter:true});
     return;
   }
   if(topViews.includes(target)){
@@ -1257,14 +1262,16 @@ function renderSysStats(){
   return html;
 }
 
-let dashboardData={downloads:null,docker:null,errors:null,scans:null,profiles:null};
+let dashboardData={downloads:null,docker:null,errors:null,scans:null,profiles:null,reliability:null,organizerTools:null};
 async function fetchDashboardData(){
   const tasks=[fetchStats(),fetchSpriteProgress(),fetchSysStats()];
   if(currentRole==='admin')tasks.push(fetchConfig(),fetchCorrupted());
   if(currentRole==='admin'||hasPerm('canLogs'))tasks.push(fetchNowWatching(),fetchDashboardLogs());
   if(currentRole==='admin'||hasPerm('canDownload'))tasks.push(fetchDashboardDownloads());
   if(currentRole==='admin')tasks.push(fetchDashboardDocker());
+  if(currentRole==='admin')tasks.push(fetchReliabilityStatus());
   if(currentRole==='admin')tasks.push(fetchDashboardProfiles());
+  if(currentRole==='admin')tasks.push(fetchDashboardOrganizerTools());
   await Promise.allSettled(tasks);
 }
 
@@ -1286,9 +1293,24 @@ async function fetchDashboardDocker(){
   try{const r=await adminFetch('/api/docker/status');if(r.ok)dashboardData.docker=await r.json();}catch{}
 }
 
+async function fetchReliabilityStatus(){
+  dashboardData.reliability=null;
+  try{const r=await adminFetch('/api/reliability/status');if(r.ok)dashboardData.reliability=await r.json();}catch{}
+}
+
 async function fetchDashboardProfiles(){
   dashboardData.profiles=[];
   try{dashboardData.profiles=await loadProfiles();}catch{}
+}
+
+async function fetchDashboardOrganizerTools(){
+  dashboardData.organizerTools={queue:[],aliases:[],error:null};
+  try{
+    const r=await adminFetch('/api/organizer/fix-queue');
+    const d=await r.json();
+    if(r.ok&&d.ok)dashboardData.organizerTools={queue:d.queue||[],aliases:d.aliases||[],error:null};
+    else dashboardData.organizerTools.error=d.error||'Could not load organizer fixes';
+  }catch{dashboardData.organizerTools.error='Could not reach organizer tools';}
 }
 
 async function fetchDashboardLogs(){
@@ -1422,6 +1444,60 @@ function renderAdminMaintenancePanel(){
   </div>`;
 }
 
+function organizerAliasType(type){
+  if(type==='show')return 'series';
+  if(type==='movie'||type==='series')return type;
+  return 'all';
+}
+
+function renderOrganizerFixPanel(){
+  if(currentRole!=='admin')return '';
+  const d=dashboardData.organizerTools;
+  if(!d)return `<div class="admin-panel admin-panel-wide"><div class="admin-panel-title">Organizer Fixes</div><div class="admin-empty">Organizer fixes are loading...</div></div>`;
+  const queue=d.queue||[];
+  const aliases=d.aliases||[];
+  const queueRows=queue.slice(0,6).map(item=>{
+    const suggested=item.suggestedAlias||'';
+    const type=organizerAliasType(item.type);
+    const meta=[item.type==='show'?'TV series':item.type||'media',item.year,`${item.count} skip${item.count===1?'':'s'}`].filter(Boolean).join(' · ');
+    return `<div class="organizer-fix-row">
+      <div class="admin-list-body"><strong>${esc(item.title)}</strong><span>${esc(meta)}${item.source?` · ${esc(item.source)}`:''}</span></div>
+      <div class="organizer-fix-actions">
+        <button class="btn btn-secondary btn-sm" onclick="fillOrganizerAlias('${escJsArg(item.title)}','${type}','${escJsArg(suggested)}')">Use Alias</button>
+        ${suggested?`<button class="btn btn-primary btn-sm" onclick="saveOrganizerAlias('${escJsArg(item.title)}','${type}','${escJsArg(suggested)}',this)">Save ${esc(suggested)}</button>`:''}
+      </div>
+    </div>`;
+  }).join('');
+  const aliasRows=aliases.slice(0,5).map(a=>`<div class="organizer-alias-chip"><span><strong>${esc(a.from)}</strong> → ${esc(a.to)}</span><button onclick="deleteOrganizerAlias('${escJsArg(a.id)}')" title="Remove alias" aria-label="Remove ${escAttr(a.from)} alias">&#10005;</button></div>`).join('');
+  return `<div class="admin-panel admin-panel-wide">
+    <div class="admin-panel-head"><div><div class="admin-eyebrow">OMDb Only</div><h2>Organizer Fixes</h2></div>${statusPill(queue.length?queue.length+' skips':'Clear',queue.length?'warn':'ok')}</div>
+    ${d.error?`<div class="admin-empty">${esc(d.error)}</div>`:''}
+    <div class="organizer-tool-grid">
+      <div class="organizer-tool-section">
+        <div class="organizer-tool-title">Fix Queue</div>
+        <div class="admin-list">${queueRows||'<div class="admin-empty">No recent OMDb skips in the organizer log.</div>'}</div>
+      </div>
+      <div class="organizer-tool-section">
+        <div class="organizer-tool-title">Alias Rules</div>
+        <div class="organizer-alias-form">
+          <input class="form-input" id="organizerAliasFrom" placeholder="Parsed title">
+          <input class="form-input" id="organizerAliasTo" placeholder="OMDb title">
+          <select class="form-input" id="organizerAliasType"><option value="series">TV</option><option value="movie">Movie</option><option value="all">All</option></select>
+          <button class="btn btn-primary btn-sm" onclick="saveOrganizerAliasFromForm(this)">Save</button>
+        </div>
+        <div class="organizer-alias-list">${aliasRows||'<div class="admin-empty">No alias rules yet.</div>'}</div>
+      </div>
+    </div>
+    <div class="admin-actions">
+      <button class="btn btn-secondary btn-sm" onclick="previewOrganizer(this)">Preview Organizer</button>
+      <button class="btn btn-secondary btn-sm" onclick="refreshOmdbMisses(this)">Retry OMDb Misses</button>
+      <button class="btn btn-secondary btn-sm" onclick="orgServiceAction('restart')">Restart Organizer</button>
+      <button class="btn btn-secondary btn-sm" onclick="fetchDashboardOrganizerTools().then(()=>{if(currentView==='system')document.getElementById('contentArea').innerHTML=buildAdminDashboardHtml();})">Refresh Queue</button>
+    </div>
+    <div id="organizerPreviewOutput" class="organizer-preview-output" hidden></div>
+  </div>`;
+}
+
 function renderSpriteControlsPanel(){
   if(currentRole!=='admin'||!spriteProgress)return '';
   const sp=spriteProgress;
@@ -1486,6 +1562,35 @@ function renderAdminDockerPanel(){
   </div>`;
 }
 
+function renderReliabilityPanel(){
+  if(currentRole!=='admin')return '';
+  const r=dashboardData.reliability;
+  if(!r)return `<div class="admin-panel admin-panel-wide"><div class="admin-panel-title">Reliability</div><div class="admin-empty">Reliability checks are loading...</div></div>`;
+  const checks=r.checks||{};
+  const media=[...(checks.media||[]),...(checks.downloads||[])];
+  const folders=media.map(c=>{
+    const tone=c.ok?'ok':'bad';
+    const detail=(c.warnings&&c.warnings.length)?c.warnings.join(' · '):(c.disk&&c.disk.ok?`${c.disk.usedPercent}% used`:'Ready');
+    return `<div class="admin-service-row"><div><strong>${esc(c.name||'folder')}</strong><span>${esc(c.path)} · ${esc(detail)}</span></div>${statusPill(c.ok?'Ready':'Check',tone)}</div>`;
+  }).join('');
+  const warnings=(r.warnings||[]).slice(0,6).map(w=>`<div class="admin-list-row compact"><div class="admin-dot bad"></div><div class="admin-list-body"><strong>${esc(w)}</strong></div></div>`).join('');
+  const appOk=checks.app&&checks.app.ok;
+  const orgOk=checks.organizerService&&checks.organizerService.ok;
+  const dockerOk=checks.docker&&checks.docker.ok;
+  return `<div class="admin-panel admin-panel-wide">
+    <div class="admin-panel-head"><div><div class="admin-eyebrow">Self Healing</div><h2>Reliability</h2></div>${statusPill(r.ok?'Healthy':'Needs attention',r.ok?'ok':'warn')}</div>
+    <div class="admin-mini-grid">
+      ${metricCard('App',appOk?'Ready':'Issue',checks.appService?.status||'',appOk?'ok':'bad')}
+      ${metricCard('Organizer',orgOk?'Running':'Stopped',checks.organizerService?.status||'',orgOk?'ok':'bad')}
+      ${metricCard('Downloads',dockerOk?'Ready':'Issue',checks.dockerService?.status||'',dockerOk?'ok':'warn')}
+      ${metricCard('Warnings',(r.warnings||[]).length,(r.generatedAt?fmtDate(r.generatedAt):''),(r.warnings||[]).length?'warn':'ok')}
+    </div>
+    <div class="admin-service-list">${folders||'<div class="admin-empty">No required folders configured.</div>'}</div>
+    ${warnings?`<div class="admin-list" style="margin-top:10px">${warnings}</div>`:''}
+    <div class="admin-actions"><button class="btn btn-primary btn-sm" onclick="repairEverything()">Repair Everything</button><button class="btn btn-secondary btn-sm" onclick="fetchReliabilityStatus().then(()=>{if(currentView==='system')document.getElementById('contentArea').innerHTML=buildAdminDashboardHtml();})">Recheck</button></div>
+  </div>`;
+}
+
 function renderAdminRecentPanel(){
   if(!(currentRole==='admin'||hasPerm('canLogs')))return '';
   const errors=dashboardData.errors||[];
@@ -1537,6 +1642,7 @@ function buildAdminDashboardHtml(){
         <p>Server health, library operations, downloads, logs, and maintenance in one place.</p>
       </div>
       <div class="admin-hero-actions">
+        ${currentRole==='admin'?'<button class="btn btn-primary" onclick="repairEverything()">Repair Everything</button>':''}
         ${hasPerm('canScan')?'<button class="btn btn-primary" onclick="scanLibrary(event)">Scan Library</button>':''}
         ${canRestart?'<button class="btn btn-secondary" onclick="restartServer()">Restart Server</button>':''}
       </div>
@@ -1549,8 +1655,10 @@ function buildAdminDashboardHtml(){
       ${renderAdminWatchingPanel()}
       ${renderAdminDownloadsPanel()}
       ${currentRole==='admin'?renderAdminMaintenancePanel():''}
+      ${renderOrganizerFixPanel()}
       ${renderSpriteControlsPanel()}
       ${renderCorruptedFilesPanel()}
+      ${renderReliabilityPanel()}
       ${renderAdminDockerPanel()}
       ${renderAdminRecentPanel()}
       ${renderAccountsPanel()}
@@ -1923,33 +2031,116 @@ async function setBoost(v){
 }
 
 // Subtitles
+function clampSubtitleOffset(v){return Math.max(-60,Math.min(60,Number(v)||0));}
+function formatSubtitleOffset(v){const n=Math.round(clampSubtitleOffset(v)*10)/10;return (n>0?'+':'')+n.toFixed(1)+'s';}
+function parseVttTime(t){
+  const parts=t.split(':');
+  const sec=parts.pop().split('.');
+  const s=Number(sec[0])||0,ms=Number(sec[1])||0,m=Number(parts.pop())||0,h=Number(parts.pop())||0;
+  return h*3600+m*60+s+ms/1000;
+}
+function formatVttTime(total){
+  const safe=Math.max(0,Math.round(total*1000));
+  const h=Math.floor(safe/3600000);
+  const m=Math.floor((safe%3600000)/60000);
+  const s=Math.floor((safe%60000)/1000);
+  const ms=safe%1000;
+  return String(h).padStart(2,'0')+':'+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0')+'.'+String(ms).padStart(3,'0');
+}
+function shiftVttText(text,offset){
+  const delta=clampSubtitleOffset(offset);
+  return text.replace(/((?:\d{2}:)?\d{2}:\d{2}\.\d{3})\s+-->\s+((?:\d{2}:)?\d{2}:\d{2}\.\d{3})([^\n]*)/g,(_m,start,end,settings)=>{
+    const shiftedStart=Math.max(0,parseVttTime(start)+delta);
+    const shiftedEnd=Math.max(shiftedStart+.001,parseVttTime(end)+delta);
+    return formatVttTime(shiftedStart)+' --> '+formatVttTime(shiftedEnd)+settings;
+  });
+}
+function clearSubtitleBlob(){
+  if(_subBlobUrl){URL.revokeObjectURL(_subBlobUrl);_subBlobUrl='';}
+}
+async function adjustedSubtitleUrl(url,offset){
+  clearSubtitleBlob();
+  if(Math.abs(clampSubtitleOffset(offset))<.05)return url;
+  const res=await fetch(url,{credentials:'same-origin'});
+  if(!res.ok)throw new Error('Subtitle fetch failed');
+  const shifted=shiftVttText(await res.text(),offset);
+  _subBlobUrl=URL.createObjectURL(new Blob([shifted],{type:'text/vtt'}));
+  return _subBlobUrl;
+}
+function updateSubOffsetUI(){
+  const v=document.getElementById('subOffsetValue');
+  if(v)v.textContent=formatSubtitleOffset(subtitleOffset);
+}
+function saveSubtitleOffset(){
+  if(!currentMedia)return;
+  clearTimeout(_subOffsetSaveTimer);
+  const id=currentMedia.id,offset=subtitleOffset;
+  _subOffsetSaveTimer=setTimeout(()=>{
+    fetch('/api/subtitle-offset/'+encodeURIComponent(id),{
+      method:'PUT',credentials:'same-origin',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({offset})
+    }).catch(e=>console.warn('[Subtitles] Failed to save offset:',e));
+  },300);
+}
+function adjustSubOffset(delta,e){
+  if(e)e.stopPropagation();
+  subtitleOffset=Math.round(clampSubtitleOffset(subtitleOffset+delta)*10)/10;
+  if(currentMedia)currentMedia.subtitleOffset=subtitleOffset;
+  updateSubOffsetUI();saveSubtitleOffset();
+  if(_currentSubIdx>=0)setSub(_currentSubIdx,{keepMenu:true});
+}
+function resetSubOffset(e){
+  if(e)e.stopPropagation();
+  subtitleOffset=0;
+  if(currentMedia)currentMedia.subtitleOffset=0;
+  updateSubOffsetUI();saveSubtitleOffset();
+  if(_currentSubIdx>=0)setSub(_currentSubIdx,{keepMenu:true});
+}
+function resetSubtitleState(offset){
+  _subLoadToken++;_currentSubIdx=-1;subtitleOffset=clampSubtitleOffset(offset||0);
+  clearSubtitleBlob();
+  V.querySelectorAll('track').forEach(t=>t.remove());
+}
 function buildSubMenu(){
   const menu=document.getElementById('subMenu');
-  let html='<div class="menu-option active" onclick="setSub(-1)">Off</div>';
+  let html='<div class="menu-option sub-track-option active" onclick="setSub(-1)">Off</div>';
   if(currentMedia&&currentMedia.subtitles){
     currentMedia.subtitles.forEach((s,i)=>{
-      html+=`<div class="menu-option" onclick="setSub(${i})">${esc(s.label)}</div>`;
+      html+=`<div class="menu-option sub-track-option" onclick="setSub(${i})">${esc(s.label)}</div>`;
     });
+    if(currentMedia.subtitles.length){
+      html+=`<div class="menu-divider"></div><div class="sub-offset-panel" onclick="event.stopPropagation()"><div class="sub-offset-head"><span>Sync</span><strong id="subOffsetValue">${formatSubtitleOffset(subtitleOffset)}</strong></div><div class="sub-offset-row"><button class="sub-offset-btn" onclick="adjustSubOffset(-.5,event)">Earlier</button><button class="sub-offset-btn" onclick="resetSubOffset(event)">Reset</button><button class="sub-offset-btn" onclick="adjustSubOffset(.5,event)">Later</button></div></div>`;
+    }
   }
   menu.innerHTML=html;
 }
 
-function setSub(idx){
+function setSub(idx,opts={}){
+  const keepMenu=!!opts.keepMenu;
+  const token=++_subLoadToken;
+  _currentSubIdx=idx;
   // Remove existing tracks
   V.querySelectorAll('track').forEach(t=>t.remove());
-  document.querySelectorAll('#subMenu .menu-option').forEach((e,i)=>e.classList.toggle('active',i===(idx+1)));
+  clearSubtitleBlob();
+  document.querySelectorAll('#subMenu .sub-track-option').forEach((e,i)=>e.classList.toggle('active',i===(idx+1)));
   if(idx>=0&&currentMedia&&currentMedia.subtitles[idx]){
-    const track=document.createElement('track');
-    track.kind='subtitles';track.label=currentMedia.subtitles[idx].label;
-    track.src=currentMedia.subtitles[idx].url;track.default=true;
-    V.appendChild(track);
-    // Enable the track
-    setTimeout(()=>{if(V.textTracks[0])V.textTracks[0].mode='showing';},200);
+    const sub=currentMedia.subtitles[idx];
+    adjustedSubtitleUrl(sub.url,subtitleOffset).catch(err=>{
+      console.warn('[Subtitles] Offset failed, using original track:',err);
+      return sub.url;
+    }).then(src=>{
+      if(token!==_subLoadToken||!currentMedia)return;
+      const track=document.createElement('track');
+      track.kind='subtitles';track.label=sub.label;track.src=src;track.default=true;
+      V.appendChild(track);
+      // Enable the track after the browser has registered it.
+      setTimeout(()=>{if(track.track)track.track.mode='showing';else if(V.textTracks[0])V.textTracks[0].mode='showing';},200);
+    });
     document.getElementById('videoWrapper').classList.add('subs-active');
   } else {
     document.getElementById('videoWrapper').classList.remove('subs-active');
   }
-  closeMenus();
+  if(!keepMenu)closeMenus();
 }
 
 // Audio track selection
@@ -2194,6 +2385,7 @@ async function playMedia(id){
     if(res.ok) Object.assign(item,full);
   }catch(e){console.error('[playMedia] item fetch error:', e.message);}
   currentMedia=item;
+  resetSubtitleState(item.subtitleOffset||0);
   document.getElementById('playerTitle').textContent=item.title;
   if(typeof _clearThumbCache==='function')_clearThumbCache();
   // Trigger sprite sheet generation in background
@@ -2317,7 +2509,8 @@ async function closePlayer(){
   if(document.fullscreenElement)document.exitFullscreen().catch(()=>{});
   if(hlsInstance){hlsInstance.destroy();hlsInstance=null;}
   V.removeAttribute('src');V.load();
-  V.querySelectorAll('track').forEach(t=>t.remove());
+  resetSubtitleState(0);clearTimeout(_subOffsetSaveTimer);
+  document.getElementById('videoWrapper').classList.remove('subs-active');
   modal.classList.remove('active');currentMedia=null;
   _skipSegments=null;_skipSegmentDismissed={};_currentAudioTrack=null;_markIntroStart=null;_markIntroEnd=null;
   document.getElementById('skipIntroBox').classList.remove('visible','fade-out');
@@ -2668,6 +2861,10 @@ async function saveProg(){
 function fmt(s){if(!s||isNaN(s))return '0:00';const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sec=Math.floor(s%60);return h>0?`${h}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`:`${m}:${String(sec).padStart(2,'0')}`;}
 function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML;}
 function escAttr(s){return s.replace(/&/g,'&amp;').replace(/'/g,'&#39;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\\/g,'\\\\');}
+// For string args inside inline onclick="f('...')" handlers. escAttr breaks
+// there: the HTML parser decodes &#39; back to a raw quote before the JS
+// engine parses the handler, so apostrophes terminate the string early.
+function escJsArg(s){return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 function escCssUrl(s){return escAttr(String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/\r?\n/g,''));}
 function formatSize(b){if(b<1024)return b+' B';if(b<1048576)return(b/1024).toFixed(1)+' KB';if(b<1073741824)return(b/1048576).toFixed(1)+' MB';return(b/1073741824).toFixed(1)+' GB';}
 function showToast(message,type='info'){
@@ -3236,7 +3433,7 @@ function renderDlSearch(){
     const tpb=dlPlugins.find(p=>/pirate/i.test(p.name)||/pirate/i.test(p.fullName));
     const defaultPlugin=tpb?tpb.name:'all';
     const pluginOpts=dlPlugins.map(p=>`<option value="${esc(p.name)}"${p.name===defaultPlugin?' selected':''}>${esc(p.fullName)}</option>`).join('');
-    const searchHtml=`<div class="dl-search-bar"><input type="text" id="dlSearchInput" placeholder="Search torrents..." onkeydown="if(event.key==='Enter')dlStartSearch()"><select id="dlCategorySelect"><option value="all">All</option><option value="movies">Movies</option><option value="tv">TV Shows</option><option value="music">Music</option><option value="anime">Anime</option><option value="software">Software</option><option value="games">Games</option></select><select id="dlPluginSelect"><option value="all">All Plugins</option>${pluginOpts}</select><button class="btn btn-primary" id="dlSearchBtn" onclick="dlStartSearch()">Search</button><button class="btn btn-sm" onclick="dlClearSearch()" style="font-size:.78rem;padding:7px 10px">Clear</button></div><div id="dlResultsArea"></div>`;
+    const searchHtml=`<div class="dl-magnet-bar"><input type="text" id="dlMagnetInput" placeholder="Paste magnet link or torrent URL..." onkeydown="if(event.key==='Enter')dlAddMagnet()"><button class="btn btn-primary" id="dlMagnetBtn" onclick="dlAddMagnet()">Add Link</button></div><div class="dl-search-bar"><input type="text" id="dlSearchInput" placeholder="Search torrents..." onkeydown="if(event.key==='Enter')dlStartSearch()"><select id="dlCategorySelect"><option value="all">All</option><option value="movies">Movies</option><option value="tv">TV Shows</option><option value="music">Music</option><option value="anime">Anime</option><option value="software">Software</option><option value="games">Games</option></select><select id="dlPluginSelect"><option value="all">All Plugins</option>${pluginOpts}</select><button class="btn btn-primary" id="dlSearchBtn" onclick="dlStartSearch()">Search</button><button class="btn btn-sm" onclick="dlClearSearch()" style="font-size:.78rem;padding:7px 10px">Clear</button></div><div id="dlResultsArea"></div>`;
     c.innerHTML=searchHtml;
   }
   // Update plugin dropdown if plugins loaded after initial render
@@ -3272,6 +3469,13 @@ async function dlStartSearch(){
   const input=document.getElementById('dlSearchInput');
   const q=input?input.value.trim():'';
   if(!q)return;
+  if(/^magnet:\?/i.test(q)||/^https?:\/\/.+\.torrent(?:[?#].*)?$/i.test(q)){
+    const magnet=document.getElementById('dlMagnetInput');
+    if(magnet)magnet.value=q;
+    if(input)input.value='';
+    await dlAddMagnet();
+    return;
+  }
   const cat=document.getElementById('dlCategorySelect').value;
   const plugin=document.getElementById('dlPluginSelect').value;
   dlSearching=true;dlSearchResults=[];dlSearchId=null;
@@ -3302,9 +3506,50 @@ async function dlStartSearch(){
 async function dlAddTorrent(url,btn){
   if(btn){btn.textContent='Adding...';btn.disabled=true;}
   try{
-    await fetch('/api/qbt/torrents/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({urls:url})});
+    const r=await fetch('/api/qbt/torrents/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({urls:url})});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok||!d.ok)throw new Error(d.error||'Add failed');
     if(btn){btn.textContent='Added';btn.style.background='#4caf50';}
-  }catch{if(btn){btn.textContent='Error';btn.style.background='#f44336';}}
+    await dlRefreshTorrents();
+    const countEl=document.getElementById('dlCount');
+    if(countEl)countEl.textContent=dlTorrents.length?`(${dlTorrents.length})`:'';
+  }catch(e){if(btn){btn.textContent='Error';btn.style.background='#f44336';}showToast(e.message||'Could not add torrent','error');}
+}
+
+async function dlAddMagnet(){
+  const input=document.getElementById('dlMagnetInput');
+  const btn=document.getElementById('dlMagnetBtn');
+  const url=input?input.value.trim():'';
+  if(!url)return;
+  if(!/^magnet:\?/i.test(url)&&!/^https?:\/\//i.test(url)){
+    showToast('Paste a magnet link or torrent URL','error');
+    return;
+  }
+  const old=btn?btn.textContent:'';
+  if(btn){btn.textContent='Adding...';btn.disabled=true;}
+  try{
+    const r=await fetch('/api/qbt/torrents/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({urls:url})});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok||!d.ok)throw new Error(d.error||'Add failed');
+    if(input)input.value='';
+    if(btn){btn.textContent='Added';btn.style.background='#4caf50';}
+    await dlRefreshTorrents();
+    dlActiveTab='active';
+    const tab=document.getElementById('dlTabContent');
+    if(tab){
+      const searchBtn=[...document.querySelectorAll('.dl-tabs .filter-btn')].find(b=>b.textContent.includes('Search'));
+      const activeBtn=[...document.querySelectorAll('.dl-tabs .filter-btn')].find(b=>b.textContent.includes('Active'));
+      if(searchBtn)searchBtn.classList.remove('active');
+      if(activeBtn)activeBtn.classList.add('active');
+      renderDlActive();
+    }
+    showToast('Torrent added','success');
+  }catch(e){
+    if(btn){btn.textContent='Error';btn.style.background='#f44336';}
+    showToast(e.message||'Could not add torrent','error');
+  }finally{
+    setTimeout(()=>{if(btn){btn.textContent=old||'Add Link';btn.disabled=false;btn.style.background='';}},1200);
+  }
 }
 
 function renderDlActive(){
@@ -3380,6 +3625,110 @@ async function dockerRepair(){
   if(error){
     showSettingsAlert(error,'error');
     showToast(error,'error');
+  }
+}
+
+function fillOrganizerAlias(from,type,to=''){
+  const f=document.getElementById('organizerAliasFrom');
+  const t=document.getElementById('organizerAliasTo');
+  const ty=document.getElementById('organizerAliasType');
+  if(f)f.value=from||'';
+  if(t)t.value=to||'';
+  if(ty)ty.value=type||'series';
+  if(t)t.focus();
+}
+
+async function saveOrganizerAlias(from,type,to,btn){
+  const old=btn?btn.textContent:'';
+  if(btn){btn.disabled=true;btn.textContent='Saving...';}
+  try{
+    const r=await adminFetch('/api/organizer/aliases',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({from,to,type})});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok||!d.ok)throw new Error(d.error||'Alias could not be saved');
+    await fetchDashboardOrganizerTools();
+    if(currentView==='system')document.getElementById('contentArea').innerHTML=buildAdminDashboardHtml();
+    showToast('Alias saved','success');
+  }catch(e){
+    showToast(e.message||'Alias save failed','error');
+    if(btn){btn.disabled=false;btn.textContent=old||'Save';}
+  }
+}
+
+function saveOrganizerAliasFromForm(btn){
+  const from=document.getElementById('organizerAliasFrom')?.value.trim()||'';
+  const to=document.getElementById('organizerAliasTo')?.value.trim()||'';
+  const type=document.getElementById('organizerAliasType')?.value||'series';
+  if(!from||!to){showToast('Enter both titles for the alias','error');return;}
+  saveOrganizerAlias(from,type,to,btn);
+}
+
+async function deleteOrganizerAlias(id){
+  try{
+    const r=await adminFetch('/api/organizer/aliases/'+encodeURIComponent(id),{method:'DELETE'});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok||!d.ok)throw new Error(d.error||'Alias could not be removed');
+    await fetchDashboardOrganizerTools();
+    if(currentView==='system')document.getElementById('contentArea').innerHTML=buildAdminDashboardHtml();
+    showToast('Alias removed','success');
+  }catch(e){showToast(e.message||'Alias remove failed','error');}
+}
+
+async function previewOrganizer(btn){
+  const out=document.getElementById('organizerPreviewOutput');
+  const old=btn?btn.textContent:'';
+  if(btn){btn.disabled=true;btn.textContent='Previewing...';}
+  if(out){out.hidden=false;out.textContent='Running dry-run preview...';}
+  try{
+    const r=await adminFetch('/api/organizer/preview',{method:'POST'});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok)throw new Error(d.error||'Preview failed');
+    const lines=(d.lines||[]).slice(-120);
+    if(out)out.textContent=lines.length?lines.join('\n'):'No organizer output.';
+    showToast(d.ok?'Preview complete':'Preview finished with warnings',d.ok?'success':'error');
+  }catch(e){
+    if(out)out.textContent=e.message||'Preview failed';
+    showToast(e.message||'Preview failed','error');
+  }finally{
+    if(btn){btn.disabled=false;btn.textContent=old||'Preview Organizer';}
+  }
+}
+
+async function refreshOmdbMisses(btn){
+  const old=btn?btn.textContent:'';
+  if(btn){btn.disabled=true;btn.textContent='Retrying...';}
+  try{
+    const r=await adminFetch('/api/metadata/refresh-missing',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({limit:150,forceMisses:true,forcePosterless:false})});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok||!d.ok)throw new Error(d.error||d.message||'OMDb retry failed');
+    showToast(`OMDb retry checked ${d.checked||0}, fetched ${d.fetched||0}`,'success');
+    await fetchLib();
+  }catch(e){
+    showToast(e.message||'OMDb retry failed','error');
+  }finally{
+    if(btn){btn.disabled=false;btn.textContent=old||'Retry OMDb Misses';}
+  }
+}
+
+async function repairEverything(){
+  if(!confirm('Run repair checks now? This will restart the organizer/download stack, clean stale temp files, and rescan the library.'))return;
+  const area=document.getElementById('contentArea');
+  if(area)area.style.opacity='0.55';
+  showToast('Repair started...');
+  try{
+    const r=await adminFetch('/api/reliability/repair',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({restartApp:false})});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok||!d.ok){
+      const failed=(d.steps||[]).find(s=>s.ok===false);
+      showToast((failed&&failed.error)||d.error||'Repair finished with warnings','error');
+    }else{
+      showToast('Repair complete','success');
+    }
+    await fetchLib();
+    if(currentView==='system')await renderAdminDashboard();
+  }catch(e){
+    showToast(e.message||'Repair request failed','error');
+  }finally{
+    if(area)area.style.opacity='';
   }
 }
 

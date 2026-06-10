@@ -43,6 +43,20 @@ test.describe('Downloads / qBittorrent', () => {
     }
   });
 
+  test('search tab accepts magnet links', async ({ page }) => {
+    await loginAsAdmin(page);
+    await navigateTo(page, 'Downloads');
+    await page.waitForTimeout(3000);
+
+    const searchTab = page.locator('.filter-btn', { hasText: 'Search' });
+    if (await searchTab.isVisible({ timeout: 3000 }).catch(() => false)) {
+      await searchTab.click();
+      await page.waitForTimeout(500);
+      await expect(page.locator('#dlMagnetInput')).toBeVisible({ timeout: 3000 });
+      await expect(page.locator('#dlMagnetBtn')).toBeVisible();
+    }
+  });
+
   test('active downloads tab shows torrent list or empty', async ({ page }) => {
     await loginAsAdmin(page);
     await navigateTo(page, 'Downloads');

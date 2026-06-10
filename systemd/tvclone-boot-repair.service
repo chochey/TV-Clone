@@ -1,0 +1,16 @@
+[Unit]
+Description=TV-Clone Boot Repair
+Wants=network-online.target
+After=network-online.target local-fs.target docker-media.service
+RequiresMountsFor=/mnt/media/Movies /mnt/media/TV /mnt/media/Share
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=-/etc/tvclone/tvclone.env
+WorkingDirectory=/opt/tvclone
+ExecStart=/usr/bin/node /opt/tvclone/scripts/tvclone-reliability.js boot-repair --repo /opt/tvclone
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

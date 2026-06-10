@@ -1,0 +1,12 @@
+[Unit]
+Description=TV-Clone Data Backup
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=tvclone
+Group=tvclone
+EnvironmentFile=-/etc/tvclone/tvclone.env
+WorkingDirectory=/opt/tvclone
+ExecStart=/usr/bin/node /opt/tvclone/scripts/tvclone-reliability.js backup --repo /opt/tvclone
+TimeoutStartSec=300

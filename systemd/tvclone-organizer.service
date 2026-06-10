@@ -1,0 +1,21 @@
+[Unit]
+Description=TV-Clone Media Organizer
+Wants=network-online.target
+After=network-online.target local-fs.target tvclone.service
+RequiresMountsFor=/mnt/media/Movies /mnt/media/TV /mnt/media/Share
+
+[Service]
+Type=simple
+User=tvclone
+Group=tvclone
+WorkingDirectory=/opt/tvclone/media-organizer
+EnvironmentFile=-/etc/tvclone/tvclone.env
+ExecStart=/opt/tvclone/scripts/run-organizer-safe.sh
+Restart=always
+RestartSec=10
+TimeoutStartSec=120
+MemoryHigh=1G
+MemoryMax=2G
+
+[Install]
+WantedBy=multi-user.target

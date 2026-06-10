@@ -1,0 +1,11 @@
+[Unit]
+Description=Back Up TV-Clone Data Daily
+
+[Timer]
+OnCalendar=*-*-* 03:15:00
+RandomizedDelaySec=15min
+Persistent=true
+Unit=tvclone-backup.service
+
+[Install]
+WantedBy=timers.target

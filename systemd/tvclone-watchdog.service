@@ -1,0 +1,12 @@
+[Unit]
+Description=TV-Clone Watchdog
+Wants=network-online.target
+After=network-online.target local-fs.target
+
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=-/etc/tvclone/tvclone.env
+WorkingDirectory=/opt/tvclone
+ExecStart=/usr/bin/node /opt/tvclone/scripts/tvclone-reliability.js watchdog --repo /opt/tvclone
+TimeoutStartSec=180
