@@ -789,6 +789,24 @@ app.get('/api/library', requireAuth, (req, res) => {
   const lib = scanLibrary();
   const profileData = loadProfileData(profileId);
 
+  // ETag first: clients refetch on every SSE ping and navigation, and most
+  // of the time nothing changed. Answer 304 before paying for the full
+  // 8000+ item mapping below. (Conditional requests are keyed by URL, so
+  // one tag works for filtered/paginated variants too.)
+  // Include max progress.updatedAt so re-watching an item that's already in
+  // the progress map busts the cache — needed for Continue Watching reorder.
+  let maxProgressAt = 0;
+  for (const v of Object.values(profileData.progress)) {
+    if (v && v.updatedAt > maxProgressAt) maxProgressAt = v.updatedAt;
+  }
+  const profileVersion = Object.keys(profileData.progress).length + '-' + Object.keys(profileData.watched).length + '-' + maxProgressAt;
+  const omdbVersion = omdb.cacheVersion || omdb.cacheSize;
+  const overrideVersion = Object.keys(metadataOverrides.all()).length;
+  const cacheTag = (libraryCache ? libraryCache.length : 0) + '-' + profileVersion + '-' + omdbVersion + '-' + overrideVersion;
+  const etag = '"lib-' + crypto.createHash('md5').update(cacheTag).digest('hex').slice(0, 12) + '"';
+  res.set('ETag', etag);
+  if (req.headers['if-none-match'] === etag) return res.status(304).end();
+
   // Slim response: exclude heavy fields not needed for browsing
   let result = lib.map(item => {
     const omdb = getMetadataForItem(item);
@@ -878,21 +896,6 @@ app.get('/api/library', requireAuth, (req, res) => {
     const items = result.slice(start, start + limit);
     return res.json({ items, page, limit, total, totalPages });
   }
-
-  // ETag for conditional requests (home page polls frequently).
-  // Include max progress.updatedAt so re-watching an item that's already in
-  // the progress map busts the cache — needed for Continue Watching reorder.
-  let maxProgressAt = 0;
-  for (const v of Object.values(profileData.progress)) {
-    if (v && v.updatedAt > maxProgressAt) maxProgressAt = v.updatedAt;
-  }
-  const profileVersion = Object.keys(profileData.progress).length + '-' + Object.keys(profileData.watched).length + '-' + maxProgressAt;
-  const omdbVersion = omdb.cacheVersion || omdb.cacheSize;
-  const overrideVersion = Object.keys(metadataOverrides.all()).length;
-  const cacheTag = (libraryCache ? libraryCache.length : 0) + '-' + profileVersion + '-' + omdbVersion + '-' + overrideVersion;
-  const etag = '"lib-' + crypto.createHash('md5').update(cacheTag).digest('hex').slice(0, 12) + '"';
-  res.set('ETag', etag);
-  if (req.headers['if-none-match'] === etag) return res.status(304).end();
 
   res.json(result);
 });
@@ -1639,8 +1642,14 @@ const nowWatching = {}; // profileId -> { profileName, id, title, currentTime, d
 let spriteGenEnabled = true; // can be toggled via /api/sprites/pause and /api/sprites/resume
 let spriteRequeueRequested = false;
 
+const _thumbIdCache = new Map();
 function getThumbId(filePath) {
-  return crypto.createHash('md5').update(filePath).digest('hex').slice(0, 16);
+  let id = _thumbIdCache.get(filePath);
+  if (!id) {
+    id = crypto.createHash('md5').update(filePath).digest('hex').slice(0, 16);
+    _thumbIdCache.set(filePath, id);
+  }
+  return id;
 }
 
 function spriteFilePath(thumbId, sheetNum) {
@@ -1662,6 +1671,7 @@ function clearSpriteArtifacts(id, filePath) {
   try { fs.rmSync(path.join(THUMB_DIR, `_tmp_${thumbId}`), { recursive: true, force: true }); } catch {}
   delete spriteJobs[id];
   delete spriteJobPromises[id];
+  invalidateSpriteProgress();
   return removed;
 }
 
@@ -1865,6 +1875,7 @@ async function startSpriteGen(id, filePath, title) {
   // Clean up temp frames
   try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
   if (spriteJobs[id]) spriteJobs[id].done = true;
+  invalidateSpriteProgress();
   console.log(`[SPRITE] Complete for ${path.basename(filePath)}: ${totalSheets} sheets`);
   return spriteJobs[id];
   })();
@@ -1965,17 +1976,28 @@ function queueAllSpriteGen() {
 }
 
 // Sprite progress API — counts actual files on disk for accuracy
+// Counting sprite completion stats every library item (existsSync per file)
+// is expensive and the dashboard polls this — cache briefly and invalidate
+// when a sprite job finishes or artifacts are cleared.
+let _spriteProgressCache = null;
+function invalidateSpriteProgress() { _spriteProgressCache = null; }
+
 app.get('/api/sprites/progress', requireAuth, (_req, res) => {
   const lib = scanLibrary();
-  let total = 0, completed = 0;
-  for (const item of lib) {
-    const filePath = fileIndex[item.id];
-    if (!filePath) continue;
-    total++;
-    if (corruptedFiles[item.id]) { completed++; continue; }
-    const thumbId = getThumbId(filePath);
-    if (fs.existsSync(spriteFilePath(thumbId, 0))) completed++;
-  }
+  let { total, completed } = _spriteProgressCache && (Date.now() - _spriteProgressCache.at) < 30000
+    ? _spriteProgressCache
+    : (() => {
+        let t = 0, c = 0;
+        for (const item of lib) {
+          const filePath = fileIndex[item.id];
+          if (!filePath) continue;
+          t++;
+          if (corruptedFiles[item.id]) { c++; continue; }
+          if (fs.existsSync(spriteFilePath(getThumbId(filePath), 0))) c++;
+        }
+        _spriteProgressCache = { at: Date.now(), total: t, completed: c };
+        return _spriteProgressCache;
+      })();
   res.json({
     total,
     completed,
@@ -2653,16 +2675,23 @@ const { setup: setupWatchers } = require('./lib/file-watchers')({
 });
 
 // ── Serve frontend ─────────────────────────────────────────────────────
+// App shell + code must revalidate on every load (no-cache still allows
+// 304s via ETag). max-age here let browsers run hour-stale app.js against
+// a newer server after a deploy — symptom: dead player, black screen.
 app.get('/', (_req, res) => {
+  res.set('Cache-Control', 'no-cache');
   res.sendFile(path.join(__dirname, 'index.html'));
 });
-app.get('/hls.min.js', (_req, res) => res.sendFile(path.join(__dirname, 'hls.min.js')));
+app.get('/hls.min.js', (_req, res) => {
+  res.set('Cache-Control', 'public, max-age=86400'); // vendored, rarely changes
+  res.sendFile(path.join(__dirname, 'hls.min.js'));
+});
 app.get('/app.css', (_req, res) => {
-  res.set('Cache-Control', 'public, max-age=3600');
+  res.set('Cache-Control', 'no-cache');
   res.sendFile(path.join(__dirname, 'public', 'app.css'));
 });
 app.get('/app.js', (_req, res) => {
-  res.set('Cache-Control', 'public, max-age=3600');
+  res.set('Cache-Control', 'no-cache');
   res.sendFile(path.join(__dirname, 'public', 'app.js'));
 });
 
