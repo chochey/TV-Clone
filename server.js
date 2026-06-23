@@ -2761,6 +2761,19 @@ app.post('/api/metadata/refresh-missing', requirePermission('canScan'), async (r
 // ── Media Organizer ──────────────────────────────────────────────────────
 const ORGANIZER_LOG     = process.env.ORGANIZER_LOG     || '/home/blue/Desktop/Repos/TV-Clone-prod/media-organizer/media-organizer.log';
 const ORGANIZER_SERVICE = process.env.ORGANIZER_SERVICE || 'tvclone-organizer.service';
+
+// Auto-rescan when the organizer files new content. The media folders are on
+// fuse.mergerfs where fs.watch is blind, so the folder watcher above never
+// fires — we watch the organizer's (ext4) log for "Moved ->" lines instead.
+const ORGANIZER_RESCAN_DEBOUNCE_MS = Math.max(2000, parseInt(process.env.ORGANIZER_RESCAN_DEBOUNCE_MS, 10) || 15000);
+const { setup: setupOrganizerWatch } = require('./lib/organizer-watch')({
+  logPath: ORGANIZER_LOG,
+  debounceMs: ORGANIZER_RESCAN_DEBOUNCE_MS,
+  onMove: () => {
+    console.log('[OrganizerWatch] Move detected — rescanning library');
+    invalidateLibrary(); // already rescans + notifies clients (library-updated)
+  },
+});
 const ORGANIZER_SCRIPT  = process.env.ORGANIZER_SCRIPT  || path.join(path.dirname(ORGANIZER_LOG), 'movie_renamer.py');
 const ORGANIZER_ALIAS_FILE = process.env.ORGANIZER_ALIAS_FILE || path.join(path.dirname(ORGANIZER_LOG), 'organizer_aliases.json');
 const organizerTools = require('./lib/organizer-tools');
@@ -3058,6 +3071,7 @@ app.listen(PORT, '0.0.0.0', () => {
 
   // Setup watchers immediately
   setupWatchers();
+  setupOrganizerWatch();
 
   // Server is ready immediately (library loaded from cache, watchers active)
   serverReady = true;
