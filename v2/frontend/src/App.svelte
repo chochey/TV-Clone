@@ -118,14 +118,27 @@
   .err { color: var(--accent); margin-top: var(--s4); }
 
   .topbar {
-    position: sticky; top: 0; z-index: 50;
+    position: fixed; top: 0; left: 0; right: 0; z-index: 50;
     display: flex; align-items: center; justify-content: space-between;
     padding: var(--s4) var(--gutter);
-    background: linear-gradient(var(--paper), rgba(15, 14, 12, 0.4) 70%, transparent);
-    backdrop-filter: blur(8px);
+    background: linear-gradient(rgba(15,14,12,0.7), transparent);
+    transition: background var(--t-med);
   }
-  .brand { font-size: 1.5rem; font-weight: 800; }
-  nav { display: flex; gap: var(--s4); }
-  nav a { color: var(--ink-soft); transition: color var(--t-fast); }
+  .brand {
+    font-family: var(--font-display);
+    font-size: 1.6rem; font-weight: 800; letter-spacing: -0.02em;
+    color: var(--accent);
+  }
+  nav { display: flex; gap: var(--s5); }
+  nav a {
+    color: var(--ink-soft); font-size: 0.92rem; font-weight: 500;
+    letter-spacing: 0.02em; transition: color var(--t-fast);
+    position: relative;
+  }
   nav a:hover, nav a.active { color: var(--ink); }
+  nav a.active::after {
+    content: ''; position: absolute; left: 0; right: 0; bottom: -6px;
+    height: 2px; background: var(--accent); border-radius: 2px;
+  }
+  main { position: relative; }
 </style>

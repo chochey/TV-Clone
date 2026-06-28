@@ -21,9 +21,36 @@ export const continueWatching = derived(library, ($lib) => {
   return out;
 });
 
-// Recently Added: newest by addedAt.
+// Collapse a list so a show's episodes become one representative card
+// (the newest episode that has artwork), keeping standalone movies as-is.
+function collapseShows(items) {
+  const seen = new Map();
+  const out = [];
+  for (const item of items) {
+    if (item.showName) {
+      const key = item.type + '::' + item.showName;
+      const prev = seen.get(key);
+      // Prefer an entry that actually has a poster, then the newest.
+      const better = !prev ||
+        (!!(item.omdbPosterUrl || item.posterUrl) && !(prev.omdbPosterUrl || prev.posterUrl)) ||
+        (item.addedAt || 0) > (prev.addedAt || 0);
+      if (better) {
+        // Present it as the show, not the episode.
+        const card = { ...item, title: item.showName };
+        if (prev) out[out.indexOf(prev)] = card;
+        else out.push(card);
+        seen.set(key, card);
+      }
+    } else {
+      out.push(item);
+    }
+  }
+  return out;
+}
+
+// Recently Added: newest first, shows collapsed to one card each.
 export const recentlyAdded = derived(library, ($lib) =>
-  [...$lib].sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0)).slice(0, 40),
+  collapseShows([...$lib].sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0))).slice(0, 40),
 );
 
 // Genre clusters from real OMDb/folder genre data.
@@ -40,10 +67,11 @@ export const genreClusters = derived(library, ($lib) => {
   }
   // Top genres by count, a healthy handful for the home page.
   return [...byGenre.entries()]
-    .filter(([, items]) => items.length >= 6)
-    .sort((a, b) => b[1].length - a[1].length)
+    .map(([name, items]) => ({ name, items: collapseShows(items) }))
+    .filter((c) => c.items.length >= 6)
+    .sort((a, b) => b.items.length - a.items.length)
     .slice(0, 6)
-    .map(([name, items]) => ({ name, items: items.slice(0, 24) }));
+    .map((c) => ({ name: c.name, items: c.items.slice(0, 24) }));
 });
 
 export async function loadLibrary(profileId) {
