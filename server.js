@@ -2266,7 +2266,16 @@ function startFfmpeg(id, filePath, sessionDir, seekTime, startSegNum, audioStrea
 
   if (mode === 'remux' || mode === 'remux-audio') {
     const audioCodec = audioProbeCache[filePath];
-    const canCopyAudio = BROWSER_AUDIO_CODECS.has(audioCodec);
+    // Channel count of the track we're about to serve. Multichannel (5.1/7.1)
+    // AAC must be downmixed to stereo — Firefox can't decode it and shows a
+    // black screen. Other browser-native codecs copy through untouched.
+    const tracks = audioTracksCache[filePath] || [];
+    const chosen = (audioStreamIndex !== undefined && audioStreamIndex !== null)
+      ? tracks.find(t => t.index === audioStreamIndex)
+      : tracks[0];
+    const channels = chosen?.channels || 0;
+    const multichannelAac = audioCodec === 'aac' && channels > 2;
+    const canCopyAudio = BROWSER_AUDIO_CODECS.has(audioCodec) && !multichannelAac;
     ffmpegArgs.push('-c:v', 'copy');
     if (canCopyAudio) {
       ffmpegArgs.push('-c:a', 'copy');
