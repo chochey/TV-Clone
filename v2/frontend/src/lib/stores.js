@@ -114,10 +114,28 @@ export async function enrichItem(id) {
   }));
 }
 
+// Live refresh: v1 broadcasts named SSE events when the organizer files new
+// content (library-updated) — without this, v2 only sees new arrivals after
+// a full page reload. /api/library answers 304 when nothing changed, so the
+// refetch is cheap. EventSource auto-reconnects across server restarts.
+let sseStarted = false;
+function startLiveUpdates(profileId) {
+  if (sseStarted || typeof EventSource === 'undefined') return;
+  sseStarted = true;
+  const es = new EventSource('/api/events');
+  let refreshTimer = null;
+  es.addEventListener('library-updated', () => {
+    // Coalesce bursts (an episode batch fires several updates)
+    clearTimeout(refreshTimer);
+    refreshTimer = setTimeout(() => { loadLibrary(profileId).catch(() => {}); }, 2000);
+  });
+}
+
 export async function loadLibrary(profileId) {
   const data = await api.library({ profile: profileId || 'default' });
   const items = Array.isArray(data) ? data : data.items || [];
   library.set(items);
   libraryLoaded.set(true);
+  startLiveUpdates(profileId);
   return items;
 }
