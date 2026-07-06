@@ -2972,6 +2972,37 @@ const sys = require('./lib/system-control')({
 });
 const { organizerServiceCmd, dockerCmd, dockerInspect, dockerComposeRepair } = sys;
 
+// ── Organizer watchdog + periodic safety rescan ────────────────────────
+// Two known blind spots: the organizer freezing silently (log goes quiet,
+// so nothing triggers rescans on inotify-blind mergerfs), and content
+// arriving outside the organizer (qBittorrent's own moves). The watchdog
+// bounces a frozen-but-active organizer; the hourly rescan catches the rest.
+const organizerWatchdog = require('./lib/organizer-watchdog')({
+  logPath: ORGANIZER_LOG,
+  isActive: async () => (await organizerServiceCmd('status')).ok,
+  restart: () => organizerServiceCmd('restart'),
+  onRestart: (ageMs, result) => {
+    const msg = `heartbeat stale ${Math.round(ageMs / 60000)}m — restart ${result.ok ? 'ok' : `failed: ${result.stderr}`}`;
+    console.log(`[OrganizerWatchdog] ${msg}`);
+    recordError('organizer-watchdog', msg);
+  },
+});
+if (process.env.ORGANIZER_WATCHDOG !== '0') organizerWatchdog.start();
+
+const SAFETY_RESCAN_MS = process.env.SAFETY_RESCAN_MS !== undefined
+  ? parseInt(process.env.SAFETY_RESCAN_MS, 10) || 0
+  : 60 * 60 * 1000;
+if (SAFETY_RESCAN_MS > 0) {
+  setInterval(() => {
+    // The scan is synchronous and blocks the event loop — skip while anyone
+    // is streaming; the next hourly tick catches up.
+    if (Object.keys(transcodeSessions).length > 0) return;
+    console.log('[SafetyRescan] Periodic library rescan');
+    invalidateLibrary();
+    notifyClients('library-updated');
+  }, SAFETY_RESCAN_MS).unref();
+}
+
 app.get('/api/organizer/status', requirePermission('canOrganizer'), async (_req, res) => {
   const result = await organizerServiceCmd('status');
   const active = result.code === 0;
