@@ -24,14 +24,10 @@
     padding: 0 var(--gutter); margin-bottom: var(--s3);
   }
   h2 {
-    font-family: var(--font-display); font-weight: 600;
-    font-size: clamp(1.2rem, 2.2vw, 1.7rem); letter-spacing: -0.01em;
+    font-weight: 700;
+    font-size: clamp(1.05rem, 1.8vw, 1.35rem); letter-spacing: -0.01em;
   }
-  .count {
-    font-size: 0.7rem; color: var(--ink-faint); font-weight: 600;
-    background: var(--paper-raised); padding: 2px 8px; border-radius: 99px;
-    transform: translateY(-3px);
-  }
+  .count { font-size: 0.72rem; color: var(--ink-faint); font-weight: 600; }
   .track {
     display: flex; gap: var(--s3);
     overflow-x: auto; overflow-y: visible;

@@ -22,7 +22,7 @@ export const api = {
   // Auth / session
   me: () => fetch('/api/me', opts('GET')).then(json).catch(() => null),
   profiles: () => fetch('/api/profiles', opts('GET')).then(json).catch(() => []),
-  login: (profileId, password) => fetch('/api/login', opts('POST', { profileId, password })).then(json),
+  login: (username, password) => fetch('/api/login', opts('POST', { username, password })).then(json),
   logout: () => fetch('/api/logout', opts('POST')).then(json).catch(() => ({})),
 
   // Library
@@ -56,6 +56,10 @@ export const streamUrl = (item) => {
   return `/hls/${encodeURIComponent(item.id)}/master.m3u8?start=0&quality=auto`;
 };
 
-// Best poster for an item, preferring OMDb art.
-export const posterUrl = (item) =>
-  item?.omdbPosterUrl || item?.posterUrl || (item?.id ? `/thumb/${encodeURIComponent(item.id)}` : '');
+// Best poster for an item, preferring OMDb art. Empty string when the item
+// has no art at all — callers render a text placeholder, never a broken img.
+export const posterUrl = (item) => item?.omdbPosterUrl || item?.posterUrl || '';
+
+// Landscape still extracted from the actual media file (v1 /backdrop route).
+export const backdropUrl = (item) =>
+  item?.id ? `/backdrop/${encodeURIComponent(item.id)}` : '';
