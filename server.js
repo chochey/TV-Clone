@@ -2145,12 +2145,12 @@ app.get('/api/admin/error-logs', requirePermission('canLogs'), (_req, res) => {
 });
 
 const systemStats = require('./lib/system-stats')();
-app.get('/api/system/stats', requireAdminSession, (_req, res) => {
+app.get('/api/system/stats', requirePermission('canLogs'), (_req, res) => {
   res.json(systemStats.snapshot({ activeTranscodes: Object.keys(transcodeSessions).length }));
 });
 
 const reliability = require('./lib/reliability');
-app.get('/api/reliability/status', requireAdminSession, async (_req, res) => {
+app.get('/api/reliability/status', requirePermission('canLogs'), async (_req, res) => {
   try {
     res.json(await reliability.status({ repoDir: __dirname, port: PORT }));
   } catch (err) {
@@ -2367,6 +2367,21 @@ function startFfmpeg(id, filePath, sessionDir, seekTime, startSegNum, audioStrea
     startedAt: Date.now(),
   };
 }
+
+// Release a transcode session the moment the player closes, instead of
+// holding one of the MAX_TRANSCODE_SESSIONS slots for the 2-minute idle
+// timeout. Only the profile that started the session (or an admin) may
+// stop it.
+app.post('/api/hls/:id/stop', requireAuth, (req, res) => {
+  const sess = transcodeSessions[req.params.id];
+  if (!sess) return res.json({ ok: true, stopped: false });
+  const s = getSession(req);
+  if (sess.profileId && s?.profileId !== sess.profileId && s?.role !== 'admin') {
+    return res.status(403).json({ ok: false, error: 'Not your session' });
+  }
+  cleanupSession(req.params.id);
+  res.json({ ok: true, stopped: true });
+});
 
 app.get('/hls/:id/master.m3u8', requireAuth, ensureLibrary, async (req, res) => {
   const id = req.params.id;
@@ -2838,7 +2853,7 @@ function organizerLogTimestamp(line) {
   return Number.isFinite(t) ? t : 0;
 }
 
-app.get('/api/organizer/logs', requireAdminSession, async (req, res) => {
+app.get('/api/organizer/logs', requirePermission('canLogs'), async (req, res) => {
   const lines = Math.min(parseInt(req.query.lines) || 200, 1000);
   const filter = req.query.filter || 'all'; // all, moves, errors, scans
   const q = String(req.query.q || '').toLowerCase().slice(0, 100);
@@ -2944,7 +2959,7 @@ const sys = require('./lib/system-control')({
 });
 const { organizerServiceCmd, dockerCmd, dockerInspect, dockerComposeRepair } = sys;
 
-app.get('/api/organizer/status', requireAdminSession, async (_req, res) => {
+app.get('/api/organizer/status', requirePermission('canLogs'), async (_req, res) => {
   const result = await organizerServiceCmd('status');
   const active = result.code === 0;
   res.json({ ok: true, active, code: result.code });
@@ -2960,7 +2975,7 @@ app.post('/api/organizer/stop', requireAdminSession, async (_req, res) => {
   res.json({ ok: result.ok, error: result.ok ? undefined : result.stderr });
 });
 
-app.post('/api/organizer/restart', requireAdminSession, async (_req, res) => {
+app.post('/api/organizer/restart', requirePermission('canRestart'), async (_req, res) => {
   const result = await organizerServiceCmd('restart');
   res.json({ ok: result.ok, error: result.ok ? undefined : result.stderr });
 });
