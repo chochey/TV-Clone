@@ -6,6 +6,8 @@
   import { nextEpisodeOf } from './lib/format.js';
   import Home from './routes/Home.svelte';
   import Detail from './routes/Detail.svelte';
+  import Browse from './routes/Browse.svelte';
+  import Search from './routes/Search.svelte';
   import Player from './lib/components/Player.svelte';
 
   let phase = $state('loading'); // loading | login | ready
@@ -69,10 +71,6 @@
   function playItem(item) {
     playing = item;
   }
-  function deadLink(e, label) {
-    e.preventDefault();
-    showToast(`${label} isn't built yet`);
-  }
 </script>
 
 <svelte:window bind:scrollY />
@@ -105,14 +103,20 @@
     <button class="brand display" onclick={() => navigate('/')}>CHOCHEY'S</button>
     <nav>
       <a class:active={$route.name === 'home'} href="/" onclick={(e) => { e.preventDefault(); navigate('/'); }}>Home</a>
-      <a href="/movies" onclick={(e) => deadLink(e, 'Films')}>Films</a>
-      <a href="/shows" onclick={(e) => deadLink(e, 'Series')}>Series</a>
-      <a href="/search" onclick={(e) => deadLink(e, 'Search')}>Search</a>
+      <a class:active={$route.name === 'movies'} href="/movies" onclick={(e) => { e.preventDefault(); navigate('/movies'); }}>Films</a>
+      <a class:active={$route.name === 'shows'} href="/shows" onclick={(e) => { e.preventDefault(); navigate('/shows'); }}>Series</a>
+      <a class:active={$route.name === 'search'} href="/search" onclick={(e) => { e.preventDefault(); navigate('/search'); }}>Search</a>
     </nav>
   </header>
   <main>
     {#if $route.name === 'title'}
       <Detail id={$route.id} onplay={playItem} />
+    {:else if $route.name === 'movies'}
+      <Browse kind="movie" onopen={openItem} onplay={playItem} />
+    {:else if $route.name === 'shows'}
+      <Browse kind="show" onopen={openItem} onplay={playItem} />
+    {:else if $route.name === 'search'}
+      <Search onopen={openItem} onplay={playItem} />
     {:else}
       <Home onopen={openItem} onplay={playItem} />
     {/if}

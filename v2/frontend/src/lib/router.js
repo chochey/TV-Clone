@@ -6,6 +6,9 @@ import { writable } from 'svelte/store';
 function parse(path) {
   const m = path.match(/^\/title\/([^/]+)/);
   if (m) return { name: 'title', id: decodeURIComponent(m[1]) };
+  if (path === '/movies') return { name: 'movies' };
+  if (path === '/shows') return { name: 'shows' };
+  if (path === '/search') return { name: 'search' };
   return { name: 'home' };
 }
 

@@ -23,7 +23,7 @@ export const continueWatching = derived(library, ($lib) => {
 
 // Collapse a list so a show's episodes become one representative card
 // (the newest episode that has artwork), keeping standalone movies as-is.
-function collapseShows(items) {
+export function collapseShows(items) {
   const seen = new Map();
   const out = [];
   for (const item of items) {
