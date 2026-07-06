@@ -1568,6 +1568,23 @@ app.get('/poster/:id', requireAuth, ensureLibrary, (req, res) => {
   res.sendFile(p);
 });
 
+// Landscape backdrop stills extracted from the media files themselves
+// (OMDb only has portrait posters). Extracted on demand, cached forever.
+const backdrop = require('./lib/backdrop')({ DATA_DIR, probeDurationAsync: probe.probeDurationAsync });
+app.get('/backdrop/:id', requireAuth, ensureLibrary, async (req, res) => {
+  const filePath = fileIndex[req.params.id];
+  if (!filePath) return res.status(404).send('Not found');
+  try {
+    const p = await backdrop.getBackdrop(req.params.id, filePath);
+    if (!p) return res.status(404).send('No backdrop available');
+    res.set('Cache-Control', 'public, max-age=2592000');
+    res.sendFile(p);
+  } catch (e) {
+    recordError('backdrop', e.message);
+    res.status(500).send('Backdrop extraction failed');
+  }
+});
+
 // ── Thumbnail preview for seek bar ───────────────────────────────────
 const THUMB_DIR = path.join(DATA_DIR, 'thumbnails');
 if (!fs.existsSync(THUMB_DIR)) fs.mkdirSync(THUMB_DIR, { recursive: true });
