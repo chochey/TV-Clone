@@ -3,11 +3,14 @@
   import { api } from '../lib/api.js';
   import { session } from '../lib/stores.js';
 
+  // The complete permission set — v1 defines exactly these four
+  // (lib/auth.js VALID_PERMISSIONS). Admins implicitly hold all of them
+  // plus the admin-only surface (this page, profile/config management).
   const PERMISSIONS = [
-    { key: 'canDownload', label: 'Downloads' },
-    { key: 'canScan', label: 'Scan library' },
-    { key: 'canRestart', label: 'Restart server' },
-    { key: 'canLogs', label: 'View logs' },
+    { key: 'canDownload', label: 'Downloads', desc: 'Downloads page — add & manage torrents' },
+    { key: 'canScan', label: 'Scan library', desc: 'Trigger library rescans' },
+    { key: 'canRestart', label: 'Restart server', desc: 'Restart the media server & organizer' },
+    { key: 'canLogs', label: 'Monitoring', desc: 'Dashboard, Organizer & Logs pages' },
   ];
   const AVATARS = ['#00a4dc', '#e8734d', '#7ed491', '#c58af9', '#f5c518', '#6db3ff'];
 
@@ -104,17 +107,23 @@
       </div>
 
       {#if edit.role !== 'admin'}
-        <div class="perms">
+        <div class="permwrap">
           <span class="meta">Permissions</span>
-          {#each PERMISSIONS as p (p.key)}
-            <label class="perm">
-              <input type="checkbox" checked={edit.permissions.includes(p.key)} onchange={() => togglePerm(p.key)} />
-              {p.label}
-            </label>
-          {/each}
+          <div class="perms">
+            {#each PERMISSIONS as p (p.key)}
+              <label class="perm">
+                <input type="checkbox" checked={edit.permissions.includes(p.key)} onchange={() => togglePerm(p.key)} />
+                <span class="ptext">
+                  <span class="plabel">{p.label}</span>
+                  <span class="pdesc">{p.desc}</span>
+                </span>
+              </label>
+            {/each}
+          </div>
+          <p class="meta permnote">These four are the complete set — everything else (this page, profile & config management) is admin-only.</p>
         </div>
       {:else}
-        <p class="meta admnote">Admins have every permission.</p>
+        <p class="meta admnote">Admins have every permission, plus user and config management.</p>
       {/if}
 
       <div class="avatars">
@@ -206,9 +215,25 @@
   }
   .fields input { background: var(--bg); }
 
-  .perms { display: flex; align-items: center; gap: var(--s4); flex-wrap: wrap; }
-  .perm { display: flex; align-items: center; gap: 7px; font-size: 0.9rem; cursor: pointer; }
-  .admnote { text-transform: none; letter-spacing: 0.02em; }
+  .permwrap { display: flex; flex-direction: column; gap: var(--s3); }
+  .perms {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: var(--s2);
+  }
+  .perm {
+    display: flex; align-items: flex-start; gap: 10px;
+    padding: var(--s3);
+    background: var(--bg); border-radius: var(--r-sm);
+    box-shadow: inset 0 0 0 1px var(--line);
+    cursor: pointer;
+    transition: box-shadow var(--t-fast);
+  }
+  .perm:hover { box-shadow: inset 0 0 0 1px var(--line-strong); }
+  .perm input { margin-top: 2px; accent-color: var(--cta); }
+  .ptext { display: flex; flex-direction: column; gap: 2px; }
+  .plabel { font-size: 0.9rem; font-weight: 600; color: var(--ink); }
+  .pdesc { font-size: 0.78rem; color: var(--ink-faint); }
+  .permnote, .admnote { text-transform: none; letter-spacing: 0.02em; }
 
   .avatars { display: flex; align-items: center; gap: var(--s2); }
   .swatch {
