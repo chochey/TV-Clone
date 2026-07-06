@@ -74,6 +74,20 @@ export const genreClusters = derived(library, ($lib) => {
     .map((c) => ({ name: c.name, items: c.items.slice(0, 24) }));
 });
 
+// Library-at-a-glance numbers (v1's home-stat panel definitions:
+// in progress = started && not watched; unwatched = not watched).
+export const libraryStats = derived(library, ($lib) => {
+  let movies = 0, inProgress = 0, unwatched = 0;
+  const shows = new Set();
+  for (const i of $lib) {
+    if (i.type === 'movie') movies++;
+    else if (i.showName) shows.add(i.showName);
+    if ((i.progress?.percent || 0) > 0 && !i.watched) inProgress++;
+    if (!i.watched) unwatched++;
+  }
+  return { total: $lib.length, movies, shows: shows.size, inProgress, unwatched };
+});
+
 export async function loadLibrary(profileId) {
   const data = await api.library({ profile: profileId || 'default' });
   const items = Array.isArray(data) ? data : data.items || [];
