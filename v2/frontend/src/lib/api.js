@@ -46,6 +46,38 @@ export const api = {
 
   // Health (loading screen)
   health: () => fetch('/api/health', opts('GET')).then(json).catch(() => null),
+
+  // Content requests
+  requests: () => fetch('/api/requests', opts('GET')).then(json),
+  requestCreate: (title, type, note) => fetch('/api/requests', opts('POST', { title, type, note })).then(json),
+  requestSetStatus: (id, status) =>
+    fetch(`/api/requests/${encodeURIComponent(id)}`, { ...opts('PATCH', { status }) }).then(json),
+  requestRemove: (id) => fetch(`/api/requests/${encodeURIComponent(id)}`, opts('DELETE')).then(json),
+
+  // Admin: dashboard + logs (permission-gated server-side)
+  stats: () => fetch('/api/stats', opts('GET')).then(json),
+  systemStats: () => fetch('/api/system/stats', opts('GET')).then(json),
+  reliability: () => fetch('/api/reliability/status', opts('GET')).then(json),
+  nowWatching: () => fetch('/api/now-watching', opts('GET')).then(json).catch(() => []),
+  adminLogs: (kind) => fetch(`/api/admin/${kind}`, opts('GET')).then(json), // logs|login-logs|scan-logs|stream-logs|error-logs
+
+  // Organizer
+  organizerLogs: (params = {}) =>
+    fetch(`/api/organizer/logs?${new URLSearchParams(params)}`, opts('GET')).then(json),
+  organizerStatus: () => fetch('/api/organizer/status', opts('GET')).then(json),
+  organizerRestart: () => fetch('/api/organizer/restart', opts('POST')).then(json),
+
+  // Downloads (qBittorrent via v1)
+  torrents: () => fetch('/api/qbt/torrents', opts('GET')).then(json),
+  torrentAdd: (urls) => fetch('/api/qbt/torrents/add', opts('POST', { urls })).then(json),
+  torrentPause: (hashes) => fetch('/api/qbt/torrents/pause', opts('POST', { hashes })).then(json),
+  torrentResume: (hashes) => fetch('/api/qbt/torrents/resume', opts('POST', { hashes })).then(json),
+  torrentDelete: (hashes, deleteFiles = false) =>
+    fetch('/api/qbt/torrents/delete', opts('POST', { hashes, deleteFiles })).then(json),
+
+  // System actions
+  scan: () => fetch('/api/scan', opts('POST')).then(json),
+  restart: () => fetch('/api/restart', opts('POST')).then(json),
 };
 
 // Build a streaming URL the <video> element can use directly (proxied to v1).

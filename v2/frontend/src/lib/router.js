@@ -9,6 +9,12 @@ function parse(path) {
   if (path === '/movies') return { name: 'movies' };
   if (path === '/shows') return { name: 'shows' };
   if (path === '/search') return { name: 'search' };
+  if (path === '/history') return { name: 'history' };
+  if (path === '/requests') return { name: 'requests' };
+  if (path === '/system') return { name: 'system' };
+  if (path === '/downloads') return { name: 'downloads' };
+  if (path === '/organizer') return { name: 'organizer' };
+  if (path === '/logs') return { name: 'logs' };
   return { name: 'home' };
 }
 

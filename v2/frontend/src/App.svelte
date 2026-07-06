@@ -8,6 +8,12 @@
   import Detail from './routes/Detail.svelte';
   import Browse from './routes/Browse.svelte';
   import Search from './routes/Search.svelte';
+  import History from './routes/History.svelte';
+  import Requests from './routes/Requests.svelte';
+  import Dashboard from './routes/Dashboard.svelte';
+  import Downloads from './routes/Downloads.svelte';
+  import Organizer from './routes/Organizer.svelte';
+  import Logs from './routes/Logs.svelte';
   import Player from './lib/components/Player.svelte';
 
   let phase = $state('loading'); // loading | login | ready
@@ -71,9 +77,67 @@
   function playItem(item) {
     playing = item;
   }
+
+  // ── User menu: history/requests + permission-gated system pages ──────
+  let menuOpen = $state(false);
+  let pendingCount = $state(0);
+  let scanBusy = $state(false);
+  let confirmRestart = $state(false);
+
+  const isAdmin = $derived($session?.role === 'admin');
+  const can = (p) => $session?.role === 'admin' || ($session?.permissions || []).includes(p);
+
+  async function refreshPending() {
+    try {
+      const d = await api.requests();
+      pendingCount = (d.requests || []).filter((r) => r.status === 'pending').length;
+    } catch { pendingCount = 0; }
+  }
+  $effect(() => { if (phase === 'ready') refreshPending(); });
+
+  function go(path) {
+    menuOpen = false;
+    confirmRestart = false;
+    navigate(path);
+  }
+  async function scanLibrary() {
+    if (scanBusy) return;
+    scanBusy = true;
+    menuOpen = false;
+    showToast('Library scan started…');
+    try {
+      const r = await api.scan();
+      await loadLibrary($session?.profileId);
+      showToast(`Scan complete — ${r.count?.toLocaleString?.() || 'library'} files.`);
+    } catch (e) {
+      showToast(e.body?.error || 'Scan failed.');
+    } finally { scanBusy = false; }
+  }
+  async function restartServer() {
+    menuOpen = false;
+    confirmRestart = false;
+    showToast('Restarting the server…');
+    try { await api.restart(); } catch {}
+    // Poll health until v1 is back, then reload state.
+    for (let i = 0; i < 40; i++) {
+      await new Promise((r) => setTimeout(r, 1500));
+      const h = await api.health();
+      if (h?.ready) { showToast('Server is back.'); await loadLibrary($session?.profileId); return; }
+    }
+    showToast('Server has not come back yet — check the dashboard.');
+  }
+  async function signOut() {
+    menuOpen = false;
+    await api.logout();
+    session.set(null);
+    playing = null;
+    username = ''; password = '';
+    navigate('/');
+    phase = 'login';
+  }
 </script>
 
-<svelte:window bind:scrollY />
+<svelte:window bind:scrollY onclick={() => { menuOpen = false; confirmRestart = false; }} />
 
 {#if phase === 'loading'}
   <div class="splash">
@@ -107,6 +171,45 @@
       <a class:active={$route.name === 'shows'} href="/shows" onclick={(e) => { e.preventDefault(); navigate('/shows'); }}>Series</a>
       <a class:active={$route.name === 'search'} href="/search" onclick={(e) => { e.preventDefault(); navigate('/search'); }}>Search</a>
     </nav>
+    <div class="usermenu">
+      <button class="avatar" aria-label="Account menu" aria-expanded={menuOpen}
+              onclick={(e) => { e.stopPropagation(); menuOpen = !menuOpen; if (menuOpen) refreshPending(); }}>
+        {($session?.name || '?').slice(0, 1)}
+        {#if pendingCount > 0}<span class="badge">{pendingCount}</span>{/if}
+      </button>
+      {#if menuOpen}
+        <div class="dropdown" onclick={(e) => e.stopPropagation()}>
+          <div class="who meta">{$session?.name}</div>
+          <button onclick={() => go('/history')}>History</button>
+          <button onclick={() => go('/requests')}>
+            Requests {#if pendingCount > 0}<span class="badge inline">{pendingCount}</span>{/if}
+          </button>
+          {#if isAdmin || can('canDownload') || can('canLogs')}
+            <div class="divider"></div>
+            <div class="who meta">System</div>
+            {#if isAdmin}<button onclick={() => go('/system')}>Dashboard</button>{/if}
+            {#if can('canDownload')}<button onclick={() => go('/downloads')}>Downloads</button>{/if}
+            {#if isAdmin}<button onclick={() => go('/organizer')}>Organizer</button>{/if}
+            {#if can('canLogs')}<button onclick={() => go('/logs')}>Logs</button>{/if}
+          {/if}
+          {#if can('canScan') || can('canRestart')}
+            <div class="divider"></div>
+            {#if can('canScan')}
+              <button onclick={scanLibrary} disabled={scanBusy}>{scanBusy ? 'Scanning…' : 'Scan Library'}</button>
+            {/if}
+            {#if can('canRestart')}
+              {#if confirmRestart}
+                <button class="danger" onclick={restartServer}>Really restart?</button>
+              {:else}
+                <button onclick={() => { confirmRestart = true; }}>Restart Server</button>
+              {/if}
+            {/if}
+          {/if}
+          <div class="divider"></div>
+          <button onclick={signOut}>Sign Out</button>
+        </div>
+      {/if}
+    </div>
   </header>
   <main>
     {#if $route.name === 'title'}
@@ -117,6 +220,18 @@
       <Browse kind="show" onopen={openItem} onplay={playItem} />
     {:else if $route.name === 'search'}
       <Search onopen={openItem} onplay={playItem} />
+    {:else if $route.name === 'history'}
+      <History />
+    {:else if $route.name === 'requests'}
+      <Requests />
+    {:else if $route.name === 'system' && isAdmin}
+      <Dashboard />
+    {:else if $route.name === 'downloads' && can('canDownload')}
+      <Downloads />
+    {:else if $route.name === 'organizer' && isAdmin}
+      <Organizer />
+    {:else if $route.name === 'logs' && can('canLogs')}
+      <Logs />
     {:else}
       <Home onopen={openItem} onplay={playItem} />
     {/if}
@@ -197,7 +312,46 @@
     letter-spacing: 0.34em;
     color: var(--ink);
   }
-  nav { display: flex; gap: var(--s5); }
+  nav { display: flex; gap: var(--s5); margin-left: auto; }
+
+  .usermenu { position: relative; margin-left: var(--s5); }
+  .avatar {
+    position: relative;
+    width: 34px; height: 34px; border-radius: 99px;
+    display: grid; place-items: center;
+    background: var(--bg-raised); color: var(--ink);
+    font-weight: 700; font-size: 0.9rem; text-transform: uppercase;
+    box-shadow: inset 0 0 0 1px var(--line-strong);
+    transition: background var(--t-fast);
+  }
+  .avatar:hover { background: rgba(242, 242, 244, 0.14); }
+  .badge {
+    position: absolute; top: -4px; right: -6px;
+    min-width: 17px; height: 17px; padding: 0 4px;
+    display: grid; place-items: center;
+    background: var(--cta); color: var(--cta-ink);
+    font-size: 0.66rem; font-weight: 800; border-radius: 99px;
+  }
+  .badge.inline { position: static; display: inline-grid; margin-left: 8px; vertical-align: 1px; }
+  .dropdown {
+    position: absolute; top: 44px; right: 0; z-index: 60;
+    min-width: 200px;
+    background: rgba(17, 17, 22, 0.97); backdrop-filter: blur(14px);
+    border-radius: var(--r-md); padding: var(--s2);
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.6), 0 0 0 1px var(--line-strong);
+    display: flex; flex-direction: column; gap: 1px;
+  }
+  .dropdown .who { padding: 8px 12px 4px; }
+  .dropdown > button {
+    display: flex; align-items: center;
+    text-align: left; font-size: 0.92rem; font-weight: 500;
+    padding: 9px 12px; border-radius: var(--r-sm); color: var(--ink-soft);
+    transition: background var(--t-fast), color var(--t-fast);
+  }
+  .dropdown > button:hover { background: rgba(242, 242, 244, 0.1); color: var(--ink); }
+  .dropdown > button:disabled { opacity: 0.5; }
+  .dropdown .danger { color: #ff6b6b; }
+  .divider { height: 1px; background: var(--line); margin: var(--s2) 0; }
   nav a {
     color: var(--ink-soft); font-size: 0.9rem; font-weight: 500;
     letter-spacing: 0.02em; transition: color var(--t-fast);
