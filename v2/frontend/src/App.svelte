@@ -189,13 +189,13 @@
           <button onclick={() => go('/requests')}>
             Requests {#if pendingCount > 0}<span class="badge inline">{pendingCount}</span>{/if}
           </button>
-          {#if isAdmin || can('canDownload') || can('canLogs')}
+          {#if isAdmin || can('canDownload') || can('canLogs') || can('canDashboard') || can('canOrganizer')}
             <div class="divider"></div>
             <div class="who meta">System</div>
-            {#if can('canLogs')}<button onclick={() => go('/system')}>Dashboard</button>{/if}
+            {#if can('canDashboard')}<button onclick={() => go('/system')}>Dashboard</button>{/if}
             {#if isAdmin}<button onclick={() => go('/users')}>Users</button>{/if}
             {#if can('canDownload')}<button onclick={() => go('/downloads')}>Downloads</button>{/if}
-            {#if can('canLogs')}<button onclick={() => go('/organizer')}>Organizer</button>{/if}
+            {#if can('canOrganizer')}<button onclick={() => go('/organizer')}>Organizer</button>{/if}
             {#if can('canLogs')}<button onclick={() => go('/logs')}>Logs</button>{/if}
           {/if}
           {#if can('canScan') || can('canRestart')}
@@ -230,11 +230,11 @@
       <History />
     {:else if $route.name === 'requests'}
       <Requests />
-    {:else if $route.name === 'system' && can('canLogs')}
+    {:else if $route.name === 'system' && can('canDashboard')}
       <Dashboard />
     {:else if $route.name === 'downloads' && can('canDownload')}
       <Downloads />
-    {:else if $route.name === 'organizer' && can('canLogs')}
+    {:else if $route.name === 'organizer' && can('canOrganizer')}
       <Organizer />
     {:else if $route.name === 'logs' && can('canLogs')}
       <Logs />

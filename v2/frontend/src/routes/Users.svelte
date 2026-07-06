@@ -3,14 +3,15 @@
   import { api } from '../lib/api.js';
   import { session } from '../lib/stores.js';
 
-  // The complete permission set — v1 defines exactly these four
-  // (lib/auth.js VALID_PERMISSIONS). Admins implicitly hold all of them
-  // plus the admin-only surface (this page, profile/config management).
+  // Mirrors lib/auth.js VALID_PERMISSIONS. Admins implicitly hold all of
+  // them plus the admin-only surface (this page, profile/config management).
   const PERMISSIONS = [
     { key: 'canDownload', label: 'Downloads', desc: 'Downloads page — add & manage torrents' },
+    { key: 'canDashboard', label: 'Dashboard', desc: 'System stats, storage & health' },
+    { key: 'canOrganizer', label: 'Organizer', desc: 'Organizer logs, activity & status' },
+    { key: 'canLogs', label: 'Logs', desc: 'Activity logs & now watching' },
     { key: 'canScan', label: 'Scan library', desc: 'Trigger library rescans' },
     { key: 'canRestart', label: 'Restart server', desc: 'Restart the media server & organizer' },
-    { key: 'canLogs', label: 'Monitoring', desc: 'Dashboard, Organizer & Logs pages' },
   ];
   const AVATARS = ['#00a4dc', '#e8734d', '#7ed491', '#c58af9', '#f5c518', '#6db3ff'];
 
@@ -120,7 +121,7 @@
               </label>
             {/each}
           </div>
-          <p class="meta permnote">These four are the complete set — everything else (this page, profile & config management) is admin-only.</p>
+          <p class="meta permnote">Browsing, watching, history and requests are open to every user. User &amp; config management is admin-only.</p>
         </div>
       {:else}
         <p class="meta admnote">Admins have every permission, plus user and config management.</p>
