@@ -169,6 +169,13 @@ for (const p of config.profiles) {
     p.pin = hashPassword(p.pin);
     configDirty = true;
   }
+  // canLogs used to cover the dashboard and organizer pages too; when the
+  // permission split, existing holders keep what they had.
+  if (p.permissions?.includes('canLogs')) {
+    for (const np of ['canDashboard', 'canOrganizer']) {
+      if (!p.permissions.includes(np)) { p.permissions.push(np); configDirty = true; }
+    }
+  }
 }
 if (configDirty) saveJSONSync(CONFIG_FILE, config);
 
@@ -574,7 +581,9 @@ app.post('/api/login', (req, res) => {
   const permissions = role === 'admin' ? [...VALID_PERMISSIONS] : (profile.permissions || []);
   const token = createSession(profile.id, role, permissions);
   res.cookie(COOKIE_NAME, token, { httpOnly: true, secure: COOKIE_SECURE, sameSite: 'strict', maxAge: SESSION_MAX_AGE });
-  if (role === 'admin' || permissions.includes('canDownload') || permissions.includes('canScan') || permissions.includes('canRestart') || permissions.includes('canLogs')) {
+  // Any permission at all needs the secondary token cookie — don't enumerate,
+  // so future permissions can't silently miss it.
+  if (role === 'admin' || permissions.length > 0) {
     const aToken = createAdminToken(token);
     res.cookie(ADMIN_COOKIE_NAME, aToken, { httpOnly: true, secure: COOKIE_SECURE, sameSite: 'strict', maxAge: SESSION_MAX_AGE });
   }
@@ -2145,12 +2154,12 @@ app.get('/api/admin/error-logs', requirePermission('canLogs'), (_req, res) => {
 });
 
 const systemStats = require('./lib/system-stats')();
-app.get('/api/system/stats', requirePermission('canLogs'), (_req, res) => {
+app.get('/api/system/stats', requirePermission('canDashboard'), (_req, res) => {
   res.json(systemStats.snapshot({ activeTranscodes: Object.keys(transcodeSessions).length }));
 });
 
 const reliability = require('./lib/reliability');
-app.get('/api/reliability/status', requirePermission('canLogs'), async (_req, res) => {
+app.get('/api/reliability/status', requirePermission('canDashboard'), async (_req, res) => {
   try {
     res.json(await reliability.status({ repoDir: __dirname, port: PORT }));
   } catch (err) {
@@ -2853,7 +2862,7 @@ function organizerLogTimestamp(line) {
   return Number.isFinite(t) ? t : 0;
 }
 
-app.get('/api/organizer/logs', requirePermission('canLogs'), async (req, res) => {
+app.get('/api/organizer/logs', requirePermission('canOrganizer'), async (req, res) => {
   const lines = Math.min(parseInt(req.query.lines) || 200, 1000);
   const filter = req.query.filter || 'all'; // all, moves, errors, scans
   const q = String(req.query.q || '').toLowerCase().slice(0, 100);
@@ -2959,7 +2968,7 @@ const sys = require('./lib/system-control')({
 });
 const { organizerServiceCmd, dockerCmd, dockerInspect, dockerComposeRepair } = sys;
 
-app.get('/api/organizer/status', requirePermission('canLogs'), async (_req, res) => {
+app.get('/api/organizer/status', requirePermission('canOrganizer'), async (_req, res) => {
   const result = await organizerServiceCmd('status');
   const active = result.code === 0;
   res.json({ ok: true, active, code: result.code });
