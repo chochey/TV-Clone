@@ -15,6 +15,7 @@
   let video = $state(null);
   let full = $state(null);        // /api/item record: subtitles, offset, audioTracks
   let error = $state('');
+  let notice = $state('');        // transient status (busy-retry), not fatal
   let buffering = $state(true);
   let paused = $state(true);
   let cur = $state(0);            // real timeline position (offset + video time)
@@ -22,7 +23,7 @@
   let bufferedEnd = $state(0);    // real timeline
   let seekOffset = $state(0);     // HLS session start offset
   let totalDur = $state(0);       // from X-Total-Duration
-  let volume = $state(1);
+  let volume = $state(100); // percent, 0–150; >100 engages the WebAudio booster
   let muted = $state(false);
   let quality = $state(localStorage.getItem('v2Quality') || 'auto');
   let audioTrack = $state(null);
@@ -71,8 +72,11 @@
     }
   }
 
+  let busyRetries = 0;
+  let retryTimer = null;
   async function loadHlsSession(start) {
     const seq = ++loadSeq;
+    clearTimeout(retryTimer);
     buffering = true;
     let H;
     try { H = await loadHls(); } catch { error = 'Failed to load the video engine.'; return; }
@@ -87,11 +91,21 @@
     catch { if (seq === loadSeq) error = 'Could not reach the server.'; return; }
     if (seq !== loadSeq) return; // stale seek
     if (!r.ok) {
+      if (r.status === 503 && busyRetries < 3) {
+        // All transcode slots taken — they free up fast now that closing a
+        // player kills its session, so retry quietly a few times.
+        busyRetries++;
+        notice = `All transcode slots are busy — retrying (${busyRetries}/3)…`;
+        retryTimer = setTimeout(() => { if (seq === loadSeq) loadHlsSession(start); }, 5000);
+        return;
+      }
       error = r.status === 503
         ? 'The server is busy with other streams right now — try again in a moment.'
         : `Stream failed to start (${r.status}).`;
       return;
     }
+    busyRetries = 0;
+    notice = '';
     totalDur = parseFloat(r.headers.get('X-Total-Duration')) || totalDur;
     seekOffset = parseFloat(r.headers.get('X-Seek-Offset')) || start || 0;
     cur = seekOffset;
@@ -191,16 +205,68 @@
     if (video.paused) video.play().catch(() => {});
     else video.pause();
   }
-  function setVolume(v) {
-    volume = Math.max(0, Math.min(1, v));
-    video.volume = volume;
+
+  // ── Volume: 0–100 native, 101–150 through a WebAudio gain stage ──────
+  let audioCtx = null, gainNode = null;
+  function ensureBoostGraph() {
+    if (audioCtx || !video) return;
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      audioCtx = new Ctx();
+      const src = audioCtx.createMediaElementSource(video);
+      gainNode = audioCtx.createGain();
+      src.connect(gainNode);
+      gainNode.connect(audioCtx.destination);
+    } catch { audioCtx = null; gainNode = null; }
+  }
+  function setVolume(pct) {
+    volume = Math.max(0, Math.min(150, Math.round(pct)));
+    const v = volume / 100;
+    video.volume = Math.min(1, v);
     muted = volume === 0;
     video.muted = muted;
-    localStorage.setItem('playerVolume', String(volume));
+    if (v > 1) ensureBoostGraph(); // lazily route audio through the booster
+    if (gainNode) gainNode.gain.value = muted ? 0 : Math.max(1, v);
+    if (audioCtx?.state === 'suspended') audioCtx.resume().catch(() => {});
+    localStorage.setItem('playerVolumePct', String(volume));
   }
   function toggleMute() {
     muted = !muted;
     video.muted = muted;
+    if (gainNode) gainNode.gain.value = muted ? 0 : Math.max(1, volume / 100);
+  }
+
+  // ── Touch: double-tap left/right half seeks ±10s; single tap toggles.
+  // Desktop keeps click = play/pause, double-click = fullscreen. Synthetic
+  // click/dblclick events that follow a touch are suppressed. ──
+  let lastTouchTap = 0;
+  let touchTapTimer = null;
+  let touchRecently = false;
+  function onVideoPointerUp(e) {
+    if (e.pointerType !== 'touch') return;
+    touchRecently = true;
+    setTimeout(() => { touchRecently = false; }, 600);
+    const now = Date.now();
+    if (now - lastTouchTap < 320) {
+      clearTimeout(touchTapTimer);
+      lastTouchTap = 0;
+      const mid = window.innerWidth / 2;
+      seekTo(cur + (e.clientX > mid ? 10 : -10));
+      poke();
+    } else {
+      lastTouchTap = now;
+      clearTimeout(touchTapTimer);
+      touchTapTimer = setTimeout(() => { togglePlay(); poke(); }, 320);
+    }
+  }
+  function onVideoClick() {
+    if (touchRecently) return;
+    togglePlay();
+    poke();
+  }
+  function onVideoDblClick() {
+    if (touchRecently) return;
+    toggleFullscreen();
   }
   function toggleFullscreen() {
     if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
@@ -249,8 +315,8 @@
       case ' ': case 'k': e.preventDefault(); togglePlay(); poke(); break;
       case 'ArrowLeft': e.preventDefault(); seekTo(cur - 10); poke(); break;
       case 'ArrowRight': e.preventDefault(); seekTo(cur + 10); poke(); break;
-      case 'ArrowUp': e.preventDefault(); setVolume(volume + 0.05); poke(); break;
-      case 'ArrowDown': e.preventDefault(); setVolume(volume - 0.05); poke(); break;
+      case 'ArrowUp': e.preventDefault(); setVolume(volume + 5); poke(); break;
+      case 'ArrowDown': e.preventDefault(); setVolume(volume - 5); poke(); break;
       case 'm': toggleMute(); poke(); break;
       case 'f': toggleFullscreen(); poke(); break;
       case 'Escape':
@@ -263,10 +329,17 @@
 
   onMount(async () => {
     document.body.style.overflow = 'hidden';
-    const savedVol = parseFloat(localStorage.getItem('playerVolume'));
-    if (!isNaN(savedVol)) { volume = Math.max(0, Math.min(1, savedVol)); muted = savedVol === 0; }
-    video.volume = volume;
+    // Prefer the percent key; migrate from the old 0–1 'playerVolume'.
+    let savedPct = parseFloat(localStorage.getItem('playerVolumePct'));
+    if (isNaN(savedPct)) {
+      const legacy = parseFloat(localStorage.getItem('playerVolume'));
+      savedPct = isNaN(legacy) ? 100 : legacy * 100;
+    }
+    volume = Math.max(0, Math.min(150, Math.round(savedPct)));
+    muted = volume === 0;
+    video.volume = Math.min(1, volume / 100);
     video.muted = muted;
+    // Note: the boost graph is only built when the user pushes past 100.
 
     // Full record: fresh resume point, subtitles, sync offset, audio tracks.
     try { full = await api.item(item.id); } catch { full = null; }
@@ -284,9 +357,17 @@
   onDestroy(() => {
     clearInterval(progressTimer);
     clearTimeout(idleTimer);
+    clearTimeout(retryTimer);
+    clearTimeout(touchTapTimer);
     saveProgress();
     loadSeq++; // invalidate in-flight session loads
     destroyHls();
+    // Free the transcode slot immediately instead of waiting out the
+    // server's 2-minute idle timeout (the main source of 503s).
+    if (!isDirect) {
+      try { navigator.sendBeacon(`/api/hls/${encodeURIComponent(item.id)}/stop`); } catch {}
+    }
+    if (audioCtx) { try { audioCtx.close(); } catch {} }
     document.body.style.overflow = '';
   });
 
@@ -311,8 +392,9 @@
   <video
     bind:this={video}
     playsinline
-    onclick={() => { togglePlay(); poke(); }}
-    ondblclick={toggleFullscreen}
+    onclick={onVideoClick}
+    ondblclick={onVideoDblClick}
+    onpointerup={onVideoPointerUp}
     onplay={() => { paused = false; poke(); }}
     onpause={() => { paused = true; poke(); }}
     onwaiting={() => { buffering = true; }}
@@ -331,6 +413,10 @@
 
   {#if buffering && !error}
     <div class="spin-wrap"><div class="spinner"></div></div>
+  {/if}
+
+  {#if notice && !error}
+    <div class="notice">{notice}</div>
   {/if}
 
   {#if error}
@@ -366,35 +452,40 @@
     </div>
 
     <div class="buttons">
-      <button class="iconbtn" onclick={togglePlay} aria-label={paused ? 'Play' : 'Pause'}>
-        {#if paused}
-          <svg viewBox="0 0 24 24" width="28" height="28" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
-        {:else}
-          <svg viewBox="0 0 24 24" width="28" height="28" fill="currentColor"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
-        {/if}
-      </button>
-      <button class="iconbtn" onclick={() => seekTo(cur - 10)} aria-label="Back 10 seconds">
-        <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M12 5V1L7 6l5 5V7c3.3 0 6 2.7 6 6s-2.7 6-6 6-6-2.7-6-6H4c0 4.4 3.6 8 8 8s8-3.6 8-8-3.6-8-8-8z"/><text x="9" y="16.5" font-size="7" font-weight="700" fill="currentColor" stroke="none">10</text></svg>
-      </button>
-      <button class="iconbtn" onclick={() => seekTo(cur + 10)} aria-label="Forward 10 seconds">
-        <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M12 5V1l5 5-5 5V7c-3.3 0-6 2.7-6 6s2.7 6 6 6 6-2.7 6-6h2c0 4.4-3.6 8-8 8s-8-3.6-8-8 3.6-8 8-8z"/><text x="9" y="16.5" font-size="7" font-weight="700" fill="currentColor" stroke="none">10</text></svg>
-      </button>
-
-      <div class="vol">
-        <button class="iconbtn" onclick={toggleMute} aria-label={muted ? 'Unmute' : 'Mute'}>
-          {#if muted || volume === 0}
-            <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M16.5 12c0-1.77-1-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/></svg>
-          {:else}
-            <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1-3.29-2.5-4.03v8.05c1.5-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg>
-          {/if}
-        </button>
-        <input type="range" min="0" max="1" step="0.02" value={muted ? 0 : volume}
-               oninput={(e) => setVolume(parseFloat(e.target.value))} aria-label="Volume" />
+      <div class="zone zleft">
+        <div class="vol">
+          <button class="iconbtn" onclick={toggleMute} aria-label={muted ? 'Unmute' : 'Mute'}>
+            {#if muted || volume === 0}
+              <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M16.5 12c0-1.77-1-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/></svg>
+            {:else}
+              <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1-3.29-2.5-4.03v8.05c1.5-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg>
+            {/if}
+          </button>
+          <input type="range" min="0" max="150" step="2" value={muted ? 0 : volume}
+                 oninput={(e) => setVolume(parseFloat(e.target.value))}
+                 aria-label="Volume (over 100 boosts)" />
+          <span class="pct" class:boost={volume > 100 && !muted}>{muted ? 0 : volume}%</span>
+        </div>
+        <span class="time">{fmtTime(shownTime)} / {fmtTime(total)}</span>
       </div>
 
-      <span class="time">{fmtTime(shownTime)} / {fmtTime(total)}</span>
-      <div class="spacer"></div>
+      <div class="zone zcenter">
+        <button class="iconbtn skip" onclick={() => seekTo(cur - 10)} aria-label="Back 10 seconds">
+          <svg viewBox="0 0 24 24" width="30" height="30" fill="currentColor"><path d="M12 5V1L7 6l5 5V7c3.3 0 6 2.7 6 6s-2.7 6-6 6-6-2.7-6-6H4c0 4.4 3.6 8 8 8s8-3.6 8-8-3.6-8-8-8z"/><text x="9" y="16.5" font-size="7" font-weight="700" fill="currentColor" stroke="none">10</text></svg>
+        </button>
+        <button class="iconbtn playbtn" onclick={togglePlay} aria-label={paused ? 'Play' : 'Pause'}>
+          {#if paused}
+            <svg viewBox="0 0 24 24" width="36" height="36" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+          {:else}
+            <svg viewBox="0 0 24 24" width="36" height="36" fill="currentColor"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+          {/if}
+        </button>
+        <button class="iconbtn skip" onclick={() => seekTo(cur + 10)} aria-label="Forward 10 seconds">
+          <svg viewBox="0 0 24 24" width="30" height="30" fill="currentColor"><path d="M12 5V1l5 5-5 5V7c-3.3 0-6 2.7-6 6s2.7 6 6 6 6-2.7 6-6h2c0 4.4-3.6 8-8 8s-8-3.6-8-8 3.6-8 8-8z"/><text x="9" y="16.5" font-size="7" font-weight="700" fill="currentColor" stroke="none">10</text></svg>
+        </button>
+      </div>
 
+      <div class="zone zright">
       {#if next}
         <button class="nextbtn" onclick={() => { saveProgress(); onnext?.(next); }}>
           Next <strong>{episodeCode(next)}</strong>
@@ -455,6 +546,7 @@
       <button class="iconbtn" onclick={toggleFullscreen} aria-label="Fullscreen">
         <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
       </button>
+      </div>
     </div>
   </div>
 </div>
@@ -545,7 +637,14 @@
     padding: 3px 8px; border-radius: 5px; pointer-events: none;
   }
 
-  .buttons { display: flex; align-items: center; gap: var(--s2); }
+  .buttons {
+    display: grid; grid-template-columns: 1fr auto 1fr;
+    align-items: center; gap: var(--s2);
+  }
+  .zone { display: flex; align-items: center; gap: var(--s2); min-width: 0; }
+  .zleft { justify-self: start; }
+  .zcenter { justify-self: center; gap: var(--s3); }
+  .zright { justify-self: end; }
   .iconbtn {
     display: grid; place-items: center;
     width: 42px; height: 42px; border-radius: 99px;
@@ -554,19 +653,36 @@
   }
   .iconbtn:hover { background: rgba(242, 242, 244, 0.12); }
   .iconbtn.on { color: var(--star); }
+  .iconbtn.skip { width: 48px; height: 48px; }
+  .iconbtn.playbtn { width: 54px; height: 54px; }
   .time {
     font-size: 0.86rem; color: var(--ink-soft); font-weight: 500;
     font-variant-numeric: tabular-nums; margin-left: var(--s2);
     white-space: nowrap;
   }
-  .spacer { flex: 1; }
 
-  .vol { display: flex; align-items: center; }
+  .vol { display: flex; align-items: center; gap: 6px; }
   .vol input[type='range'] {
     width: 0; opacity: 0; transition: width var(--t-med), opacity var(--t-med);
     accent-color: #fff; background: transparent; border: none; padding: 0;
   }
-  .vol:hover input[type='range'], .vol input[type='range']:focus-visible { width: 84px; opacity: 1; }
+  .vol:hover input[type='range'], .vol:focus-within input[type='range'] { width: 110px; opacity: 1; }
+  .pct {
+    font-size: 0.78rem; font-weight: 700; color: var(--ink-soft);
+    font-variant-numeric: tabular-nums; min-width: 4ch;
+    opacity: 0; transition: opacity var(--t-med);
+  }
+  .vol:hover .pct, .vol:focus-within .pct { opacity: 1; }
+  .pct.boost { color: #6db3ff; }
+
+  .notice {
+    position: absolute; left: 50%; top: 62%;
+    transform: translateX(-50%);
+    font-size: 0.9rem; color: var(--ink-soft);
+    background: rgba(11, 11, 14, 0.7); backdrop-filter: blur(8px);
+    padding: 8px 18px; border-radius: 99px;
+    pointer-events: none;
+  }
 
   .nextbtn {
     display: inline-flex; align-items: center; gap: 8px;
@@ -599,5 +715,8 @@
   @media (max-width: 640px) {
     .time { display: none; }
     .nextbtn strong { display: none; }
+    .vol input[type='range'], .pct { display: none; }
+    .iconbtn.skip { width: 44px; height: 44px; }
+    .iconbtn.playbtn { width: 48px; height: 48px; }
   }
 </style>

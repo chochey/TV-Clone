@@ -143,12 +143,14 @@
 {#if phase === 'loading'}
   <div class="splash">
     <div class="mark display">CHOCHEY'S</div>
+    <div class="marksub meta">Media Server</div>
     <div class="spinner"></div>
   </div>
 {:else if phase === 'login'}
   <div class="splash">
     <form class="login" onsubmit={signIn}>
       <div class="mark display">CHOCHEY'S</div>
+      <div class="marksub meta">Media Server</div>
       <input
         type="text" placeholder="Username" autocomplete="username"
         bind:value={username} autofocus
@@ -165,7 +167,9 @@
   </div>
 {:else}
   <header class="topbar" class:solid={scrollY > 24}>
-    <button class="brand display" onclick={() => navigate('/')}>CHOCHEY'S</button>
+    <button class="brand display" onclick={() => navigate('/')}>
+      CHOCHEY'S<span class="brandsub">MEDIA SERVER</span>
+    </button>
     <nav>
       <a class:active={$route.name === 'home'} href="/" onclick={(e) => { e.preventDefault(); navigate('/'); }}>Home</a>
       <a class:active={$route.name === 'movies'} href="/movies" onclick={(e) => { e.preventDefault(); navigate('/movies'); }}>Films</a>
@@ -188,10 +192,10 @@
           {#if isAdmin || can('canDownload') || can('canLogs')}
             <div class="divider"></div>
             <div class="who meta">System</div>
-            {#if isAdmin}<button onclick={() => go('/system')}>Dashboard</button>{/if}
+            {#if can('canLogs')}<button onclick={() => go('/system')}>Dashboard</button>{/if}
             {#if isAdmin}<button onclick={() => go('/users')}>Users</button>{/if}
             {#if can('canDownload')}<button onclick={() => go('/downloads')}>Downloads</button>{/if}
-            {#if isAdmin}<button onclick={() => go('/organizer')}>Organizer</button>{/if}
+            {#if can('canLogs')}<button onclick={() => go('/organizer')}>Organizer</button>{/if}
             {#if can('canLogs')}<button onclick={() => go('/logs')}>Logs</button>{/if}
           {/if}
           {#if can('canScan') || can('canRestart')}
@@ -226,11 +230,11 @@
       <History />
     {:else if $route.name === 'requests'}
       <Requests />
-    {:else if $route.name === 'system' && isAdmin}
+    {:else if $route.name === 'system' && can('canLogs')}
       <Dashboard />
     {:else if $route.name === 'downloads' && can('canDownload')}
       <Downloads />
-    {:else if $route.name === 'organizer' && isAdmin}
+    {:else if $route.name === 'organizer' && can('canLogs')}
       <Organizer />
     {:else if $route.name === 'logs' && can('canLogs')}
       <Logs />
@@ -312,10 +316,18 @@
     border-bottom-color: var(--line);
   }
   .brand {
+    display: flex; align-items: baseline; gap: 10px;
     font-size: 1.02rem;
     letter-spacing: 0.34em;
     color: var(--ink);
+    white-space: nowrap;
   }
+  .brandsub {
+    font-size: 0.62rem; font-weight: 600;
+    letter-spacing: 0.3em;
+    color: var(--ink-faint);
+  }
+  .marksub { margin-top: calc(-1 * var(--s4)); letter-spacing: 0.3em; color: var(--ink-faint); }
   nav { display: flex; gap: var(--s5); margin-left: auto; }
 
   .usermenu { position: relative; margin-left: var(--s5); }
@@ -383,6 +395,9 @@
     to   { opacity: 1; transform: translateX(-50%) translateY(0); }
   }
 
+  @media (max-width: 700px) {
+    .brandsub { display: none; }
+  }
   @media (max-width: 560px) {
     .topbar { padding: var(--s3) var(--s4); }
     .brand { letter-spacing: 0.2em; font-size: 0.92rem; }

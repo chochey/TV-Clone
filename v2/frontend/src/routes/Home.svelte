@@ -52,20 +52,20 @@
     transform: translateY(-52%);
     z-index: 3;
     display: flex; flex-direction: column; gap: var(--s2);
-    width: 172px;
+    width: 216px;
   }
   .stat {
-    display: flex; flex-direction: column; gap: 1px;
-    padding: var(--s2) var(--s4);
+    display: flex; flex-direction: column; gap: 2px;
+    padding: var(--s3) var(--s4);
     background: rgba(11, 11, 14, 0.55);
     backdrop-filter: blur(12px);
     border-radius: var(--r-md);
     box-shadow: inset 0 0 0 1px var(--line);
     text-align: left;
   }
-  .stat span { font-size: 1.25rem; font-weight: 800; letter-spacing: -0.02em; }
+  .stat span { font-size: 1.6rem; font-weight: 800; letter-spacing: -0.02em; }
   .stat .accent { color: #6db3ff; }
-  .stat small { font-size: 0.64rem; }
+  .stat small { font-size: 0.7rem; }
   button.stat { cursor: pointer; transition: background var(--t-fast), box-shadow var(--t-fast); }
   button.stat:hover { background: rgba(11, 11, 14, 0.75); box-shadow: inset 0 0 0 1px var(--line-strong); }
 
