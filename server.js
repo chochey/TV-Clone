@@ -2821,7 +2821,11 @@ const { setup: setupOrganizerWatch } = require('./lib/organizer-watch')({
   debounceMs: ORGANIZER_RESCAN_DEBOUNCE_MS,
   onMove: () => {
     console.log('[OrganizerWatch] Move detected — rescanning library');
-    invalidateLibrary(); // already rescans + notifies clients (library-updated)
+    // invalidateLibrary() rescans but does NOT notify — pair it with the
+    // client poke, same as the file-watcher path. Without this, connected
+    // UIs never hear about organizer-filed content.
+    invalidateLibrary();
+    notifyClients('library-updated');
   },
 });
 const ORGANIZER_SCRIPT  = process.env.ORGANIZER_SCRIPT  || path.join(path.dirname(ORGANIZER_LOG), 'movie_renamer.py');
