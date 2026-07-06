@@ -14,7 +14,22 @@
 
 <div class="home">
   {#if featured}
-    <Hero item={featured} {onopen} {onplay} />
+    <div class="herowrap">
+      <Hero item={featured} {onopen} {onplay} />
+
+      <!-- Library at a glance — v1's home-stat stack, riding the hero's right edge -->
+      <aside class="herostats" aria-label="Library statistics">
+        <div class="stat"><span>{$libraryStats.total.toLocaleString()}</span><small class="meta">Total titles</small></div>
+        <button class="stat" onclick={() => navigate('/movies')}>
+          <span>{$libraryStats.movies.toLocaleString()}</span><small class="meta">Movies</small>
+        </button>
+        <button class="stat" onclick={() => navigate('/shows')}>
+          <span>{$libraryStats.shows.toLocaleString()}</span><small class="meta">Shows</small>
+        </button>
+        <div class="stat"><span class="accent">{$libraryStats.inProgress.toLocaleString()}</span><small class="meta">In progress</small></div>
+        <div class="stat"><span class="accent">{$libraryStats.unwatched.toLocaleString()}</span><small class="meta">Unwatched</small></div>
+      </aside>
+    </div>
   {/if}
 
   <div class="rows">
@@ -24,40 +39,38 @@
       <Row title={cluster.name} items={cluster.items} {onopen} {onplay} />
     {/each}
   </div>
-
-  <!-- Library at a glance (v1's home-stat panel) -->
-  <section class="stats" aria-label="Library statistics">
-    <div class="stat"><span>{$libraryStats.total.toLocaleString()}</span><small class="meta">Total titles</small></div>
-    <button class="stat" onclick={() => navigate('/movies')}>
-      <span>{$libraryStats.movies.toLocaleString()}</span><small class="meta">Movies</small>
-    </button>
-    <button class="stat" onclick={() => navigate('/shows')}>
-      <span>{$libraryStats.shows.toLocaleString()}</span><small class="meta">Shows</small>
-    </button>
-    <div class="stat"><span>{$libraryStats.inProgress.toLocaleString()}</span><small class="meta">In progress</small></div>
-    <div class="stat"><span>{$libraryStats.unwatched.toLocaleString()}</span><small class="meta">Unwatched</small></div>
-  </section>
 </div>
 
 <style>
   .home { padding-bottom: var(--s7); }
+  .herowrap { position: relative; }
   /* pull the rows up to overlap the hero's fade — cinematic, fills space */
   .rows { position: relative; margin-top: -8vh; z-index: 2; }
 
-  .stats {
-    display: flex; flex-wrap: wrap; gap: var(--s3);
-    padding: var(--s6) var(--gutter) 0;
-    max-width: var(--maxw); margin: 0 auto;
+  .herostats {
+    position: absolute; right: var(--gutter); top: 50%;
+    transform: translateY(-52%);
+    z-index: 3;
+    display: flex; flex-direction: column; gap: var(--s2);
+    width: 172px;
   }
   .stat {
-    flex: 1 1 140px;
-    display: flex; flex-direction: column; gap: 4px;
-    padding: var(--s4);
-    background: var(--bg-raised); border-radius: var(--r-md);
+    display: flex; flex-direction: column; gap: 2px;
+    padding: var(--s3) var(--s4);
+    background: rgba(11, 11, 14, 0.55);
+    backdrop-filter: blur(12px);
+    border-radius: var(--r-md);
     box-shadow: inset 0 0 0 1px var(--line);
     text-align: left;
   }
-  .stat span { font-size: 1.7rem; font-weight: 800; letter-spacing: -0.02em; }
-  button.stat { cursor: pointer; transition: background var(--t-fast); }
-  button.stat:hover { background: rgba(242, 242, 244, 0.08); }
+  .stat span { font-size: 1.45rem; font-weight: 800; letter-spacing: -0.02em; }
+  .stat .accent { color: #6db3ff; }
+  .stat small { font-size: 0.64rem; }
+  button.stat { cursor: pointer; transition: background var(--t-fast), box-shadow var(--t-fast); }
+  button.stat:hover { background: rgba(11, 11, 14, 0.75); box-shadow: inset 0 0 0 1px var(--line-strong); }
+
+  /* The hero gets crowded below this — the stack bows out */
+  @media (max-width: 1100px) {
+    .herostats { display: none; }
+  }
 </style>
