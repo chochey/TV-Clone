@@ -66,10 +66,10 @@
 <style>
   .hero {
     position: relative;
-    min-height: 88vh;
+    min-height: 58vh;
     display: flex;
     align-items: flex-end;
-    padding: 0 var(--gutter) 14vh;
+    padding: 0 var(--gutter) 9vh;
     overflow: hidden;
     isolation: isolate;
   }
@@ -105,8 +105,8 @@
   .content { position: relative; max-width: 640px; }
   .kicker { color: var(--ink-soft); }
   h1 {
-    font-size: clamp(2.6rem, 5.4vw, 4.6rem);
-    margin: var(--s3) 0 var(--s4);
+    font-size: clamp(2rem, 3.8vw, 3.4rem);
+    margin: var(--s2) 0 var(--s3);
     text-wrap: balance;
   }
   .metarow {
@@ -120,9 +120,9 @@
   }
   .metarow .star { color: var(--star); font-weight: 600; }
   .plot {
-    margin: var(--s4) 0 var(--s5);
-    max-width: 56ch; color: var(--ink); font-size: 1.02rem; line-height: 1.55;
-    display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+    margin: var(--s3) 0 var(--s4);
+    max-width: 56ch; color: var(--ink); font-size: 0.98rem; line-height: 1.5;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
   }
   .actions { display: flex; gap: var(--s3); }
   .play {
@@ -147,6 +147,6 @@
   .resumebar span { display: block; height: 100%; background: var(--ink); }
 
   @media (max-width: 640px) {
-    .hero { min-height: 72vh; padding-bottom: 10vh; }
+    .hero { min-height: 52vh; padding-bottom: 8vh; }
   }
 </style>

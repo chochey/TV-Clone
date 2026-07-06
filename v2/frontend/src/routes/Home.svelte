@@ -45,7 +45,7 @@
   .home { padding-bottom: var(--s7); }
   .herowrap { position: relative; }
   /* pull the rows up to overlap the hero's fade — cinematic, fills space */
-  .rows { position: relative; margin-top: -8vh; z-index: 2; }
+  .rows { position: relative; margin-top: -5vh; z-index: 2; }
 
   .herostats {
     position: absolute; right: var(--gutter); top: 50%;
@@ -55,15 +55,15 @@
     width: 172px;
   }
   .stat {
-    display: flex; flex-direction: column; gap: 2px;
-    padding: var(--s3) var(--s4);
+    display: flex; flex-direction: column; gap: 1px;
+    padding: var(--s2) var(--s4);
     background: rgba(11, 11, 14, 0.55);
     backdrop-filter: blur(12px);
     border-radius: var(--r-md);
     box-shadow: inset 0 0 0 1px var(--line);
     text-align: left;
   }
-  .stat span { font-size: 1.45rem; font-weight: 800; letter-spacing: -0.02em; }
+  .stat span { font-size: 1.25rem; font-weight: 800; letter-spacing: -0.02em; }
   .stat .accent { color: #6db3ff; }
   .stat small { font-size: 0.64rem; }
   button.stat { cursor: pointer; transition: background var(--t-fast), box-shadow var(--t-fast); }
