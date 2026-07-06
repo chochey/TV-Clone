@@ -19,7 +19,7 @@ const app = express();
 // app.use('/api', ...) would strip the mount path, so match on a single
 // middleware that inspects the full URL and only proxies backend routes —
 // preserving the complete path (/api/health stays /api/health).
-const BACKEND_RE = /^\/(api|stream|hls|hls\.min\.js|omdb-poster|poster|backdrop|sprite)(\/|$|\?)/;
+const BACKEND_RE = /^\/(api|stream|hls|hls\.min\.js|omdb-poster|poster|backdrop|sprite|subtitle)(\/|$|\?)/;
 const proxy = createProxyMiddleware({
   target: BACKEND,
   changeOrigin: true,

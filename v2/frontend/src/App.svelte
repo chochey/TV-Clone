@@ -1,10 +1,12 @@
 <script>
   import { onMount } from 'svelte';
   import { api } from './lib/api.js';
-  import { session, loadLibrary } from './lib/stores.js';
+  import { library, session, loadLibrary } from './lib/stores.js';
   import { route, navigate } from './lib/router.js';
+  import { nextEpisodeOf } from './lib/format.js';
   import Home from './routes/Home.svelte';
   import Detail from './routes/Detail.svelte';
+  import Player from './lib/components/Player.svelte';
 
   let phase = $state('loading'); // loading | login | ready
   let username = $state('');
@@ -58,12 +60,14 @@
     }
   }
 
+  let playing = $state(null);
+  const playingNext = $derived(playing ? nextEpisodeOf(playing, $library) : null);
+
   function openItem(item) {
     navigate(`/title/${encodeURIComponent(item.id)}`);
   }
   function playItem(item) {
-    // Player is the next build; make the click feel acknowledged, not broken.
-    showToast(`Player coming soon — “${item.showName || item.title}” is queued up`);
+    playing = item;
   }
   function deadLink(e, label) {
     e.preventDefault();
@@ -113,6 +117,17 @@
       <Home onopen={openItem} onplay={playItem} />
     {/if}
   </main>
+{/if}
+
+{#if playing}
+  {#key playing.id}
+    <Player
+      item={playing}
+      next={playingNext}
+      onclose={() => { playing = null; }}
+      onnext={(n) => { playing = n; }}
+    />
+  {/key}
 {/if}
 
 {#if toast}
