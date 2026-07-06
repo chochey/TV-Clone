@@ -75,6 +75,14 @@ export const api = {
   torrentDelete: (hashes, deleteFiles = false) =>
     fetch('/api/qbt/torrents/delete', opts('POST', { hashes, deleteFiles })).then(json),
 
+  // On-demand OMDb enrichment (server caches hits AND misses)
+  metadata: (id) => fetch(`/api/metadata/${encodeURIComponent(id)}`, opts('GET')).then(json),
+
+  // Profile management (admin)
+  profileCreate: (body) => fetch('/api/profiles', opts('POST', body)).then(json),
+  profileUpdate: (id, body) => fetch(`/api/profiles/${encodeURIComponent(id)}`, opts('PUT', body)).then(json),
+  profileDelete: (id) => fetch(`/api/profiles/${encodeURIComponent(id)}`, opts('DELETE')).then(json),
+
   // System actions
   scan: () => fetch('/api/scan', opts('POST')).then(json),
   restart: () => fetch('/api/restart', opts('POST')).then(json),

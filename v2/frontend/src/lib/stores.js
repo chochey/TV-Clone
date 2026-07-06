@@ -88,6 +88,32 @@ export const libraryStats = derived(library, ($lib) => {
   return { total: $lib.length, movies, shows: shows.size, inProgress, unwatched };
 });
 
+// Self-healing artwork: when a rendered item has no poster, ask v1's
+// on-demand OMDb endpoint once and patch the store so the card re-renders
+// with real art. The server caches hits and misses, and the attempted-set
+// keeps us from re-asking within a session — new arrivals heal on sight
+// instead of waiting for the next background scan.
+const enrichAttempted = new Set();
+export async function enrichItem(id) {
+  if (!id || enrichAttempted.has(id)) return;
+  enrichAttempted.add(id);
+  let meta;
+  try {
+    const r = await fetch(`/api/metadata/${encodeURIComponent(id)}`, { credentials: 'same-origin' });
+    if (!r.ok) return;
+    meta = await r.json();
+  } catch { return; }
+  if (!meta?.found) return;
+  library.update((list) => list.map((i) => {
+    if (i.id !== id) return i;
+    const patched = { ...i };
+    for (const k of ['omdbTitle', 'omdbYear', 'plot', 'rated', 'genre', 'imdbRating', 'imdbID', 'runtime', 'omdbPosterUrl']) {
+      if (meta[k] && !patched[k]) patched[k] = meta[k];
+    }
+    return patched;
+  }));
+}
+
 export async function loadLibrary(profileId) {
   const data = await api.library({ profile: profileId || 'default' });
   const items = Array.isArray(data) ? data : data.items || [];

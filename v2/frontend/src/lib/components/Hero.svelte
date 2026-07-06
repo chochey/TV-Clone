@@ -1,6 +1,9 @@
 <script>
   import { posterUrl, backdropUrl } from '../api.js';
+  import { enrichItem } from '../stores.js';
   let { item, onopen, onplay } = $props();
+
+  $effect(() => { if (!posterUrl(item)) enrichItem(item.id); });
 
   const poster = $derived(posterUrl(item));
   const title = $derived(item.showName || item.title || item.omdbTitle || '');

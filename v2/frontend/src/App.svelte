@@ -14,6 +14,7 @@
   import Downloads from './routes/Downloads.svelte';
   import Organizer from './routes/Organizer.svelte';
   import Logs from './routes/Logs.svelte';
+  import Users from './routes/Users.svelte';
   import Player from './lib/components/Player.svelte';
 
   let phase = $state('loading'); // loading | login | ready
@@ -188,6 +189,7 @@
             <div class="divider"></div>
             <div class="who meta">System</div>
             {#if isAdmin}<button onclick={() => go('/system')}>Dashboard</button>{/if}
+            {#if isAdmin}<button onclick={() => go('/users')}>Users</button>{/if}
             {#if can('canDownload')}<button onclick={() => go('/downloads')}>Downloads</button>{/if}
             {#if isAdmin}<button onclick={() => go('/organizer')}>Organizer</button>{/if}
             {#if can('canLogs')}<button onclick={() => go('/logs')}>Logs</button>{/if}
@@ -232,6 +234,8 @@
       <Organizer />
     {:else if $route.name === 'logs' && can('canLogs')}
       <Logs />
+    {:else if $route.name === 'users' && isAdmin}
+      <Users />
     {:else}
       <Home onopen={openItem} onplay={playItem} />
     {/if}

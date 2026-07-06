@@ -1,6 +1,10 @@
 <script>
   import { posterUrl, backdropUrl } from '../api.js';
+  import { enrichItem } from '../stores.js';
   let { item, onopen, onplay } = $props();
+
+  // No poster? Ask OMDb once — the store patch re-renders this card.
+  $effect(() => { if (!posterUrl(item)) enrichItem(item.id); });
 
   const poster = $derived(posterUrl(item));
   const backdrop = $derived(backdropUrl(item));

@@ -15,6 +15,7 @@ function parse(path) {
   if (path === '/downloads') return { name: 'downloads' };
   if (path === '/organizer') return { name: 'organizer' };
   if (path === '/logs') return { name: 'logs' };
+  if (path === '/users') return { name: 'users' };
   return { name: 'home' };
 }
 

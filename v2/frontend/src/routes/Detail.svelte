@@ -1,6 +1,6 @@
 <script>
   import { api, posterUrl, backdropUrl } from '../lib/api.js';
-  import { library, libraryLoaded, session } from '../lib/stores.js';
+  import { library, libraryLoaded, session, enrichItem } from '../lib/stores.js';
   import { navigate } from '../lib/router.js';
   import { episodeTitle, episodeCode } from '../lib/format.js';
 
@@ -83,6 +83,7 @@
   });
   let posterFailed = $state(false);
   $effect(() => { poster; posterFailed = false; });
+  $effect(() => { if (item && !posterUrl(item)) enrichItem(item.id); });
 
   const playTarget = $derived(isShow ? nextUp : m);
   const resuming = $derived(playTarget?.progress?.percent > 0 && playTarget?.progress?.percent < 95);
