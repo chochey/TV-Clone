@@ -38,6 +38,31 @@ app.use((req, res, next) => {
   next();
 });
 
+// Security headers for everything WE serve (proxied responses carry v1's
+// own headers). The CSP matches exactly what the v2 app loads: same-origin
+// bundle + hls.min.js, Google Fonts, blob: workers (hls.js) and blob:
+// media (MSE), inline style attributes (Svelte), same-origin API + SSE.
+app.use((_req, res, next) => {
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=()');
+  res.setHeader('Content-Security-Policy', [
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    'font-src https://fonts.gstatic.com',
+    "img-src 'self' data:",
+    "media-src 'self' blob:",
+    "worker-src 'self' blob:",
+    "connect-src 'self'",
+    "frame-ancestors 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+  ].join('; '));
+  next();
+});
+
 // Static built UI.
 app.use(express.static(DIST, { index: false, maxAge: '1h' }));
 
