@@ -2,7 +2,9 @@
   import { onMount } from 'svelte';
   import { api } from './lib/api.js';
   import { session, loadLibrary } from './lib/stores.js';
+  import { route, navigate } from './lib/router.js';
   import Home from './routes/Home.svelte';
+  import Detail from './routes/Detail.svelte';
 
   let phase = $state('loading'); // loading | login | ready
   let username = $state('');
@@ -10,6 +12,14 @@
   let busy = $state(false);
   let error = $state('');
   let scrollY = $state(0);
+
+  let toast = $state('');
+  let toastTimer;
+  function showToast(msg) {
+    toast = msg;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { toast = ''; }, 2200);
+  }
 
   onMount(async () => {
     // Wait for the v1 backend to be ready (it may be mid-scan).
@@ -49,11 +59,15 @@
   }
 
   function openItem(item) {
-    // Detail view lands next; for now surface the choice.
-    console.log('open', item.title);
+    navigate(`/title/${encodeURIComponent(item.id)}`);
   }
   function playItem(item) {
-    console.log('play', item.title);
+    // Player is the next build; make the click feel acknowledged, not broken.
+    showToast(`Player coming soon — “${item.showName || item.title}” is queued up`);
+  }
+  function deadLink(e, label) {
+    e.preventDefault();
+    showToast(`${label} isn't built yet`);
   }
 </script>
 
@@ -84,17 +98,25 @@
   </div>
 {:else}
   <header class="topbar" class:solid={scrollY > 24}>
-    <div class="brand display">CHOCHEY'S</div>
+    <button class="brand display" onclick={() => navigate('/')}>CHOCHEY'S</button>
     <nav>
-      <a class="active" href="/">Home</a>
-      <a href="/movies">Films</a>
-      <a href="/shows">Series</a>
-      <a href="/search">Search</a>
+      <a class:active={$route.name === 'home'} href="/" onclick={(e) => { e.preventDefault(); navigate('/'); }}>Home</a>
+      <a href="/movies" onclick={(e) => deadLink(e, 'Films')}>Films</a>
+      <a href="/shows" onclick={(e) => deadLink(e, 'Series')}>Series</a>
+      <a href="/search" onclick={(e) => deadLink(e, 'Search')}>Search</a>
     </nav>
   </header>
   <main>
-    <Home onopen={openItem} onplay={playItem} />
+    {#if $route.name === 'title'}
+      <Detail id={$route.id} onplay={playItem} />
+    {:else}
+      <Home onopen={openItem} onplay={playItem} />
+    {/if}
   </main>
+{/if}
+
+{#if toast}
+  <div class="toast">{toast}</div>
 {/if}
 
 <style>
@@ -168,6 +190,21 @@
     height: 2px; background: var(--ink); border-radius: 2px;
   }
   main { position: relative; }
+
+  .toast {
+    position: fixed; left: 50%; bottom: var(--s5); transform: translateX(-50%);
+    z-index: 100;
+    background: var(--bg-raised); color: var(--ink);
+    font-size: 0.9rem; font-weight: 500;
+    padding: 12px 20px; border-radius: 99px;
+    box-shadow: 0 12px 34px rgba(0, 0, 0, 0.5), 0 0 0 1px var(--line-strong);
+    animation: toastin var(--t-med) var(--ease);
+    max-width: 86vw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  @keyframes toastin {
+    from { opacity: 0; transform: translateX(-50%) translateY(8px); }
+    to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+  }
 
   @media (max-width: 560px) {
     .topbar { padding: var(--s3) var(--s4); }
