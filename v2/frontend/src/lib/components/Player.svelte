@@ -298,6 +298,42 @@
     else onclose?.();
   }
 
+  // ── Seek-preview sprites (v1's sheets: cols×rows tiles, one per
+  // interval seconds; generate-on-demand, poll while the server bakes) ──
+  let sprite = $state(null); // {totalSheets, cols, rows, width, height, interval} when ready
+  let spritePollTimer = null;
+  function preloadSheets(meta) {
+    for (let s = 0; s < meta.totalSheets; s++) {
+      const img = new Image();
+      img.src = `/api/sprites/${encodeURIComponent(item.id)}/${s}`;
+    }
+  }
+  async function loadSprites() {
+    try {
+      const r = await fetch(`/api/sprites/${encodeURIComponent(item.id)}/generate`, { method: 'POST', credentials: 'same-origin' });
+      if (!r.ok) return;
+      const data = await r.json();
+      if (data.status === 'ready') {
+        sprite = data;
+        preloadSheets(data);
+      } else {
+        spritePollTimer = setTimeout(loadSprites, 4000);
+      }
+    } catch {}
+  }
+  function thumbStyle(t) {
+    const per = sprite.cols * sprite.rows;
+    const fi = Math.min(Math.floor(t / sprite.interval), sprite.totalSheets * per - 1);
+    const sheet = Math.floor(fi / per);
+    const pos = fi % per;
+    const col = pos % sprite.cols;
+    const row = Math.floor(pos / sprite.cols);
+    return `background-image:url(/api/sprites/${encodeURIComponent(item.id)}/${sheet});` +
+      `background-size:${sprite.cols * sprite.width}px ${sprite.rows * sprite.height}px;` +
+      `background-position:-${col * sprite.width}px -${row * sprite.height}px;` +
+      `width:${sprite.width}px;height:${sprite.height}px`;
+  }
+
   // ── Scrubber ────────────────────────────────────────────────────────
   let bar = $state(null);
   function barTime(clientX) {
@@ -366,6 +402,7 @@
     if (isDirect) { seekOffset = 0; loadDirect(start); }
     else loadHlsSession(start);
 
+    loadSprites();
     progressTimer = setInterval(() => { if (!paused) saveProgress(); }, 5000);
     poke();
   });
@@ -375,6 +412,7 @@
     clearTimeout(idleTimer);
     clearTimeout(retryTimer);
     clearTimeout(touchTapTimer);
+    clearTimeout(spritePollTimer);
     saveProgress();
     loadSeq++; // invalidate in-flight session loads
     destroyHls();
@@ -463,7 +501,12 @@
         <div class="knob" style={`left:${total ? Math.min(100, (shownTime / total) * 100) : 0}%`}></div>
       </div>
       {#if hoverT >= 0 && !scrubbing}
-        <div class="hovertime" style={`left:${hoverX}px`}>{fmtTime(hoverT)}</div>
+        <div class="hoverwrap" style={`left:${hoverX}px`}>
+          {#if sprite}
+            <div class="hoverthumb" style={thumbStyle(hoverT)}></div>
+          {/if}
+          <div class="hovertime">{fmtTime(hoverT)}</div>
+        </div>
       {/if}
     </div>
 
@@ -646,11 +689,20 @@
     transition: transform var(--t-fast);
   }
   .scrub:hover .knob { transform: translate(-50%, -50%) scale(1); }
-  .hovertime {
+  .hoverwrap {
     position: absolute; bottom: 22px; transform: translateX(-50%);
+    display: flex; flex-direction: column; align-items: center; gap: 5px;
+    pointer-events: none;
+  }
+  .hoverthumb {
+    border-radius: 6px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.7), 0 0 0 1.5px rgba(242, 242, 244, 0.35);
+    background-color: #000;
+  }
+  .hovertime {
     background: rgba(0, 0, 0, 0.85); color: #fff;
     font-size: 0.78rem; font-weight: 600; font-variant-numeric: tabular-nums;
-    padding: 3px 8px; border-radius: 5px; pointer-events: none;
+    padding: 3px 8px; border-radius: 5px;
   }
 
   .buttons {
