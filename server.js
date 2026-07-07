@@ -1611,6 +1611,14 @@ try {
 const SPRITE_COLS = 5, SPRITE_ROWS = 5, SPRITE_INTERVAL = 10;
 const SPRITE_W = 160, SPRITE_H = 90;
 const FRAMES_PER_SPRITE = SPRITE_COLS * SPRITE_ROWS; // 25
+// Frames at 0,10,20,…s — but never inside the final interval: container
+// duration often overshoots the real stream end (AVI especially), and a
+// frame past EOF extracts nothing, which left the last sheet unwritable —
+// so status stayed 'generating' forever and every open re-ran the full
+// generation (the Sopranos/Whitecaps loop).
+function spriteFrameCount(duration) {
+  return Math.max(1, Math.ceil((duration - SPRITE_INTERVAL) / SPRITE_INTERVAL));
+}
 const SPRITE_IDLE_WAIT_MS = Math.max(5000, parseInt(process.env.SPRITE_IDLE_WAIT_MS, 10) || 30000);
 // Detect which physical drive files are on (for mergerfs setups) without
 // spawning helper processes. This runs during resource-sensitive background
@@ -1832,7 +1840,7 @@ async function startSpriteGen(id, filePath, title) {
     return null;
   }
 
-  const totalFrames = Math.ceil(duration / SPRITE_INTERVAL);
+  const totalFrames = spriteFrameCount(duration);
   const totalSheets = Math.ceil(totalFrames / FRAMES_PER_SPRITE);
 
   // Check if all sprites already exist on disk
@@ -2173,7 +2181,7 @@ app.post('/api/sprites/:id/generate', requireAuth, ensureLibrary, async (req, re
   if (!filePath || !fs.existsSync(filePath)) return res.status(404).send('Not found');
   const thumbId = getThumbId(filePath);
   const duration = await probeDurationAsync(filePath);
-  const totalFrames = Math.ceil(duration / SPRITE_INTERVAL);
+  const totalFrames = spriteFrameCount(duration);
   const totalSheets = Math.ceil(totalFrames / FRAMES_PER_SPRITE);
 
   // Check current status
