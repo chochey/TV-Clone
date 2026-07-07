@@ -24,7 +24,14 @@ function persist(list) {
   try { localStorage.setItem(STORE_KEY, JSON.stringify(list.slice(0, MAX))); } catch {}
 }
 
+// Master gate, driven by the canNotify permission. When off, both sources
+// (download watcher + content detection) become no-ops at the single choke
+// point rather than each checking permissions themselves.
+let enabled = true;
+export function setNotificationsEnabled(v) { enabled = !!v; }
+
 export function pushNotification({ type, title, body = '', itemId = null }) {
+  if (!enabled) return;
   notifications.update((list) => {
     const next = [{ id: ++seq, type, title, body, itemId, ts: Date.now(), read: false }, ...list].slice(0, MAX);
     persist(next);

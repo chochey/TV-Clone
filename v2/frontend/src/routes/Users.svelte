@@ -6,6 +6,7 @@
   // Mirrors lib/auth.js VALID_PERMISSIONS. Admins implicitly hold all of
   // them plus the admin-only surface (this page, profile/config management).
   const PERMISSIONS = [
+    { key: 'canNotify', label: 'Notifications', desc: 'Download & new-content alerts' },
     { key: 'canDownload', label: 'Downloads', desc: 'Downloads page — add & manage torrents' },
     { key: 'canDashboard', label: 'Dashboard', desc: 'System stats, storage & health' },
     { key: 'canOrganizer', label: 'Organizer', desc: 'Organizer logs, activity & status' },

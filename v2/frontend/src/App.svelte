@@ -16,7 +16,7 @@
   import Logs from './routes/Logs.svelte';
   import Users from './routes/Users.svelte';
   import Player from './lib/components/Player.svelte';
-  import { notifications, unreadCount, markAllRead, clearNotifications, startDownloadWatch, stopDownloadWatch } from './lib/notifications.js';
+  import { notifications, unreadCount, markAllRead, clearNotifications, startDownloadWatch, stopDownloadWatch, setNotificationsEnabled } from './lib/notifications.js';
 
   let phase = $state('loading'); // loading | login | ready
   let username = $state('');
@@ -92,17 +92,20 @@
   // ── Notifications ────────────────────────────────────────────────────
   let bellOpen = $state(false);
   const ICON = { download: '↓', complete: '✓', added: '✚' };
-  // On entering ready: snapshot the newest existing id so persisted history
-  // doesn't toast on load, and start the qbt watcher if allowed. Using a
-  // dedicated `notifReady` flag (not "id === 0") means the very first real
-  // notification after an empty-history login still toasts.
+  // Notifications are gated by the canNotify permission. On entering ready:
+  // set the master switch, snapshot the newest existing id so persisted
+  // history doesn't toast on load, and start the qbt watcher if the user
+  // both wants notifications and can see downloads. A dedicated `notifReady`
+  // flag (not "id === 0") means the first real notification still toasts.
+  const canNotify = $derived(can('canNotify'));
   let notifReady = false;
   let lastSeenNotifId = 0;
+  $effect(() => { setNotificationsEnabled(canNotify); });
   $effect(() => {
     if (phase === 'ready' && !notifReady) {
       notifReady = true;
       lastSeenNotifId = $notifications[0]?.id ?? 0;
-      if (can('canDownload')) startDownloadWatch();
+      if (canNotify && can('canDownload')) startDownloadWatch();
     }
   });
   $effect(() => {
@@ -221,6 +224,7 @@
       <a class:active={$route.name === 'shows'} href="/shows" onclick={(e) => { e.preventDefault(); navigate('/shows'); }}>Series</a>
       <a class:active={$route.name === 'search'} href="/search" onclick={(e) => { e.preventDefault(); navigate('/search'); }}>Search</a>
     </nav>
+    {#if canNotify}
     <div class="bell">
       <button class="bellbtn" aria-label="Notifications" aria-expanded={bellOpen}
               onclick={(e) => { e.stopPropagation(); openBell(); }}>
@@ -252,6 +256,7 @@
         </div>
       {/if}
     </div>
+    {/if}
     <div class="usermenu">
       <button class="avatar" aria-label="Account menu" aria-expanded={menuOpen}
               onclick={(e) => { e.stopPropagation(); menuOpen = !menuOpen; if (menuOpen) refreshPending(); }}>
