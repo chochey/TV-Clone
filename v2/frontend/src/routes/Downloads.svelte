@@ -24,11 +24,63 @@
   let plugin = $state('enabled');
   let searchId = null;
   let searching = $state(false);
-  let results = $state(null);
+  let results = $state(null);   // raw, unfiltered results from qbt
   let searchErr = $state('');
   let added = $state(new Set()); // fileUrls already sent to qbt
   let pollTimer = null;
   let pollDeadline = 0;
+
+  // ── Result sort + filter controls ───────────────────────────────────
+  const SORTS = [
+    { key: 'seeders', label: 'Most seeders' },
+    { key: 'size-desc', label: 'Largest' },
+    { key: 'size-asc', label: 'Smallest' },
+    { key: 'name', label: 'Name A–Z' },
+    { key: 'leechers', label: 'Most leechers' },
+  ];
+  const QUALITIES = ['2160p', '1080p', '720p'];
+  let sortKey = $state('seeders');
+  let minSeeders = $state(0);
+  let quality = $state('');        // '' = any; else one of QUALITIES
+  let hideDead = $state(true);     // hide 0-seeder results
+  let refine = $state('');         // narrow within results by keyword
+  const SHOW_CAP = 200;
+
+  function qualityOf(name) {
+    const n = (name || '').toLowerCase();
+    if (/2160p|\b4k\b|uhd/.test(n)) return '2160p';
+    if (/1080p/.test(n)) return '1080p';
+    if (/720p/.test(n)) return '720p';
+    if (/480p/.test(n)) return '480p';
+    return '';
+  }
+
+  const shown = $derived.by(() => {
+    if (!results) return null;
+    let out = results.filter((r) => {
+      const seeders = r.nbSeeders ?? 0;
+      if (hideDead && seeders <= 0) return false;
+      if (seeders < minSeeders) return false;
+      if (quality && qualityOf(r.fileName) !== quality) return false;
+      if (refine.trim()) {
+        const terms = refine.toLowerCase().split(/\s+/).filter(Boolean);
+        const name = (r.fileName || '').toLowerCase();
+        if (!terms.every((t) => name.includes(t))) return false;
+      }
+      return true;
+    });
+    const size = (r) => r.fileSize ?? 0;
+    out.sort((a, b) => {
+      switch (sortKey) {
+        case 'size-desc': return size(b) - size(a);
+        case 'size-asc': return size(a) - size(b);
+        case 'name': return (a.fileName || '').localeCompare(b.fileName || '');
+        case 'leechers': return (b.nbLeechers ?? 0) - (a.nbLeechers ?? 0);
+        default: return (b.nbSeeders ?? 0) - (a.nbSeeders ?? 0);
+      }
+    });
+    return out;
+  });
 
   async function refresh() {
     try { torrents = await api.torrents(); err = ''; }
@@ -72,7 +124,7 @@
     if (searchId == null) return;
     try {
       const r = await api.searchResults(searchId);
-      results = (r.results || []).slice().sort((a, b) => (b.nbSeeders || 0) - (a.nbSeeders || 0));
+      results = r.results || []; // sort/filter happens in the `shown` derived
       if (r.status === 'Running' && Date.now() < pollDeadline) {
         pollTimer = setTimeout(poll, 2000);
       } else {
@@ -149,15 +201,39 @@
 
   {#if results}
     <div class="results">
+      <div class="controls">
+        <input class="refine" type="search" placeholder="Filter results…" bind:value={refine} spellcheck="false" />
+        <div class="chips">
+          {#each QUALITIES as qn (qn)}
+            <button class="chip" class:on={quality === qn} onclick={() => { quality = quality === qn ? '' : qn; }}>{qn}</button>
+          {/each}
+        </div>
+        <label class="minseed">
+          Min seeders
+          <input type="number" min="0" step="1" bind:value={minSeeders} />
+        </label>
+        <label class="deadtoggle"><input type="checkbox" bind:checked={hideDead} /> Hide dead</label>
+        <select class="sortsel" bind:value={sortKey} aria-label="Sort results">
+          {#each SORTS as s (s.key)}<option value={s.key}>{s.label}</option>{/each}
+        </select>
+      </div>
+
       <p class="meta rescount">
-        {results.length} result{results.length === 1 ? '' : 's'}{searching ? ' — still searching…' : ''}
+        {shown.length} of {results.length} result{results.length === 1 ? '' : 's'}{searching ? ' — still searching…' : ''}
       </p>
-      {#each results.slice(0, 60) as r (r.fileUrl)}
+
+      {#each shown.slice(0, SHOW_CAP) as r (r.fileUrl)}
+        {@const s = r.nbSeeders ?? 0}
+        {@const ql = qualityOf(r.fileName)}
         <div class="row rrow">
           <div class="text">
             <a class="t rname" href={r.descrLink || r.siteUrl} target="_blank" rel="noreferrer noopener">{r.fileName}</a>
             <span class="sub meta">
-              {fmtBytes(r.fileSize)} · {r.nbSeeders ?? 0} seeders · {r.nbLeechers ?? 0} leechers
+              <span class="size">{fmtBytes(r.fileSize)}</span>
+              {#if ql}· <span class="qtag">{ql}</span>{/if}
+              · <span class="seeders" class:hot={s >= 20} class:dead={s === 0}>{s} seeders</span>
+              · {r.nbLeechers ?? 0} leechers
+              {#if r.engineName}· <span class="engine">{r.engineName}</span>{/if}
             </span>
           </div>
           <div class="actions">
@@ -169,8 +245,14 @@
           </div>
         </div>
       {/each}
+
+      {#if shown.length > SHOW_CAP}
+        <p class="meta capnote">Showing the top {SHOW_CAP} — narrow with the filters above.</p>
+      {/if}
       {#if !results.length && !searching}
         <p class="empty">No results{plugin !== 'enabled' ? ' on that site' : ''}.</p>
+      {:else if !shown.length && results.length}
+        <p class="empty">No results match the filters. <button class="linkbtn" onclick={() => { refine = ''; quality = ''; minSeeders = 0; hideDead = false; }}>Reset filters</button></p>
       {/if}
     </div>
   {/if}
@@ -233,10 +315,48 @@
   .clear:hover { color: var(--ink); }
 
   .results { margin-bottom: var(--s5); }
+
+  .controls {
+    display: flex; gap: var(--s2); align-items: center; flex-wrap: wrap;
+    padding: var(--s3); margin-bottom: var(--s2);
+    background: var(--bg-raised); border-radius: var(--r-md);
+    box-shadow: inset 0 0 0 1px var(--line);
+  }
+  .controls .refine { flex: 1; min-width: 160px; }
+  .chips { display: flex; gap: 4px; }
+  .chip {
+    font-size: 0.8rem; font-weight: 600; color: var(--ink-soft);
+    padding: 7px 12px; border-radius: 99px;
+    box-shadow: inset 0 0 0 1px var(--line-strong);
+    transition: color var(--t-fast), background var(--t-fast);
+  }
+  .chip:hover { color: var(--ink); }
+  .chip.on { background: var(--cta); color: var(--cta-ink); box-shadow: none; }
+  .minseed, .deadtoggle {
+    display: flex; align-items: center; gap: 7px;
+    font-size: 0.82rem; color: var(--ink-soft); white-space: nowrap;
+  }
+  .minseed input { width: 64px; padding: 8px 10px; }
+  .sortsel {
+    font-family: inherit; font-size: 0.85rem; color: var(--ink);
+    background: var(--bg); border: 1px solid var(--line-strong);
+    border-radius: var(--r-sm); padding: 9px 12px; cursor: pointer;
+  }
+
   .rescount { margin-bottom: var(--s2); }
+  .capnote, .rescount { color: var(--ink-faint); }
   .rrow { border-top: 1px solid var(--line); }
   .rname { font-weight: 600; font-size: 0.92rem; word-break: break-all; }
   .rname:hover { text-decoration: underline; }
+  .size { color: var(--ink-soft); font-weight: 600; }
+  .qtag {
+    font-weight: 700; color: var(--ink); letter-spacing: 0.02em;
+  }
+  .seeders.hot { color: #7ed491; font-weight: 600; }
+  .seeders.dead { color: var(--ink-faint); }
+  .engine { color: var(--ink-faint); }
+  .capnote { margin-top: var(--s3); }
+  .linkbtn { color: var(--cta); font-weight: 600; text-decoration: underline; }
   .addedtag { font-size: 0.82rem; font-weight: 700; color: #7ed491; padding: 7px 12px; }
   .cta { background: var(--cta); color: var(--cta-ink); font-weight: 700; padding: 11px 24px; border-radius: var(--r-sm); }
   .cta:disabled { opacity: 0.4; cursor: default; }
