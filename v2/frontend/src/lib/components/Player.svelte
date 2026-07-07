@@ -300,8 +300,9 @@
 
   // ── Seek-preview sprites (v1's sheets: cols×rows tiles, one per
   // interval seconds; generate-on-demand, poll while the server bakes) ──
-  let sprite = $state(null); // {totalSheets, cols, rows, width, height, interval} when ready
+  let sprite = $state(null); // {totalSheets, cols, rows, width, height, interval}
   let spritePollTimer = null;
+  let spritePreloaded = false;
   function preloadSheets(meta) {
     for (let s = 0; s < meta.totalSheets; s++) {
       const img = new Image();
@@ -313,11 +314,20 @@
       const r = await fetch(`/api/sprites/${encodeURIComponent(item.id)}/generate`, { method: 'POST', credentials: 'same-origin' });
       if (!r.ok) return;
       const data = await r.json();
+      // Use the meta as soon as it exists (v1 does the same): sheets that are
+      // already on disk preview immediately, missing ones 404 to a black tile
+      // and pop in on the next poll. Waiting for 'ready' meant files whose
+      // last sheet can never bake showed no previews at all.
+      if (data.totalSheets > 0 && !sprite) sprite = data;
       if (data.status === 'ready') {
         sprite = data;
         preloadSheets(data);
       } else {
-        spritePollTimer = setTimeout(loadSprites, 4000);
+        if (!spritePreloaded && data.totalSheets > 0) {
+          spritePreloaded = true;
+          preloadSheets(data);
+        }
+        spritePollTimer = setTimeout(loadSprites, 5000);
       }
     } catch {}
   }
