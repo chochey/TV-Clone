@@ -1,5 +1,6 @@
 import { writable, derived } from 'svelte/store';
 import { api } from './api.js';
+import { pushNotification } from './notifications.js';
 
 export const session = writable(null);     // { loggedIn, profileId, name, role }
 export const library = writable([]);       // full library array
@@ -166,8 +167,7 @@ export function groupNewContent(fresh) {
 }
 
 let knownIds = null;
-async function detectNewContent(items) {
-  const { pushNotification } = await import('./notifications.js');
+function detectNewContent(items) {
   if (!knownIds) { knownIds = new Set(items.map((i) => i.id)); return; }
   const cutoff = Date.now() - 6 * 60 * 60 * 1000; // arrived in the last 6h
   const fresh = items.filter((i) => !knownIds.has(i.id) && (i.addedAt || 0) > cutoff);
@@ -178,7 +178,7 @@ async function detectNewContent(items) {
 export async function loadLibrary(profileId) {
   const data = await api.library({ profile: profileId || 'default' });
   const items = Array.isArray(data) ? data : data.items || [];
-  detectNewContent(items).catch(() => {});
+  try { detectNewContent(items); } catch {}
   library.set(items);
   libraryLoaded.set(true);
   startLiveUpdates(profileId);

@@ -92,21 +92,23 @@
   // ── Notifications ────────────────────────────────────────────────────
   let bellOpen = $state(false);
   const ICON = { download: '↓', complete: '✓', added: '✚' };
-  // Start the qbt download watcher once we're in and allowed; toast each
-  // genuinely new notification as it arrives.
-  let notifWatchStarted = false;
+  // On entering ready: snapshot the newest existing id so persisted history
+  // doesn't toast on load, and start the qbt watcher if allowed. Using a
+  // dedicated `notifReady` flag (not "id === 0") means the very first real
+  // notification after an empty-history login still toasts.
+  let notifReady = false;
   let lastSeenNotifId = 0;
   $effect(() => {
-    if (phase === 'ready' && can('canDownload') && !notifWatchStarted) {
-      notifWatchStarted = true;
-      startDownloadWatch();
+    if (phase === 'ready' && !notifReady) {
+      notifReady = true;
+      lastSeenNotifId = $notifications[0]?.id ?? 0;
+      if (can('canDownload')) startDownloadWatch();
     }
   });
   $effect(() => {
     const list = $notifications;
-    if (!list.length) return;
+    if (!notifReady || !list.length) return;
     const newest = list[0];
-    if (lastSeenNotifId === 0) { lastSeenNotifId = newest.id; return; } // don't toast history on load
     if (newest.id > lastSeenNotifId) {
       lastSeenNotifId = newest.id;
       showToast(`${ICON[newest.type] || '•'} ${newest.title}${newest.body ? ' — ' + newest.body : ''}`);
@@ -171,7 +173,7 @@
   async function signOut() {
     menuOpen = false;
     stopDownloadWatch();
-    notifWatchStarted = false;
+    notifReady = false;
     await api.logout();
     session.set(null);
     playing = null;
