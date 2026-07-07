@@ -176,6 +176,16 @@ for (const p of config.profiles) {
       if (!p.permissions.includes(np)) { p.permissions.push(np); configDirty = true; }
     }
   }
+  // Notifications became an opt-in permission; existing non-admin accounts
+  // keep the bell they've had. Admins get everything via role. A one-shot
+  // flag means a later revoke stays revoked instead of being re-granted on
+  // the next start.
+  if ((p.role || 'user') !== 'admin' && !p._notifyMigrated) {
+    if (!Array.isArray(p.permissions)) p.permissions = [];
+    if (!p.permissions.includes('canNotify')) p.permissions.push('canNotify');
+    p._notifyMigrated = true;
+    configDirty = true;
+  }
 }
 if (configDirty) saveJSONSync(CONFIG_FILE, config);
 
@@ -654,7 +664,9 @@ app.post('/api/profiles', requireAdminSession, (req, res) => {
   }
   const id = crypto.randomBytes(6).toString('hex');
   const validPerms = Array.isArray(permissions) ? permissions.filter(p => VALID_PERMISSIONS.includes(p)) : [];
-  const profile = { id, name, username: uname, pin: pin ? hashPassword(pin) : '', avatar: avatar || '#00a4dc', role: role || 'user', password: password ? hashPassword(password) : '', permissions: validPerms };
+  // Created in the canNotify era: mark migrated so the one-time notify
+  // back-fill doesn't grant a permission the admin deliberately left off.
+  const profile = { id, name, username: uname, pin: pin ? hashPassword(pin) : '', avatar: avatar || '#00a4dc', role: role || 'user', password: password ? hashPassword(password) : '', permissions: validPerms, _notifyMigrated: true };
   config.profiles.push(profile);
   saveJSON(CONFIG_FILE, config);
   res.json({ ok: true, profile: { id, name, username: uname, hasPin: !!pin, hasPassword: !!password, avatar, role: profile.role, permissions: validPerms } });
