@@ -3,7 +3,7 @@
   import { api } from './lib/api.js';
   import { library, session, loadLibrary } from './lib/stores.js';
   import { route, navigate } from './lib/router.js';
-  import { nextEpisodeOf } from './lib/format.js';
+  import { nextEpisodeOf, prevEpisodeOf } from './lib/format.js';
   import Home from './routes/Home.svelte';
   import Detail from './routes/Detail.svelte';
   import Browse from './routes/Browse.svelte';
@@ -72,6 +72,7 @@
 
   let playing = $state(null);
   const playingNext = $derived(playing ? nextEpisodeOf(playing, $library) : null);
+  const playingPrev = $derived(playing ? prevEpisodeOf(playing, $library) : null);
 
   function openItem(item) {
     navigate(`/title/${encodeURIComponent(item.id)}`);
@@ -332,8 +333,10 @@
     <Player
       item={playing}
       next={playingNext}
+      prev={playingPrev}
       onclose={() => { playing = null; }}
       onnext={(n) => { playing = n; }}
+      onprev={(p) => { playing = p; }}
     />
   {/key}
 {/if}

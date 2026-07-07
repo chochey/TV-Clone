@@ -125,10 +125,20 @@ function startLiveUpdates(profileId) {
   sseStarted = true;
   const es = new EventSource('/api/events');
   let refreshTimer = null;
-  es.addEventListener('library-updated', () => {
-    // Coalesce bursts (an episode batch fires several updates)
+  let firstOpen = true;
+  const refetch = (delay) => {
     clearTimeout(refreshTimer);
-    refreshTimer = setTimeout(() => { loadLibrary(profileId).catch(() => {}); }, 2000);
+    refreshTimer = setTimeout(() => { loadLibrary(profileId).catch(() => {}); }, delay);
+  };
+  es.addEventListener('library-updated', () => refetch(2000)); // coalesce bursts
+  es.addEventListener('open', () => {
+    // SSE has no replay: anything filed while we were disconnected (server
+    // restart, network blip, laptop asleep) never reached us. On reconnect,
+    // catch up — because knownIds persists across the drop, detectNewContent
+    // also fires the "added" notifications we missed. The first open is
+    // redundant with the initial loadLibrary, so skip it.
+    if (firstOpen) { firstOpen = false; return; }
+    refetch(500);
   });
 }
 

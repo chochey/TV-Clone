@@ -52,3 +52,24 @@ export function nextEpisodeOf(item, lib) {
   }
   return best;
 }
+
+// The episode that precedes `item` in its show, or null. Mirror of
+// nextEpisodeOf: pick the LATEST episode ordered strictly before this one.
+export function prevEpisodeOf(item, lib) {
+  if (!item?.showName || item.type !== 'show' || !item.epInfo) return null;
+  const { season, episode } = item.epInfo;
+  if (season == null || episode == null) return null;
+  let best = null;
+  for (const i of lib) {
+    if (i.type !== 'show' || i.showName !== item.showName) continue;
+    const ep = i.epInfo;
+    if (!ep || ep.season == null || ep.episode == null) continue;
+    if (ep.season > season || (ep.season === season && ep.episode >= episode)) continue;
+    if (!best) { best = i; continue; }
+    const b = best.epInfo;
+    const later = ep.season > b.season || (ep.season === b.season && ep.episode > b.episode);
+    const sameEp = ep.season === b.season && ep.episode === b.episode;
+    if (later || (sameEp && (i.filename || '').length < (best.filename || '').length)) best = i;
+  }
+  return best;
+}

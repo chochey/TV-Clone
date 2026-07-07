@@ -6,7 +6,7 @@
   import { episodeCode, episodeTitle } from '../format.js';
 
   // Remounted per item via {#key} in App — `item` is static for this mount.
-  let { item, next = null, onclose, onnext } = $props();
+  let { item, next = null, prev = null, onclose, onnext, onprev } = $props();
 
   const isDirect = item.streamMode === 'direct';
   const title = $derived(item.showName || item.title || '');
@@ -555,8 +555,14 @@
       </div>
 
       <div class="zone zright">
+      {#if prev}
+        <button class="nextbtn prevbtn" onclick={() => { saveProgress(); onprev?.(prev); }} title={`Previous — ${episodeCode(prev)}`}>
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M18 18l-8.5-6L18 6v12zM8 6v12H6V6h2z"/></svg>
+          Prev <strong>{episodeCode(prev)}</strong>
+        </button>
+      {/if}
       {#if next}
-        <button class="nextbtn" onclick={() => { saveProgress(); onnext?.(next); }}>
+        <button class="nextbtn" onclick={() => { saveProgress(); onnext?.(next); }} title={`Next — ${episodeCode(next)}`}>
           Next <strong>{episodeCode(next)}</strong>
           <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
         </button>
