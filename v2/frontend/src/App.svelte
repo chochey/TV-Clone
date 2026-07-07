@@ -16,6 +16,7 @@
   import Logs from './routes/Logs.svelte';
   import Users from './routes/Users.svelte';
   import Player from './lib/components/Player.svelte';
+  import { notifications, unreadCount, markAllRead, clearNotifications, startDownloadWatch, stopDownloadWatch } from './lib/notifications.js';
 
   let phase = $state('loading'); // loading | login | ready
   let username = $state('');
@@ -88,6 +89,46 @@
   const isAdmin = $derived($session?.role === 'admin');
   const can = (p) => $session?.role === 'admin' || ($session?.permissions || []).includes(p);
 
+  // ── Notifications ────────────────────────────────────────────────────
+  let bellOpen = $state(false);
+  const ICON = { download: '↓', complete: '✓', added: '✚' };
+  // Start the qbt download watcher once we're in and allowed; toast each
+  // genuinely new notification as it arrives.
+  let notifWatchStarted = false;
+  let lastSeenNotifId = 0;
+  $effect(() => {
+    if (phase === 'ready' && can('canDownload') && !notifWatchStarted) {
+      notifWatchStarted = true;
+      startDownloadWatch();
+    }
+  });
+  $effect(() => {
+    const list = $notifications;
+    if (!list.length) return;
+    const newest = list[0];
+    if (lastSeenNotifId === 0) { lastSeenNotifId = newest.id; return; } // don't toast history on load
+    if (newest.id > lastSeenNotifId) {
+      lastSeenNotifId = newest.id;
+      showToast(`${ICON[newest.type] || '•'} ${newest.title}${newest.body ? ' — ' + newest.body : ''}`);
+    }
+  });
+  function openBell() {
+    bellOpen = !bellOpen;
+    if (bellOpen) markAllRead();
+  }
+  function notifClick(n) {
+    bellOpen = false;
+    if (n.itemId) navigate(`/title/${encodeURIComponent(n.itemId)}`);
+    else if (n.type === 'download' || n.type === 'complete') navigate('/downloads');
+  }
+  function agoShort(ts) {
+    const m = Math.floor((Date.now() - ts) / 60000);
+    if (m < 1) return 'now';
+    if (m < 60) return `${m}m`;
+    const h = Math.floor(m / 60);
+    return h < 24 ? `${h}h` : `${Math.floor(h / 24)}d`;
+  }
+
   async function refreshPending() {
     try {
       const d = await api.requests();
@@ -129,6 +170,8 @@
   }
   async function signOut() {
     menuOpen = false;
+    stopDownloadWatch();
+    notifWatchStarted = false;
     await api.logout();
     session.set(null);
     playing = null;
@@ -138,7 +181,7 @@
   }
 </script>
 
-<svelte:window bind:scrollY onclick={() => { menuOpen = false; confirmRestart = false; }} />
+<svelte:window bind:scrollY onclick={() => { menuOpen = false; confirmRestart = false; bellOpen = false; }} />
 
 {#if phase === 'loading'}
   <div class="splash">
@@ -176,6 +219,37 @@
       <a class:active={$route.name === 'shows'} href="/shows" onclick={(e) => { e.preventDefault(); navigate('/shows'); }}>Series</a>
       <a class:active={$route.name === 'search'} href="/search" onclick={(e) => { e.preventDefault(); navigate('/search'); }}>Search</a>
     </nav>
+    <div class="bell">
+      <button class="bellbtn" aria-label="Notifications" aria-expanded={bellOpen}
+              onclick={(e) => { e.stopPropagation(); openBell(); }}>
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><path d="M12 22a2.5 2.5 0 0 0 2.45-2h-4.9A2.5 2.5 0 0 0 12 22zm6-6v-5a6 6 0 0 0-4.5-5.8V4a1.5 1.5 0 0 0-3 0v1.2A6 6 0 0 0 6 11v5l-1.7 1.7c-.6.6-.2 1.7.7 1.7h14c.9 0 1.3-1.1.7-1.7L18 16z"/></svg>
+        {#if $unreadCount > 0}<span class="ndot">{$unreadCount > 9 ? '9+' : $unreadCount}</span>{/if}
+      </button>
+      {#if bellOpen}
+        <div class="npanel" onclick={(e) => e.stopPropagation()}>
+          <div class="nhead">
+            <span class="meta">Notifications</span>
+            {#if $notifications.length}<button class="nclear" onclick={clearNotifications}>Clear</button>{/if}
+          </div>
+          {#if !$notifications.length}
+            <p class="nempty">Nothing yet. New downloads and library additions show up here.</p>
+          {:else}
+            <div class="nlist">
+              {#each $notifications as n (n.id)}
+                <button class="nitem" onclick={() => notifClick(n)}>
+                  <span class={`nicon ${n.type}`}>{ICON[n.type] || '•'}</span>
+                  <span class="ntext">
+                    <span class="ntitle">{n.title}</span>
+                    {#if n.body}<span class="nbody">{n.body}</span>{/if}
+                  </span>
+                  <span class="nago">{agoShort(n.ts)}</span>
+                </button>
+              {/each}
+            </div>
+          {/if}
+        </div>
+      {/if}
+    </div>
     <div class="usermenu">
       <button class="avatar" aria-label="Account menu" aria-expanded={menuOpen}
               onclick={(e) => { e.stopPropagation(); menuOpen = !menuOpen; if (menuOpen) refreshPending(); }}>
@@ -330,7 +404,57 @@
   .marksub { margin-top: calc(-1 * var(--s4)); letter-spacing: 0.3em; color: var(--ink-faint); }
   nav { display: flex; gap: var(--s5); margin-left: auto; }
 
-  .usermenu { position: relative; margin-left: var(--s5); }
+  .bell { position: relative; margin-left: var(--s5); }
+  .bellbtn {
+    position: relative;
+    width: 34px; height: 34px; border-radius: 99px;
+    display: grid; place-items: center; color: var(--ink-soft);
+    transition: color var(--t-fast), background var(--t-fast);
+  }
+  .bellbtn:hover { color: var(--ink); background: rgba(242, 242, 244, 0.1); }
+  .ndot {
+    position: absolute; top: -2px; right: -3px;
+    min-width: 16px; height: 16px; padding: 0 4px;
+    display: grid; place-items: center;
+    background: var(--cta); color: var(--cta-ink);
+    font-size: 0.62rem; font-weight: 800; border-radius: 99px;
+  }
+  .npanel {
+    position: absolute; top: 44px; right: 0; z-index: 60;
+    width: 320px; max-width: 86vw;
+    background: rgba(17, 17, 22, 0.97); backdrop-filter: blur(14px);
+    border-radius: var(--r-md); overflow: hidden;
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.6), 0 0 0 1px var(--line-strong);
+  }
+  .nhead {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: var(--s3) var(--s3) var(--s2);
+  }
+  .nclear { font-size: 0.78rem; font-weight: 600; color: var(--ink-soft); }
+  .nclear:hover { color: var(--ink); }
+  .nempty { color: var(--ink-faint); font-size: 0.88rem; padding: var(--s3); line-height: 1.5; }
+  .nlist { max-height: 60vh; overflow-y: auto; }
+  .nitem {
+    display: flex; align-items: flex-start; gap: var(--s3); width: 100%;
+    text-align: left; padding: var(--s3);
+    border-top: 1px solid var(--line);
+    transition: background var(--t-fast);
+  }
+  .nitem:hover { background: rgba(242, 242, 244, 0.06); }
+  .nicon {
+    flex: 0 0 26px; width: 26px; height: 26px; border-radius: 99px;
+    display: grid; place-items: center; font-size: 0.82rem; font-weight: 800;
+    background: var(--bg); color: var(--ink-soft);
+  }
+  .nicon.complete { background: rgba(126, 212, 145, 0.16); color: #7ed491; }
+  .nicon.added { background: rgba(109, 179, 255, 0.16); color: #6db3ff; }
+  .nicon.download { background: rgba(242, 242, 244, 0.1); color: var(--ink); }
+  .ntext { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+  .ntitle { font-size: 0.88rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .nbody { font-size: 0.78rem; color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .nago { flex: 0 0 auto; font-size: 0.72rem; color: var(--ink-faint); }
+
+  .usermenu { position: relative; margin-left: var(--s3); }
   .avatar {
     position: relative;
     width: 34px; height: 34px; border-radius: 99px;

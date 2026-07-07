@@ -131,9 +131,54 @@ function startLiveUpdates(profileId) {
   });
 }
 
+// New-content detection: the first load is the baseline (no notifications);
+// every reload after that diffs against the ids we've seen and announces
+// genuinely new arrivals, collapsed per show so an episode batch is one
+// notification. Guarded by a recent-addedAt check so a full rescan that
+// merely re-surfaces old files can't spam.
+// Pure: collapse a set of freshly-added items into notification specs —
+// one per show (with episode count), movies as singletons or a tally.
+export function groupNewContent(fresh) {
+  const specs = [];
+  const shows = new Map(); // showName -> {count, firstId}
+  const movies = [];
+  for (const i of fresh) {
+    if (i.type === 'show' && i.showName) {
+      const s = shows.get(i.showName) || { count: 0, firstId: i.id };
+      s.count++;
+      shows.set(i.showName, s);
+    } else movies.push(i);
+  }
+  for (const [name, s] of shows) {
+    specs.push({
+      type: 'added',
+      title: name.replace(/\s*\(\d{4}\)\s*$/, ''),
+      body: s.count === 1 ? 'New episode added' : `${s.count} new episodes added`,
+      itemId: s.firstId,
+    });
+  }
+  if (movies.length === 1) {
+    specs.push({ type: 'added', title: movies[0].title || 'New film', body: 'Added to your library', itemId: movies[0].id });
+  } else if (movies.length > 1) {
+    specs.push({ type: 'added', title: `${movies.length} new films`, body: 'Added to your library' });
+  }
+  return specs;
+}
+
+let knownIds = null;
+async function detectNewContent(items) {
+  const { pushNotification } = await import('./notifications.js');
+  if (!knownIds) { knownIds = new Set(items.map((i) => i.id)); return; }
+  const cutoff = Date.now() - 6 * 60 * 60 * 1000; // arrived in the last 6h
+  const fresh = items.filter((i) => !knownIds.has(i.id) && (i.addedAt || 0) > cutoff);
+  for (const i of items) knownIds.add(i.id);
+  for (const spec of groupNewContent(fresh)) pushNotification(spec);
+}
+
 export async function loadLibrary(profileId) {
   const data = await api.library({ profile: profileId || 'default' });
   const items = Array.isArray(data) ? data : data.items || [];
+  detectNewContent(items).catch(() => {});
   library.set(items);
   libraryLoaded.set(true);
   startLiveUpdates(profileId);
