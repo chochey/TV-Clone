@@ -2781,26 +2781,42 @@ const { setup: setupWatchers } = require('./lib/file-watchers')({
   onChange: () => invalidateLibrary('file-watcher'),
 });
 
-// ── Serve frontend ─────────────────────────────────────────────────────
-// App shell + code must revalidate on every load (no-cache still allows
-// 304s via ETag). max-age here let browsers run hour-stale app.js against
-// a newer server after a deploy — symptom: dead player, black screen.
-app.get('/', (_req, res) => {
-  res.set('Cache-Control', 'no-cache');
-  res.sendFile(path.join(__dirname, 'index.html'));
-});
+// ── Serve frontend (v2 SPA) ────────────────────────────────────────────
+// The built Svelte app is served straight from this process — the v2
+// proxy service is retired, so streams and SSE no longer cross an extra
+// Node hop. Hashed assets can cache; the shell (index.html) always
+// revalidates so deploys take effect on a normal refresh.
+const V2_DIST = process.env.V2_DIST || path.join(__dirname, 'v2', 'frontend', 'dist');
 app.get('/hls.min.js', (_req, res) => {
   res.set('Cache-Control', 'public, max-age=86400'); // vendored, rarely changes
   res.sendFile(path.join(__dirname, 'hls.min.js'));
 });
-app.get('/app.css', (_req, res) => {
+app.use(express.static(V2_DIST, { index: false, maxAge: '1h' }));
+function sendSpa(_req, res) {
   res.set('Cache-Control', 'no-cache');
-  res.sendFile(path.join(__dirname, 'public', 'app.css'));
-});
-app.get('/app.js', (_req, res) => {
-  res.set('Cache-Control', 'no-cache');
-  res.sendFile(path.join(__dirname, 'public', 'app.js'));
-});
+  // Security headers for the app shell (same set the retired proxy sent).
+  res.set('X-Frame-Options', 'DENY');
+  res.set('X-Content-Type-Options', 'nosniff');
+  res.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.set('Permissions-Policy', 'geolocation=(), microphone=(), camera=()');
+  res.set('Content-Security-Policy', [
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    'font-src https://fonts.gstatic.com',
+    "img-src 'self' data:",
+    "media-src 'self' blob:",
+    "worker-src 'self' blob:",
+    "connect-src 'self'",
+    "frame-ancestors 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+  ].join('; '));
+  res.sendFile(path.join(V2_DIST, 'index.html'), (err) => {
+    if (err) res.status(503).send('v2 UI not built — run: cd v2/frontend && npm run build');
+  });
+}
+app.get('/', sendSpa);
 
 // ── Start server ───────────────────────────────────────────────────────
 function getLocalIP() {
@@ -3200,6 +3216,24 @@ function shutdown() {
 }
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
+
+// SPA fallback: every path no route above claimed returns the app shell,
+// so deep links (/title/abc, /stats, /organizer) survive a reload.
+// Registered last on purpose — every real route wins first.
+app.get('*', sendSpa);
+
+// Legacy port alias: the Cloudflare tunnel (chochey.tv) and LAN bookmarks
+// still point at 4802 where the retired v2 proxy listened. Same app, same
+// process — nothing outside this box needs reconfiguring. Set
+// V2_ALIAS_PORT=0 to turn the alias off once the tunnel targets 4800.
+const ALIAS_PORT = process.env.V2_ALIAS_PORT !== undefined
+  ? parseInt(process.env.V2_ALIAS_PORT, 10) || 0
+  : 4802;
+if (ALIAS_PORT) {
+  const alias = app.listen(ALIAS_PORT, '0.0.0.0', () =>
+    console.log(`  [Startup] Alias listener on :${ALIAS_PORT} (legacy v2 proxy port)`));
+  alias.on('error', (e) => console.warn(`  [Startup] Alias port ${ALIAS_PORT} unavailable: ${e.code}`));
+}
 
 app.listen(PORT, '0.0.0.0', () => {
   const ip = getLocalIP();

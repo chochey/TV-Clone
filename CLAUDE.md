@@ -4,14 +4,26 @@ Read this file at the start of every session for important context.
 
 ## Project Overview
 
-Self-hosted media server (Node.js + Express, single-file `server.js` + `index.html`).
-Serves 8000+ media files via direct play or HLS transcoding with FFmpeg.
-Two deployments share the same git repo via worktrees:
-- **Dev**: `/home/blue/Desktop/Repos/TV-Clone` (branch `dev`, port 4801, systemd `tvclone-dev.service`)
-- **Prod**: `/home/blue/Desktop/Repos/TV-Clone-prod` (branch `master`, port 4800, systemd `tvclone-prod.service`)
+Self-hosted media server (Node.js + Express, single-file `server.js` backend +
+Svelte 5 SPA in `v2/frontend/`). Serves 9000+ media files via direct play or
+HLS transcoding with FFmpeg.
+
+**Single-service architecture (July 2026):** `tvclone-prod.service` runs
+`server.js` from `/home/blue/Desktop/Repos/TV-Clone-prod` (branch `master`,
+port 4800) and serves BOTH the API and the built SPA (`v2/frontend/dist`)
+with an SPA fallback. It also binds alias port 4802 because the Cloudflare
+tunnel (chochey.tv) targets it — set `V2_ALIAS_PORT=0` after repointing the
+tunnel to 4800. Retired (disabled, unit files kept for rollback):
+`tvclone-v2.service` (the old dist+proxy hop) and `tvclone-dev.service`.
+The `TV-Clone-v2` and `TV-Clone` worktrees are redundant; frontend and
+backend both live on `master` now.
+
+**Deploying frontend changes:** `cd v2/frontend && npm run build`, then
+restart `tvclone-prod` (or nothing — the shell is no-cache, assets hashed).
+**Frontend dev loop:** `npm run dev` in `v2/frontend` (launch.json `ui-dev`)
+— vite on 5173 proxying API calls to the live prod server, no service stops.
 
 Env vars for prod are in the systemd service file (`/etc/systemd/system/tvclone-prod.service`).
-Env vars for dev are in `.env` (gitignored).
 
 ## Critical: Do Not Undo These Fixes
 
