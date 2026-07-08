@@ -32,8 +32,20 @@ fix worked for fresh probes but not for files already in the codec cache.
 the server continues. Do not switch request-handler calls back to sync.
 
 ### ensureLibrary middleware
-The repeated `if (Object.keys(fileIndex).length === 0) scanLibrary()` pattern was
-extracted into `ensureLibrary` middleware. Use it on routes that need file lookups.
+`ensureLibrary` awaits `rescanLibraryAsync('read-miss')` when the cache is cold.
+Use it on routes that need file lookups.
+
+### Async non-blocking library scan (July 2026)
+`scanLibrary()` is a pure cache reader — it NEVER scans inline. All scanning goes
+through `rescanLibraryAsync(trigger)`: promise-based IO (readdir/stat) so the event
+loop and HLS streams never stall, builds indexes into locals and swaps atomically
+at the end, single-flight (concurrent triggers share one scan). `invalidateLibrary()`
+keeps serving the OLD cache while the rescan runs — do not null `libraryCache`.
+Clients get `library-updated` only when content actually changed (id/addedAt compare).
+`libraryVersion` bumps on change and feeds the /api/library ETag — count alone missed
+same-size swaps. A self-heal rescan fires 10s after every boot because a restart
+mid-scan otherwise leaves a stale cache forever (the "Backrooms invisible for 40min"
+bug). The hourly safety rescan no longer dodges active streams — it doesn't need to.
 
 ## Architecture Notes
 

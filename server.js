@@ -193,9 +193,11 @@ if (configDirty) saveJSONSync(CONFIG_FILE, config);
 let serverReady = false;
 let serverReadyStatus = 'starting';
 
-// Middleware: ensure library is indexed before serving file-dependent routes
-function ensureLibrary(req, res, next) {
-  if (Object.keys(fileIndex).length === 0) scanLibrary();
+// Middleware: ensure library is indexed before serving file-dependent routes.
+// Awaits the (single-flight) async rescan on a cold cache, so requests wait
+// for a complete index instead of racing a half-built one.
+async function ensureLibrary(req, res, next) {
+  if (!libraryCache) { try { await rescanLibraryAsync('read-miss'); } catch {} }
   next();
 }
 
@@ -296,15 +298,17 @@ function getMetadataForItem(item) {
 const SKIP_DIRS = new Set(['featurettes','extras','behind the scenes','deleted scenes','interviews',
   'bonus','bonus features','samples','sample','specials','trailers','shorts']);
 
-function walkDir(dir, collected) {
+// Async walk: every readdir yields to the event loop, so a full-library
+// walk over slow mergerfs never stalls HLS segment delivery.
+async function walkDirAsync(dir, collected) {
   let entries;
-  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+  try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); } catch { return; }
   for (const entry of entries) {
     if (entry.name.startsWith('.')) continue;
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       if (SKIP_DIRS.has(entry.name.toLowerCase())) continue;
-      walkDir(full, collected);
+      await walkDirAsync(full, collected);
     } else if (entry.isFile()) {
       const ext = path.extname(entry.name).toLowerCase();
       if (SUPPORTED_EXT.includes(ext)) collected.push(full);
@@ -363,29 +367,49 @@ function loadLibraryCache() {
   return false;
 }
 
-function invalidateLibrary() {
-  libraryCache = null;
-  // Defer the rescan so we don't block the event loop on the invalidation
-  // path. If a request arrives before the rescan finishes, ensureLibrary
-  // middleware will trigger one on demand.
-  setImmediate(() => { try { scanLibrary('invalidate'); } catch {} });
-  setTimeout(() => { try { queueAllSpriteGen(); } catch {} }, 3000);
+function invalidateLibrary(trigger) {
+  // Keep serving the current (possibly stale) cache while an async rescan
+  // runs in the background. The fresh library is swapped in atomically on
+  // completion, and clients get a library-updated poke only if content
+  // actually changed. Callers never block; streams never stutter.
+  rescanLibraryAsync(trigger || 'invalidate').catch(() => {});
 }
 
-function scanLibrary(trigger) {
-  if (libraryCache) return libraryCache;
+// Reader: returns the in-memory library. Never scans inline — on a cold
+// boot without a disk cache it kicks off the async rescan and returns []
+// until the first scan lands (single-flight dedupes the kicks).
+function scanLibrary() {
+  if (!libraryCache) {
+    rescanLibraryAsync('read-miss').catch(() => {});
+    return [];
+  }
+  return libraryCache;
+}
+
+let libraryVersion = 0;   // bumped when a completed scan changed content (ETag input)
+let rescanPromise = null; // single-flight: concurrent triggers share one scan
+
+function rescanLibraryAsync(trigger) {
+  if (rescanPromise) return rescanPromise;
+  rescanPromise = doRescan(trigger || 'rescan').finally(() => { rescanPromise = null; });
+  return rescanPromise;
+}
+
+async function doRescan(trigger) {
   const _scanStart = Date.now();
   const library = [];
-  fileIndex = {};
-  posterIndex = {};
-  subtitleIndex = {};
+  // Build into locals and swap at the end — requests arriving mid-scan keep
+  // resolving against the complete old indexes, never a half-built state.
+  const newFileIndex = {};
+  const newPosterIndex = {};
+  const newSubtitleIndex = {};
 
   for (const folder of config.folders) {
     const dirPath = folder.path;
     if (!dirPath || !fs.existsSync(dirPath)) continue;
 
     const videoPaths = [];
-    walkDir(dirPath, videoPaths);
+    await walkDirAsync(dirPath, videoPaths);
 
     for (const fullPath of videoPaths) {
       const file = path.basename(fullPath);
@@ -395,16 +419,16 @@ function scanLibrary(trigger) {
       const type = detectType(file, folder.type);
       const id = hashId(fullPath);
 
-      fileIndex[id] = fullPath;
+      newFileIndex[id] = fullPath;
 
       // Poster (check file's own directory)
       const posterAbsPath = findPosterInDir(fileDir, baseName);
-      if (posterAbsPath) posterIndex[id] = posterAbsPath;
+      if (posterAbsPath) newPosterIndex[id] = posterAbsPath;
 
       // External subtitles (check file's own directory)
       const subs = findSubtitles(fileDir, baseName);
       for (const s of subs) {
-        subtitleIndex[s.id] = { absPath: s.absPath, format: s.format };
+        newSubtitleIndex[s.id] = { absPath: s.absPath, format: s.format };
       }
 
       // Embedded subtitles (from probe cache)
@@ -427,9 +451,10 @@ function scanLibrary(trigger) {
         showName = (topFolder !== file) ? topFolder : (parseShowName(file) || title);
       }
 
-      // File size & modification time
+      // File size & modification time. Async stat doubles as the per-file
+      // event-loop yield that keeps streaming smooth during a scan.
       let fileSize = 0, addedAt = 0;
-      try { const st = fs.statSync(fullPath); fileSize = st.size; addedAt = st.mtimeMs; } catch {}
+      try { const st = await fs.promises.stat(fullPath); fileSize = st.size; addedAt = st.mtimeMs; } catch {}
 
       // Genres from config
       const genres = config.genres[id] || folder.genres || [];
@@ -464,29 +489,38 @@ function scanLibrary(trigger) {
   }
 
   // Safety check: if scan returns 0 files but folders are configured,
-  // it's likely a mount/permission issue. Don't overwrite a non-empty existing cache.
-  if (library.length === 0 && config.folders.length > 0) {
-    let existingCount = 0;
-    try {
-      if (fs.existsSync(LIBRARY_CACHE_FILE)) {
-        existingCount = JSON.parse(fs.readFileSync(LIBRARY_CACHE_FILE, 'utf8')).length;
-      }
-    } catch {}
-    if (existingCount > 0) {
-      console.warn(`  [scan] WARNING: scan found 0 files but cache has ${existingCount}. Likely mount issue — keeping existing cache.`);
-      // Reload existing cache so server keeps working
-      loadLibraryCache();
-      recordScan({ count: 0, durationMs: Date.now() - _scanStart, trigger: trigger || 'startup', skipped: 'mount-issue' });
-      return libraryCache || [];
-    }
+  // it's likely a mount/permission issue. Keep serving the existing cache.
+  if (library.length === 0 && config.folders.length > 0 && libraryCache && libraryCache.length > 0) {
+    console.warn(`  [scan] WARNING: scan found 0 files but cache has ${libraryCache.length}. Likely mount issue — keeping existing cache.`);
+    recordScan({ count: 0, durationMs: Date.now() - _scanStart, trigger, skipped: 'mount-issue' });
+    return libraryCache;
   }
 
-  libraryCache = library.sort((a, b) => a.title.localeCompare(b.title, undefined, { numeric: true }));
+  library.sort((a, b) => a.title.localeCompare(b.title, undefined, { numeric: true }));
+
+  // Did content actually change? Both arrays are sorted, so a positional
+  // compare works. addedAt catches in-place file replacements.
+  const prev = libraryCache;
+  const changed = !prev || prev.length !== library.length ||
+    library.some((it, i) => prev[i].id !== it.id || prev[i].addedAt !== it.addedAt);
+
+  // Atomic swap
+  fileIndex = newFileIndex;
+  posterIndex = newPosterIndex;
+  subtitleIndex = newSubtitleIndex;
+  libraryCache = library;
+  if (changed) libraryVersion++;
+
   saveLibraryCache();
-  recordScan({ count: libraryCache.length, durationMs: Date.now() - _scanStart, trigger: trigger || 'startup' });
+  recordScan({ count: libraryCache.length, durationMs: Date.now() - _scanStart, trigger });
   // Auto-fulfill open requests whose title just landed in the library.
   // (Clients refetch requests on the library-updated SSE event.)
   try { requests.matchLibrary(libraryCache); } catch (e) { console.error('[Requests] matchLibrary:', e.message); }
+  if (changed) {
+    console.log(`  [scan] Library changed (${prev ? prev.length : 0} → ${library.length}, trigger: ${trigger}) — notifying clients`);
+    notifyClients('library-updated');
+    setTimeout(() => { try { queueAllSpriteGen(); } catch {} }, 1000);
+  }
   return libraryCache;
 }
 
@@ -823,7 +857,9 @@ app.get('/api/library', requireAuth, (req, res) => {
   const profileVersion = Object.keys(profileData.progress).length + '-' + Object.keys(profileData.watched).length + '-' + maxProgressAt;
   const omdbVersion = omdb.cacheVersion || omdb.cacheSize;
   const overrideVersion = Object.keys(metadataOverrides.all()).length;
-  const cacheTag = (libraryCache ? libraryCache.length : 0) + '-' + profileVersion + '-' + omdbVersion + '-' + overrideVersion;
+  // libraryVersion bumps on every scan that changed content — count alone
+  // missed same-size swaps (one file replaced by another).
+  const cacheTag = libraryVersion + '-' + (libraryCache ? libraryCache.length : 0) + '-' + profileVersion + '-' + omdbVersion + '-' + overrideVersion;
   const etag = '"lib-' + crypto.createHash('md5').update(cacheTag).digest('hex').slice(0, 12) + '"';
   res.set('ETag', etag);
   if (req.headers['if-none-match'] === etag) return res.status(304).end();
@@ -2741,7 +2777,8 @@ const { setup: setupWatchers } = require('./lib/file-watchers')({
   getFolders: () => config.folders,
   supportedExt: SUPPORTED_EXT,
   debounceMs: FILE_WATCHER_DEBOUNCE_MS,
-  onChange: () => { invalidateLibrary(); notifyClients('library-updated'); },
+  // The rescan notifies clients itself when content actually changed.
+  onChange: () => invalidateLibrary('file-watcher'),
 });
 
 // ── Serve frontend ─────────────────────────────────────────────────────
@@ -2784,8 +2821,7 @@ app.post('/api/scan', requirePermission('canScan'), async (_req, res) => {
   res.json({ ok: true, message: 'Scan started' });
   try {
     // Clean stale probe cache entries
-    invalidateLibrary();
-    const library = scanLibrary();
+    const library = await rescanLibraryAsync('manual-scan');
     const currentPaths = new Set(library.map(i => fileIndex[i.id]));
     let stale = 0;
     for (const key of Object.keys(probeCache)) { if (!currentPaths.has(key)) { delete probeCache[key]; stale++; } }
@@ -2799,8 +2835,8 @@ app.post('/api/scan', requirePermission('canScan'), async (_req, res) => {
     // Background intro detection for shows with >= 2 episodes and no segments yet
     if (process.env.AUTO_DETECT_INTROS !== '0') await backgroundDetectIntros(library);
     // Re-scan to pick up new metadata
-    invalidateLibrary();
-    scanLibrary('file-watcher');
+    await rescanLibraryAsync('post-probe');
+    // Metadata may have changed even when file ids didn't, so always poke.
     notifyClients('library-updated');
     console.log('  [scan] Complete');
   } catch (err) { console.error('  [scan] Error:', err.message); }
@@ -2811,14 +2847,12 @@ app.post('/api/metadata/refresh-missing', requirePermission('canScan'), async (r
   if (scanRunning) return res.status(409).json({ ok: false, message: 'Scan already in progress' });
   scanRunning = true;
   try {
-    invalidateLibrary();
-    const library = scanLibrary('metadata-refresh');
+    const library = await rescanLibraryAsync('metadata-refresh');
     const limit = Math.min(parseInt(req.body?.limit || '150', 10) || 150, 500);
     const forceMisses = req.body?.forceMisses !== false;
     const forcePosterless = req.body?.forcePosterless === true;
     const result = await omdb.refreshMissingMetadata(library, { limit, forceMisses, forcePosterless });
-    invalidateLibrary();
-    scanLibrary('metadata-refresh');
+    await rescanLibraryAsync('metadata-refresh');
     notifyClients('library-updated');
     res.json({ ok: true, ...result });
   } catch (err) {
@@ -2841,11 +2875,9 @@ const { setup: setupOrganizerWatch } = require('./lib/organizer-watch')({
   debounceMs: ORGANIZER_RESCAN_DEBOUNCE_MS,
   onMove: () => {
     console.log('[OrganizerWatch] Move detected — rescanning library');
-    // invalidateLibrary() rescans but does NOT notify — pair it with the
-    // client poke, same as the file-watcher path. Without this, connected
-    // UIs never hear about organizer-filed content.
-    invalidateLibrary();
-    notifyClients('library-updated');
+    // Async rescan; on completion it notifies clients if content changed
+    // (an organizer move always changes ids, so the poke always fires).
+    invalidateLibrary('organizer');
   },
 });
 const ORGANIZER_SCRIPT  = process.env.ORGANIZER_SCRIPT  || path.join(path.dirname(ORGANIZER_LOG), 'movie_renamer.py');
@@ -3014,12 +3046,10 @@ const SAFETY_RESCAN_MS = process.env.SAFETY_RESCAN_MS !== undefined
   : 60 * 60 * 1000;
 if (SAFETY_RESCAN_MS > 0) {
   setInterval(() => {
-    // The scan is synchronous and blocks the event loop — skip while anyone
-    // is streaming; the next hourly tick catches up.
-    if (Object.keys(transcodeSessions).length > 0) return;
+    // The scan is async and non-blocking now — safe to run while people
+    // are streaming. Clients are only notified when content changed.
     console.log('[SafetyRescan] Periodic library rescan');
-    invalidateLibrary();
-    notifyClients('library-updated');
+    invalidateLibrary('safety-rescan');
   }, SAFETY_RESCAN_MS).unref();
 }
 
@@ -3076,8 +3106,7 @@ app.post('/api/reliability/repair', requireAdminSession, async (req, res) => {
 
     let scanCount = null;
     try {
-      libraryCache = null;
-      const lib = scanLibrary('repair');
+      const lib = await rescanLibraryAsync('repair');
       scanCount = lib.length;
       notifyClients('library-updated');
     } catch (err) {
@@ -3158,19 +3187,17 @@ app.listen(PORT, '0.0.0.0', () => {
     });
   } catch {}
 
-  // Load cached library from disk (server not ready until full rescan completes)
+  // Load cached library from disk; a cold boot scans in the background
+  // (requests behind ensureLibrary await the single-flight scan).
   const hadCache = loadLibraryCache();
   if (hadCache) {
     console.log(`  Total media: ${libraryCache.length} file(s) (from cache)`);
     serverReadyStatus = 'loading';
   } else {
-    console.log('  [Startup] No cache — scanning library now...');
-    try {
-      const lib = scanLibrary('startup');
-      console.log(`  Total media: ${lib.length} file(s) (fresh scan)`);
-    } catch (e) {
-      console.error('  [Startup] Initial scan failed:', e.message);
-    }
+    console.log('  [Startup] No cache — scanning library in background...');
+    rescanLibraryAsync('startup')
+      .then((lib) => console.log(`  Total media: ${lib.length} file(s) (fresh scan)`))
+      .catch((e) => console.error('  [Startup] Initial scan failed:', e.message));
   }
   console.log('');
 
@@ -3182,6 +3209,13 @@ app.listen(PORT, '0.0.0.0', () => {
   serverReady = true;
   serverReadyStatus = 'ready';
   console.log('[Startup] Server ready');
+
+  // Self-heal: if a previous run died mid-rescan (deploy, crash), the disk
+  // cache is stale and nothing would ever retry — content filed while we
+  // were down (or mid-scan) stayed invisible until the hourly tick. Rescan
+  // shortly after boot; async, so active streams are unaffected, and
+  // clients only get poked if something actually changed.
+  setTimeout(() => { rescanLibraryAsync('startup-selfheal').catch(() => {}); }, 10_000);
   setTimeout(async () => {
     try {
       const dockerStatus = await dockerInspect([...sys.ALLOWED_CONTAINERS]);
