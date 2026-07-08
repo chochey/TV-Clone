@@ -15,8 +15,10 @@
   import Organizer from './routes/Organizer.svelte';
   import Logs from './routes/Logs.svelte';
   import Users from './routes/Users.svelte';
+  import Stats from './routes/Stats.svelte';
   import Player from './lib/components/Player.svelte';
-  import { notifications, unreadCount, markAllRead, clearNotifications, startDownloadWatch, stopDownloadWatch, setNotificationsEnabled } from './lib/notifications.js';
+  import { notifications, unreadCount, markAllRead, clearNotifications, startDownloadWatch, stopDownloadWatch, setNotificationsEnabled, setOnDownloadComplete } from './lib/notifications.js';
+  import { schedulePostDownloadRefetch } from './lib/stores.js';
 
   let phase = $state('loading'); // loading | login | ready
   let username = $state('');
@@ -106,7 +108,10 @@
     if (phase === 'ready' && !notifReady) {
       notifReady = true;
       lastSeenNotifId = $notifications[0]?.id ?? 0;
-      if (canNotify && can('canDownload')) startDownloadWatch();
+      if (canNotify && can('canDownload')) {
+        setOnDownloadComplete(() => schedulePostDownloadRefetch($session?.profileId));
+        startDownloadWatch();
+      }
     }
   });
   $effect(() => {
@@ -268,6 +273,7 @@
         <div class="dropdown" onclick={(e) => e.stopPropagation()}>
           <div class="who meta">{$session?.name}</div>
           <button onclick={() => go('/history')}>History</button>
+          <button onclick={() => go('/stats')}>Watch Stats</button>
           <button onclick={() => go('/requests')}>
             Requests {#if pendingCount > 0}<span class="badge inline">{pendingCount}</span>{/if}
           </button>
@@ -310,6 +316,8 @@
       <Search onopen={openItem} onplay={playItem} />
     {:else if $route.name === 'history'}
       <History />
+    {:else if $route.name === 'stats'}
+      <Stats />
     {:else if $route.name === 'requests'}
       <Requests />
     {:else if $route.name === 'system' && can('canDashboard')}
@@ -389,14 +397,14 @@
     position: fixed; top: 0; left: 0; right: 0; z-index: 50;
     display: flex; align-items: center; justify-content: space-between;
     padding: var(--s3) var(--gutter);
-    background: linear-gradient(rgba(11,11,14,0.72), transparent);
+    background: rgba(11, 11, 14, 0.92);
+    backdrop-filter: blur(12px);
     border-bottom: 1px solid transparent;
     transition: background var(--t-med), border-color var(--t-med);
   }
-  /* Once content scrolls under it, the bar goes solid so nav stays legible */
   .topbar.solid {
-    background: rgba(11, 11, 14, 0.82);
-    backdrop-filter: blur(14px);
+    background: rgba(11, 11, 14, 0.97);
+    backdrop-filter: blur(16px);
     border-bottom-color: var(--line);
   }
   .brand {

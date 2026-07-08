@@ -89,6 +89,9 @@ export const api = {
   profileUpdate: (id, body) => fetch(`/api/profiles/${encodeURIComponent(id)}`, opts('PUT', body)).then(json),
   profileDelete: (id) => fetch(`/api/profiles/${encodeURIComponent(id)}`, opts('DELETE')).then(json),
 
+  // Media management
+  deleteMedia: (id) => fetch(`/api/media/${encodeURIComponent(id)}`, opts('DELETE')).then(json),
+
   // System actions
   scan: () => fetch('/api/scan', opts('POST')).then(json),
   restart: () => fetch('/api/restart', opts('POST')).then(json),

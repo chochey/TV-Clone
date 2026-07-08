@@ -84,12 +84,17 @@ export function diffDownloads(prev, now) {
 let watchTimer = null;
 let prev = null; // hash -> { done, name }
 
+let onDownloadComplete = null;
+export function setOnDownloadComplete(fn) { onDownloadComplete = fn; }
+
 async function tick() {
   let torrents;
   try { torrents = await api.torrents(); }
   catch { return; } // qbt momentarily unreachable — skip this tick
   const now = torrentStates(torrents);
-  for (const spec of diffDownloads(prev, now)) pushNotification(spec);
+  const events = diffDownloads(prev, now);
+  for (const spec of events) pushNotification(spec);
+  if (events.some((e) => e.type === 'complete') && onDownloadComplete) onDownloadComplete();
   prev = now;
 }
 

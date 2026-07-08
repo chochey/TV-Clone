@@ -140,6 +140,23 @@ function startLiveUpdates(profileId) {
     if (firstOpen) { firstOpen = false; return; }
     refetch(500);
   });
+  // Heartbeat: refetch every 5 min as a catchall for missed SSE events.
+  setInterval(() => { loadLibrary(profileId).catch(() => {}); }, 5 * 60 * 1000);
+  // Tab wake: a backgrounded tab may have missed everything (browsers
+  // throttle timers and can drop SSE). Refetch the moment it's visible
+  // again — cheap thanks to the ETag 304 when nothing changed.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') loadLibrary(profileId).catch(() => {});
+  });
+}
+
+// After a download completes, the organizer needs ~30-90s to move the file.
+// Schedule a deferred library refetch so the "added" notification fires even
+// if the SSE event was missed (server restart, tunnel drop, etc).
+let downloadRefetchTimer = null;
+export function schedulePostDownloadRefetch(profileId) {
+  clearTimeout(downloadRefetchTimer);
+  downloadRefetchTimer = setTimeout(() => { loadLibrary(profileId).catch(() => {}); }, 90_000);
 }
 
 // New-content detection: the first load is the baseline (no notifications);
@@ -168,10 +185,8 @@ export function groupNewContent(fresh) {
       itemId: s.firstId,
     });
   }
-  if (movies.length === 1) {
-    specs.push({ type: 'added', title: movies[0].title || 'New film', body: 'Added to your library', itemId: movies[0].id });
-  } else if (movies.length > 1) {
-    specs.push({ type: 'added', title: `${movies.length} new films`, body: 'Added to your library' });
+  for (const m of movies) {
+    specs.push({ type: 'added', title: m.title || 'New film', body: 'Added to your library', itemId: m.id });
   }
   return specs;
 }

@@ -10,6 +10,7 @@ function parse(path) {
   if (path === '/shows') return { name: 'shows' };
   if (path === '/search') return { name: 'search' };
   if (path === '/history') return { name: 'history' };
+  if (path === '/stats') return { name: 'stats' };
   if (path === '/requests') return { name: 'requests' };
   if (path === '/system') return { name: 'system' };
   if (path === '/downloads') return { name: 'downloads' };

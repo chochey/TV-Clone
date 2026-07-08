@@ -97,6 +97,30 @@
     library.update((list) => list.map((i) => (i.id === target.id ? { ...i, watched: newVal } : i)));
     if (full && target.id === full.id) full = { ...full, watched: newVal };
   }
+
+  // ── Delete ─────────────────────────────────────────────────────────
+  let showDeleteConfirm = $state(false);
+  let deleting = $state(false);
+
+  const deleteTargets = $derived(isShow ? episodes : (m.id ? [m] : []));
+  const deleteCount = $derived(deleteTargets.length);
+
+  async function confirmDelete() {
+    deleting = true;
+    try {
+      for (const t of deleteTargets) {
+        await api.deleteMedia(t.id);
+      }
+      library.update((list) => {
+        const ids = new Set(deleteTargets.map((t) => t.id));
+        return list.filter((i) => !ids.has(i.id));
+      });
+      navigate('/');
+    } catch (err) {
+      deleting = false;
+      showDeleteConfirm = false;
+    }
+  }
 </script>
 
 {#if !item && !full}
@@ -153,6 +177,12 @@
                 {m.watched ? '✓ Watched' : 'Mark Watched'}
               </button>
             {/if}
+            {#if $session?.role === 'admin'}
+              <button class="ghost danger" onclick={() => { showDeleteConfirm = true; }}>
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+                Delete
+              </button>
+            {/if}
           </div>
           {#if resuming}
             <div class="resumebar"><span style={`width:${playTarget.progress.percent}%`}></span></div>
@@ -205,6 +235,23 @@
       {/if}
     </div>
   </div>
+
+  {#if showDeleteConfirm}
+    <div class="modal-backdrop" onclick={() => { if (!deleting) showDeleteConfirm = false; }}
+         onkeydown={(ev) => ev.key === 'Escape' && !deleting && (showDeleteConfirm = false)}>
+      <div class="modal" onclick={(ev) => ev.stopPropagation()}>
+        <h2>Delete {isShow ? 'Show' : 'Movie'}</h2>
+        <p>Permanently delete <strong>{title}</strong>{isShow ? ` (${deleteCount} episode${deleteCount !== 1 ? 's' : ''})` : ''} from the server?</p>
+        <p class="warn">This removes the file{deleteCount > 1 ? 's' : ''} from disk. This cannot be undone.</p>
+        <div class="modal-actions">
+          <button class="ghost" onclick={() => { showDeleteConfirm = false; }} disabled={deleting}>Cancel</button>
+          <button class="del-btn" onclick={confirmDelete} disabled={deleting}>
+            {deleting ? 'Deleting…' : 'Delete'}
+          </button>
+        </div>
+      </div>
+    </div>
+  {/if}
 {/if}
 
 <style>
@@ -376,6 +423,36 @@
     transition: opacity var(--t-fast), transform var(--t-fast) var(--ease);
   }
   .ep:hover .epplay, .ep:focus-visible .epplay { opacity: 1; transform: scale(1); }
+
+  .danger { color: #e5484d; }
+  .danger:hover { background: rgba(229, 72, 77, 0.16); color: #f2555a; }
+  .danger svg { vertical-align: -3px; margin-right: 4px; }
+
+  /* ── Delete confirmation modal ── */
+  .modal-backdrop {
+    position: fixed; inset: 0; z-index: 9000;
+    background: rgba(0, 0, 0, 0.7); backdrop-filter: blur(6px);
+    display: grid; place-items: center;
+    animation: fadeIn 0.15s ease;
+  }
+  @keyframes fadeIn { from { opacity: 0; } }
+  .modal {
+    background: var(--bg-raised); border: 1px solid var(--line-strong);
+    border-radius: var(--r-md); padding: var(--s5);
+    max-width: 420px; width: calc(100% - 32px);
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
+  }
+  .modal h2 { font-size: 1.2rem; font-weight: 700; margin-bottom: var(--s3); }
+  .modal p { font-size: 0.92rem; line-height: 1.5; color: var(--ink-soft); margin-bottom: var(--s3); }
+  .modal .warn { color: #e5484d; font-size: 0.84rem; }
+  .modal-actions { display: flex; gap: var(--s3); justify-content: flex-end; margin-top: var(--s5); }
+  .del-btn {
+    background: #e5484d; color: #fff; font-weight: 700; font-size: 0.95rem;
+    padding: 10px 24px; border-radius: var(--r-sm);
+    transition: opacity var(--t-fast);
+  }
+  .del-btn:hover:not(:disabled) { opacity: 0.85; }
+  .del-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
   @media (max-width: 900px) {
     .cols { grid-template-columns: 1fr; margin-top: 26vh; }

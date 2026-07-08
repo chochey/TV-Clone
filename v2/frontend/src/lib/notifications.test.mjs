@@ -58,13 +58,15 @@ test('groupNewContent: single episode reads singular', () => {
   assert.equal(specs[0].body, 'New episode added');
 });
 
-test('groupNewContent: one film vs many films', () => {
+test('groupNewContent: each film gets its own notification', () => {
   assert.equal(groupNewContent([{ id: 'm1', type: 'movie', title: 'Dune' }])[0].title, 'Dune');
   const many = groupNewContent([
     { id: 'm1', type: 'movie', title: 'A' },
     { id: 'm2', type: 'movie', title: 'B' },
   ]);
-  assert.equal(many[0].title, '2 new films');
+  assert.equal(many.length, 2);
+  assert.equal(many[0].title, 'A');
+  assert.equal(many[1].title, 'B');
 });
 
 test('groupNewContent: mixed shows + films', () => {

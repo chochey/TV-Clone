@@ -42,17 +42,19 @@
 
     {#if item.watched}<span class="badge watched" title="Watched">✓</span>{/if}
 
-    <!-- Hover: darken the base, surface title/meta and a play affordance -->
-    <div class="overlay">
+    <!-- Hover: play button -->
+    <div class="hover-overlay">
       <button class="play" onclick={(e) => { e.stopPropagation(); onplay?.(item); }} aria-label={`Play ${title}`}>
         <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
       </button>
-      <div class="info">
-        <span class="t">{title}</span>
-        <span class="y">
-          {year}{item.type === 'show' ? ' · Series' : ''}{rating ? ` · ★ ${rating}` : ''}
-        </span>
-      </div>
+    </div>
+
+    <!-- Always-visible info strip -->
+    <div class="info-strip">
+      <span class="t">{title}</span>
+      <span class="y">
+        {year}{item.type === 'show' ? ' · Series' : ''}{rating ? ` · ★ ${rating}` : ''}
+      </span>
     </div>
 
     {#if pct > 0 && pct < 95}
@@ -103,30 +105,37 @@
     box-shadow: 0 0 0 1px var(--line-strong);
   }
 
-  .overlay {
+  .hover-overlay {
     position: absolute; inset: 0;
-    display: flex; flex-direction: column; justify-content: flex-end;
-    padding: var(--s3);
-    background: linear-gradient(0deg, rgba(11, 11, 14, 0.92) 0%, rgba(11, 11, 14, 0.35) 45%, transparent 70%);
+    display: grid; place-items: center;
+    background: rgba(11, 11, 14, 0.4);
     opacity: 0; transition: opacity var(--t-med);
+    pointer-events: none;
   }
-  .card:hover .overlay, .card:focus-within .overlay { opacity: 1; }
+  .card:hover .hover-overlay, .card:focus-within .hover-overlay { opacity: 1; }
   .play {
-    position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%) scale(0.85);
     width: 48px; height: 48px; border-radius: 99px;
     background: var(--cta); color: var(--cta-ink);
     display: grid; place-items: center;
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+    transform: scale(0.85);
     transition: transform var(--t-fast) var(--ease);
+    pointer-events: auto;
   }
-  .card:hover .play { transform: translate(-50%, -50%) scale(1); }
-  .play:hover { transform: translate(-50%, -50%) scale(1.1); }
-  .info { position: relative; }
+  .card:hover .play { transform: scale(1); }
+  .play:hover { transform: scale(1.1); }
+
+  .info-strip {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    padding: var(--s3);
+    padding-top: var(--s5);
+    background: linear-gradient(0deg, rgba(11, 11, 14, 0.92) 0%, rgba(11, 11, 14, 0.5) 60%, transparent 100%);
+  }
   .t {
-    display: block; font-weight: 600; font-size: 0.88rem; line-height: 1.2;
+    display: block; font-weight: 600; font-size: 0.82rem; line-height: 1.2;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
-  .y { display: block; font-size: 0.72rem; color: var(--ink-soft); margin-top: 2px; }
+  .y { display: block; font-size: 0.68rem; color: var(--ink-soft); margin-top: 2px; }
 
   .progress {
     position: absolute; left: 0; right: 0; bottom: 0; height: 3px;
