@@ -9,8 +9,9 @@ const express = require('express');
 const { createProxyMiddleware } = require('http-proxy-middleware');
 
 const PORT = parseInt(process.env.V2_PORT, 10) || 4802;
-// Default to v1 dev (4801). Point at prod (4800) by setting V2_BACKEND.
-const BACKEND = process.env.V2_BACKEND || 'http://127.0.0.1:4801';
+// v2 is the production UI — default to v1 prod (4800). Point at dev with
+// V2_BACKEND=http://127.0.0.1:4801 when testing backend changes.
+const BACKEND = process.env.V2_BACKEND || 'http://127.0.0.1:4800';
 const DIST = path.join(__dirname, 'frontend', 'dist');
 
 const app = express();

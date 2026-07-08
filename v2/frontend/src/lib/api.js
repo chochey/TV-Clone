@@ -66,6 +66,10 @@ export const api = {
     fetch(`/api/organizer/logs?${new URLSearchParams(params)}`, opts('GET')).then(json),
   organizerStatus: () => fetch('/api/organizer/status', opts('GET')).then(json),
   organizerRestart: () => fetch('/api/organizer/restart', opts('POST')).then(json),
+  organizerFixQueue: () => fetch('/api/organizer/fix-queue', opts('GET')).then(json),
+  organizerAliasSave: (body) => fetch('/api/organizer/aliases', opts('POST', body)).then(json),
+  organizerAliasDelete: (id) =>
+    fetch(`/api/organizer/aliases/${encodeURIComponent(id)}`, opts('DELETE')).then(json),
 
   // Downloads (qBittorrent via v1)
   searchPlugins: () => fetch('/api/qbt/search/plugins', opts('GET')).then(json),

@@ -94,7 +94,7 @@
 
   // ── Notifications ────────────────────────────────────────────────────
   let bellOpen = $state(false);
-  const ICON = { download: '↓', complete: '✓', added: '✚' };
+  const ICON = { download: '↓', complete: '✓', added: '✚', organizer: '⚠' };
   // Notifications are gated by the canNotify permission. On entering ready:
   // set the master switch, snapshot the newest existing id so persisted
   // history doesn't toast on load, and start the qbt watcher if the user
@@ -131,6 +131,7 @@
     bellOpen = false;
     if (n.itemId) navigate(`/title/${encodeURIComponent(n.itemId)}`);
     else if (n.type === 'download' || n.type === 'complete') navigate('/downloads');
+    else if (n.type === 'organizer') navigate('/organizer');
   }
   function agoShort(ts) {
     const m = Math.floor((Date.now() - ts) / 60000);

@@ -1,4 +1,4 @@
-import { writable, derived } from 'svelte/store';
+import { writable, derived, get } from 'svelte/store';
 import { api } from './api.js';
 import { pushNotification } from './notifications.js';
 
@@ -131,6 +131,17 @@ function startLiveUpdates(profileId) {
     refreshTimer = setTimeout(() => { loadLibrary(profileId).catch(() => {}); }, delay);
   };
   es.addEventListener('library-updated', () => refetch(2000)); // coalesce bursts
+  // Organizer couldn't place a download — it's stuck in Share until someone
+  // maps the title. Only organizer-capable users get the ping.
+  es.addEventListener('organizer-attention', () => {
+    const s = get(session);
+    if (s?.role !== 'admin' && !(s?.permissions || []).includes('canOrganizer')) return;
+    pushNotification({
+      type: 'organizer',
+      title: 'Organizer needs attention',
+      body: 'A download could not be matched to a title',
+    });
+  });
   es.addEventListener('open', () => {
     // SSE has no replay: anything filed while we were disconnected (server
     // restart, network blip, laptop asleep) never reached us. On reconnect,
