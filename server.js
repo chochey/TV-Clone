@@ -2879,6 +2879,10 @@ const { setup: setupOrganizerWatch } = require('./lib/organizer-watch')({
     // (an organizer move always changes ids, so the poke always fires).
     invalidateLibrary('organizer');
   },
+  onAttention: () => {
+    console.log('[OrganizerWatch] Placement failure — notifying admins');
+    notifyClients('organizer-attention');
+  },
 });
 const ORGANIZER_SCRIPT  = process.env.ORGANIZER_SCRIPT  || path.join(path.dirname(ORGANIZER_LOG), 'movie_renamer.py');
 const ORGANIZER_ALIAS_FILE = process.env.ORGANIZER_ALIAS_FILE || path.join(path.dirname(ORGANIZER_LOG), 'organizer_aliases.json');
@@ -2973,10 +2977,49 @@ app.delete('/api/organizer/aliases/:id', requireAdminSession, (req, res) => {
   res.json({ ok: true, aliases: next });
 });
 
-app.get('/api/organizer/fix-queue', requireAdminSession, (_req, res) => {
+// Share leftovers: whatever is still sitting in the organizer's source dir
+// is unplaced by definition. Cross-referencing the fix-queue against it
+// separates "needs action now" from historical noise.
+const ORGANIZER_SOURCE_DIR = process.env.ORGANIZER_SOURCE_DIR || '/mnt/media/Share';
+const normName = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+
+app.get('/api/organizer/fix-queue', requireAdminSession, async (_req, res) => {
   const aliases = getOrganizerAliases();
   const queue = organizerTools.parseOrganizerFixQueue(readOrganizerLogLines(), aliases).slice(0, 100);
-  res.json({ ok: true, queue, aliases });
+
+  // What's physically in Share (skip qbt's working dir and dotfiles).
+  // Items younger than 10 min may just be awaiting the next organizer poll.
+  let shareEntries = [];
+  try {
+    const names = (await fs.promises.readdir(ORGANIZER_SOURCE_DIR))
+      .filter((n) => !n.startsWith('.') && n.toLowerCase() !== 'incomplete');
+    shareEntries = await Promise.all(names.map(async (name) => {
+      let mtime = 0;
+      try { mtime = (await fs.promises.stat(path.join(ORGANIZER_SOURCE_DIR, name))).mtimeMs; } catch {}
+      return { name, norm: normName(name), mtime, matched: false };
+    }));
+  } catch {}
+
+  // A queue entry is live if its release (or parsed title) still sits in Share.
+  for (const entry of queue) {
+    const src = normName(entry.source);
+    const title = normName(entry.title);
+    entry.stillPresent = shareEntries.some((s) => {
+      const hit = (src && (s.norm.includes(src) || src.includes(s.norm))) ||
+                  (title && s.norm.includes(title));
+      if (hit) s.matched = true;
+      return hit;
+    });
+  }
+
+  // Leftovers: aged Share items no failure entry explains (stale folders,
+  // half-deleted releases). Informational — admins clean these by hand.
+  const cutoff = Date.now() - 10 * 60 * 1000;
+  const leftovers = shareEntries
+    .filter((s) => !s.matched && s.mtime < cutoff)
+    .map((s) => ({ name: s.name, mtime: s.mtime }));
+
+  res.json({ ok: true, queue, aliases, leftovers });
 });
 
 app.post('/api/organizer/preview', requireAdminSession, async (_req, res) => {
