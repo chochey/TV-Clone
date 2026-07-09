@@ -45,6 +45,20 @@
     return { app: 'App', appService: 'App service', organizerService: 'Organizer service', dockerService: 'Docker (VPN + qBt)' }[k]
       || k.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase());
   }
+  // media/downloads are ARRAYS of per-folder results — aggregate them.
+  // (Rendering c?.ok on an array read as "Failing" even when every folder
+  // inside was fine.)
+  function checkState(c) {
+    if (Array.isArray(c)) {
+      const bad = c.filter((e) => !e?.ok);
+      return {
+        ok: bad.length === 0,
+        label: bad.length ? `${bad.length} of ${c.length} failing` : 'OK',
+        detail: bad.map((e) => `${e.path}: ${(e.warnings || []).join('; ') || 'failing'}`).join('\n'),
+      };
+    }
+    return { ok: !!c?.ok, label: c?.ok ? 'OK' : (c?.status || 'Failing'), detail: '' };
+  }
 </script>
 
 <div class="page">
@@ -78,8 +92,9 @@
         <strong class={org?.active ? 'good' : 'bad'}>{org ? (org.active ? 'Active' : 'Down') : '…'}</strong>
       </div>
       {#each relChecks as [key, c] (key)}
-        <div class="kv"><span>{checkLabel(key)}</span>
-          <strong class={c?.ok ? 'good' : 'bad'}>{c?.ok ? 'OK' : (c?.status || 'Failing')}</strong>
+        {@const st = checkState(c)}
+        <div class="kv" title={st.detail}><span>{checkLabel(key)}</span>
+          <strong class={st.ok ? 'good' : 'bad'}>{st.label}</strong>
         </div>
       {/each}
       {#if rel && !rel.ok}<p class="warn">Something needs attention.</p>{/if}
