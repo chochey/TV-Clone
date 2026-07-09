@@ -2503,6 +2503,13 @@ app.post('/api/hls/:id/stop', requireAuth, (req, res) => {
   res.json({ ok: true, stopped: true });
 });
 
+// Cheap liveness probe so a resuming player can tell whether its transcode
+// session survived a long pause (sessions reap after 2min idle) before
+// deciding to restart at the current position.
+app.get('/api/hls/:id/alive', requireAuth, (req, res) => {
+  res.json({ alive: !!transcodeSessions[req.params.id] });
+});
+
 app.get('/hls/:id/master.m3u8', requireAuth, ensureLibrary, async (req, res) => {
   const id = req.params.id;
   const filePath = fileIndex[id];

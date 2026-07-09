@@ -49,6 +49,9 @@
   let hls = null;
   let loadSeq = 0;
   let hlsRetries = 0;
+  let pausedAt = 0;        // when the user paused — long pauses outlive the server session
+  let recoverAttempts = 0; // consecutive dead-session restarts without playback progress
+  let recoverFromT = -1;   // position of the last auto-restart
   let root = $state(null);
   let progressTimer = null;
   let idleTimer = null;
@@ -133,13 +136,48 @@
       video.addEventListener('canplaythrough', () => { video.play().catch(() => {}); }, { once: true });
       hls.startLoad();
     });
-    hls.on(H.Events.ERROR, (_e, data) => {
+    hls.on(H.Events.ERROR, async (_e, data) => {
       if (!data.fatal) return;
       hlsRetries++;
       if (hlsRetries > 3) { error = 'Playback failed after several retries.'; return; }
-      if (data.type === H.ErrorTypes.NETWORK_ERROR) hls.startLoad();
-      else if (data.type === H.ErrorTypes.MEDIA_ERROR) hls.recoverMediaError();
+      if (data.type === H.ErrorTypes.NETWORK_ERROR) {
+        // Segments 404 forever once the server reaped the session — only a
+        // fresh session at the current position can revive playback.
+        if (await sessionDead()) { if (seq === loadSeq) recoverSession(); return; }
+        if (seq === loadSeq) hls.startLoad();
+      } else if (data.type === H.ErrorTypes.MEDIA_ERROR) hls.recoverMediaError();
     });
+  }
+
+  // ── Dead-session recovery: the server reaps idle transcode sessions after
+  // 2 minutes, so a pause longer than that (or a server restart) leaves
+  // hls.js asking for segments that no longer exist — the video plays out
+  // its buffer and then freezes until a page refresh. Restarting the session
+  // at the current position is the same path a long seek takes; we just
+  // have to notice that we need it. ──
+  async function sessionDead() {
+    try {
+      const r = await fetch(`/api/hls/${encodeURIComponent(item.id)}/alive`, { credentials: 'same-origin' });
+      if (!r.ok) return false;
+      return !(await r.json()).alive;
+    } catch { return false; }
+  }
+  function recoverSession() {
+    if (recoverAttempts >= 3) { error = 'Playback failed after several retries.'; return; }
+    recoverAttempts++;
+    recoverFromT = cur;
+    loadHlsSession(cur);
+  }
+  async function resumeCheck() {
+    // Only worth checking after a pause long enough that the session might
+    // be gone (server reaps at 2min idle; 60s leaves margin for clock skew).
+    const wasPausedFor = pausedAt ? Date.now() - pausedAt : 0;
+    pausedAt = 0;
+    if (isDirect || wasPausedFor < 60_000) return;
+    if (await sessionDead()) {
+      if (video?.paused) return; // paused again while we were checking
+      recoverSession();
+    }
   }
 
   function seekTo(t) {
@@ -438,6 +476,8 @@
   function onTimeUpdate() {
     if (!video) return;
     cur = seekOffset + video.currentTime;
+    // Real forward progress clears the dead-session recovery budget.
+    if (recoverAttempts && cur > recoverFromT + 3) recoverAttempts = 0;
     if (cues.length) cueText = cueAt(cues, cur - (full?.subtitleOffset || 0));
     else cueText = '';
   }
@@ -459,8 +499,8 @@
     onclick={onVideoClick}
     ondblclick={onVideoDblClick}
     onpointerup={onVideoPointerUp}
-    onplay={() => { paused = false; poke(); }}
-    onpause={() => { paused = true; poke(); }}
+    onplay={() => { paused = false; poke(); resumeCheck(); }}
+    onpause={() => { paused = true; pausedAt = Date.now(); saveProgress(); poke(); }}
     onwaiting={() => { buffering = true; }}
     onstalled={() => { buffering = true; }}
     onplaying={() => { buffering = false; }}
