@@ -1,6 +1,6 @@
-import { writable, derived, get } from 'svelte/store';
+import { writable, derived } from 'svelte/store';
 import { api } from './api.js';
-import { pushNotification } from './notifications.js';
+import { loadNotifications } from './notifications.js';
 
 export const session = writable(null);     // { loggedIn, profileId, name, role }
 export const library = writable([]);       // full library array
@@ -131,90 +131,40 @@ function startLiveUpdates(profileId) {
     refreshTimer = setTimeout(() => { loadLibrary(profileId).catch(() => {}); }, delay);
   };
   es.addEventListener('library-updated', () => refetch(2000)); // coalesce bursts
-  // Organizer couldn't place a download — it's stuck in Share until someone
-  // maps the title. Only organizer-capable users get the ping.
-  es.addEventListener('organizer-attention', () => {
-    const s = get(session);
-    if (s?.role !== 'admin' && !(s?.permissions || []).includes('canOrganizer')) return;
-    pushNotification({
-      type: 'organizer',
-      title: 'Organizer needs attention',
-      body: 'A download could not be matched to a title',
-    });
-  });
+  // The server appended to the notification history (new content filed, a
+  // download started/finished, an organizer failure). Refetch the list —
+  // the server already filtered it to what this user may see.
+  let notifTimer = null;
+  const refetchNotifs = (delay) => {
+    clearTimeout(notifTimer);
+    notifTimer = setTimeout(() => { loadNotifications(); }, delay);
+  };
+  es.addEventListener('notifications-updated', () => refetchNotifs(500));
   es.addEventListener('open', () => {
-    // SSE has no replay: anything filed while we were disconnected (server
-    // restart, network blip, laptop asleep) never reached us. On reconnect,
-    // catch up — because knownIds persists across the drop, detectNewContent
-    // also fires the "added" notifications we missed. The first open is
-    // redundant with the initial loadLibrary, so skip it.
+    // SSE has no replay: anything that happened while we were disconnected
+    // (server restart, network blip, laptop asleep) never reached us. On
+    // reconnect, catch up on both the library and the notification history.
+    // The first open is redundant with the initial loads, so skip it.
     if (firstOpen) { firstOpen = false; return; }
     refetch(500);
+    refetchNotifs(500);
   });
   // Heartbeat: refetch every 5 min as a catchall for missed SSE events.
-  setInterval(() => { loadLibrary(profileId).catch(() => {}); }, 5 * 60 * 1000);
+  setInterval(() => { loadLibrary(profileId).catch(() => {}); loadNotifications(); }, 5 * 60 * 1000);
   // Tab wake: a backgrounded tab may have missed everything (browsers
   // throttle timers and can drop SSE). Refetch the moment it's visible
   // again — cheap thanks to the ETag 304 when nothing changed.
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') loadLibrary(profileId).catch(() => {});
+    if (document.visibilityState === 'visible') {
+      loadLibrary(profileId).catch(() => {});
+      loadNotifications();
+    }
   });
-}
-
-// After a download completes, the organizer needs ~30-90s to move the file.
-// Schedule a deferred library refetch so the "added" notification fires even
-// if the SSE event was missed (server restart, tunnel drop, etc).
-let downloadRefetchTimer = null;
-export function schedulePostDownloadRefetch(profileId) {
-  clearTimeout(downloadRefetchTimer);
-  downloadRefetchTimer = setTimeout(() => { loadLibrary(profileId).catch(() => {}); }, 90_000);
-}
-
-// New-content detection: the first load is the baseline (no notifications);
-// every reload after that diffs against the ids we've seen and announces
-// genuinely new arrivals, collapsed per show so an episode batch is one
-// notification. Guarded by a recent-addedAt check so a full rescan that
-// merely re-surfaces old files can't spam.
-// Pure: collapse a set of freshly-added items into notification specs —
-// one per show (with episode count), movies as singletons or a tally.
-export function groupNewContent(fresh) {
-  const specs = [];
-  const shows = new Map(); // showName -> {count, firstId}
-  const movies = [];
-  for (const i of fresh) {
-    if (i.type === 'show' && i.showName) {
-      const s = shows.get(i.showName) || { count: 0, firstId: i.id };
-      s.count++;
-      shows.set(i.showName, s);
-    } else movies.push(i);
-  }
-  for (const [name, s] of shows) {
-    specs.push({
-      type: 'added',
-      title: name.replace(/\s*\(\d{4}\)\s*$/, ''),
-      body: s.count === 1 ? 'New episode added' : `${s.count} new episodes added`,
-      itemId: s.firstId,
-    });
-  }
-  for (const m of movies) {
-    specs.push({ type: 'added', title: m.title || 'New film', body: 'Added to your library', itemId: m.id });
-  }
-  return specs;
-}
-
-let knownIds = null;
-function detectNewContent(items) {
-  if (!knownIds) { knownIds = new Set(items.map((i) => i.id)); return; }
-  const cutoff = Date.now() - 6 * 60 * 60 * 1000; // arrived in the last 6h
-  const fresh = items.filter((i) => !knownIds.has(i.id) && (i.addedAt || 0) > cutoff);
-  for (const i of items) knownIds.add(i.id);
-  for (const spec of groupNewContent(fresh)) pushNotification(spec);
 }
 
 export async function loadLibrary(profileId) {
   const data = await api.library({ profile: profileId || 'default' });
   const items = Array.isArray(data) ? data : data.items || [];
-  try { detectNewContent(items); } catch {}
   library.set(items);
   libraryLoaded.set(true);
   startLiveUpdates(profileId);

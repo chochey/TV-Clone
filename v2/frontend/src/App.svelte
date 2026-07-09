@@ -17,8 +17,7 @@
   import Users from './routes/Users.svelte';
   import Stats from './routes/Stats.svelte';
   import Player from './lib/components/Player.svelte';
-  import { notifications, unreadCount, markAllRead, clearNotifications, startDownloadWatch, stopDownloadWatch, setNotificationsEnabled, setOnDownloadComplete } from './lib/notifications.js';
-  import { schedulePostDownloadRefetch } from './lib/stores.js';
+  import { notifications, unreadCount, markAllRead, clearNotifications, setNotificationsEnabled, loadNotifications } from './lib/notifications.js';
 
   let phase = $state('loading'); // loading | login | ready
   let username = $state('');
@@ -95,29 +94,25 @@
   // ── Notifications ────────────────────────────────────────────────────
   let bellOpen = $state(false);
   const ICON = { download: '↓', complete: '✓', added: '✚', organizer: '⚠' };
-  // Notifications are gated by the canNotify permission. On entering ready:
-  // set the master switch, snapshot the newest existing id so persisted
-  // history doesn't toast on load, and start the qbt watcher if the user
-  // both wants notifications and can see downloads. A dedicated `notifReady`
-  // flag (not "id === 0") means the first real notification still toasts.
+  // Notifications come from the server's history (/api/notifications) and
+  // are gated by the canNotify permission. The first list that arrives after
+  // login is the baseline (no toast for old history); anything appended
+  // after that — pushed live via the notifications-updated SSE event — toasts.
   const canNotify = $derived(can('canNotify'));
   let notifReady = false;
-  let lastSeenNotifId = 0;
+  let lastSeenNotifId = null; // null = baseline not yet established
   $effect(() => { setNotificationsEnabled(canNotify); });
   $effect(() => {
     if (phase === 'ready' && !notifReady) {
       notifReady = true;
-      lastSeenNotifId = $notifications[0]?.id ?? 0;
-      if (canNotify && can('canDownload')) {
-        setOnDownloadComplete(() => schedulePostDownloadRefetch($session?.profileId));
-        startDownloadWatch();
-      }
+      if (canNotify) loadNotifications();
     }
   });
   $effect(() => {
     const list = $notifications;
     if (!notifReady || !list.length) return;
     const newest = list[0];
+    if (lastSeenNotifId === null) { lastSeenNotifId = newest.id; return; } // baseline load
     if (newest.id > lastSeenNotifId) {
       lastSeenNotifId = newest.id;
       showToast(`${ICON[newest.type] || '•'} ${newest.title}${newest.body ? ' — ' + newest.body : ''}`);
@@ -182,8 +177,8 @@
   }
   async function signOut() {
     menuOpen = false;
-    stopDownloadWatch();
     notifReady = false;
+    lastSeenNotifId = null;
     await api.logout();
     session.set(null);
     playing = null;

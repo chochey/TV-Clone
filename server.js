@@ -208,6 +208,11 @@ const { loadProfileData, saveProfileData, cache: profileDataCache, sanitizeProfi
 // Content requests (lib/requests.js) — users ask, admin fulfills via Downloads
 const requests = require('./lib/requests')({ DATA_DIR, loadJSON, saveJSON });
 
+// Server-side notification history (lib/notify-log.js) — events generated at
+// the source (scans, downloads, organizer) so every device sees one history.
+const notifyLogLib = require('./lib/notify-log');
+const notifyLog = notifyLogLib({ DATA_DIR, loadJSON, saveJSON });
+
 // ══════════════════════════════════════════════════════════════════════
 // ── Library scanner ──────────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════
@@ -520,6 +525,19 @@ async function doRescan(trigger) {
     console.log(`  [scan] Library changed (${prev ? prev.length : 0} → ${library.length}, trigger: ${trigger}) — notifying clients`);
     notifyClients('library-updated');
     setTimeout(() => { try { queueAllSpriteGen(); } catch {} }, 1000);
+    // Log genuinely new arrivals to the notification history. prev-null is
+    // the cold-boot baseline; the recent-addedAt gate keeps a rescan that
+    // re-surfaces old files from spamming the bell.
+    if (prev) {
+      try {
+        const prevIds = new Set(prev.map((i) => i.id));
+        const cutoff = Date.now() - 6 * 60 * 60 * 1000;
+        const fresh = library.filter((i) => !prevIds.has(i.id) && (i.addedAt || 0) > cutoff);
+        const specs = notifyLogLib.groupAddedContent(fresh);
+        for (const spec of specs) notifyLog.push(spec);
+        if (specs.length) notifyClients('notifications-updated');
+      } catch (e) { console.error('[NotifyLog] added-content:', e.message); }
+    }
   }
   return libraryCache;
 }
@@ -2730,6 +2748,36 @@ app.get('/api/qbt/torrents', requirePermission('canDownload'), requireQbt, async
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// ── Server-side download watcher ────────────────────────────────────────
+// One 10s poll for the whole household (clients used to each poll qbt
+// themselves, and missed everything while no tab was open). Transitions
+// land in the notification history; a completed download also schedules a
+// rescan for after the organizer has had time to move the file — the
+// organizer-watch usually beats it, and the rescan no-ops when so.
+if (QBT_USERNAME && QBT_PASSWORD) {
+  let prevTorrents = null; // hash -> {done, name}; null = baseline poll
+  setInterval(async () => {
+    let torrents;
+    try { torrents = qbtJson(await qbt('GET', '/api/v2/torrents/info')); }
+    catch { return; } // qbt momentarily unreachable — skip this tick
+    if (!Array.isArray(torrents)) return;
+    const now = notifyLogLib.torrentStates(torrents);
+    const events = notifyLogLib.diffDownloads(prevTorrents, now);
+    prevTorrents = now;
+    if (!events.length) return;
+    for (const e of events) notifyLog.push({ ...e, audience: 'download' });
+    notifyClients('notifications-updated');
+    if (events.some((e) => e.type === 'complete')) {
+      setTimeout(() => { rescanLibraryAsync('post-download').catch(() => {}); }, 90_000);
+    }
+  }, 10_000).unref();
+}
+
+// Notification history for the bell — filtered to what this user may see.
+app.get('/api/notifications', requireAuth, (req, res) => {
+  res.json({ ok: true, notifications: notifyLog.list(req.session) });
+});
+
 // Add torrent
 app.post('/api/qbt/torrents/add', requirePermission('canDownload'), requireQbt, async (req, res) => {
   try {
@@ -2897,7 +2945,13 @@ const { setup: setupOrganizerWatch } = require('./lib/organizer-watch')({
   },
   onAttention: () => {
     console.log('[OrganizerWatch] Placement failure — notifying admins');
-    notifyClients('organizer-attention');
+    notifyLog.push({
+      type: 'organizer',
+      title: 'Organizer needs attention',
+      body: 'A download could not be matched to a title',
+      audience: 'organizer',
+    });
+    notifyClients('notifications-updated');
   },
 });
 const ORGANIZER_SCRIPT  = process.env.ORGANIZER_SCRIPT  || path.join(path.dirname(ORGANIZER_LOG), 'movie_renamer.py');

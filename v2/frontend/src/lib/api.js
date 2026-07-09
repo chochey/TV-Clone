@@ -47,6 +47,9 @@ export const api = {
   // Health (loading screen)
   health: () => fetch('/api/health', opts('GET')).then(json).catch(() => null),
 
+  // Server-side notification history
+  notifications: () => fetch('/api/notifications', opts('GET')).then(json),
+
   // Content requests
   requests: () => fetch('/api/requests', opts('GET')).then(json),
   requestCreate: (title, type, note) => fetch('/api/requests', opts('POST', { title, type, note })).then(json),

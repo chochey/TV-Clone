@@ -15,8 +15,14 @@ with an SPA fallback. It also binds alias port 4802 because the Cloudflare
 tunnel (chochey.tv) targets it — set `V2_ALIAS_PORT=0` after repointing the
 tunnel to 4800. Retired (disabled, unit files kept for rollback):
 `tvclone-v2.service` (the old dist+proxy hop) and `tvclone-dev.service`.
-The `TV-Clone-v2` and `TV-Clone` worktrees are redundant; frontend and
-backend both live on `master` now.
+The old `TV-Clone` (dev) and `TV-Clone-v2` worktree folders are DELETED —
+this directory is the standalone repo (the .git database moved here);
+frontend and backend both live on `master`. Remote: github.com/chochey/TV-Clone.
+Notifications are server-generated (lib/notify-log.js → /api/notifications,
+`notifications-updated` SSE): library adds from doRescan, downloads from the
+server's own qbt watcher (which also schedules a post-download rescan),
+organizer failures from organizer-watch. Clients only keep read/cleared
+cursors locally.
 
 **Deploying frontend changes:** `cd v2/frontend && npm run build`, then
 restart `tvclone-prod` (or nothing — the shell is no-cache, assets hashed).
