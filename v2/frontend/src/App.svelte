@@ -15,6 +15,7 @@
   import Organizer from './routes/Organizer.svelte';
   import Logs from './routes/Logs.svelte';
   import Users from './routes/Users.svelte';
+  import Duplicates from './routes/Duplicates.svelte';
   import Stats from './routes/Stats.svelte';
   import Player from './lib/components/Player.svelte';
   import { notifications, unreadCount, markAllRead, clearNotifications, setNotificationsEnabled, loadNotifications } from './lib/notifications.js';
@@ -93,7 +94,7 @@
 
   // ── Notifications ────────────────────────────────────────────────────
   let bellOpen = $state(false);
-  const ICON = { download: '↓', complete: '✓', added: '✚', organizer: '⚠' };
+  const ICON = { download: '↓', complete: '✓', added: '✚', organizer: '⚠', storage: '▤' };
   // Notifications come from the server's history (/api/notifications) and
   // are gated by the canNotify permission. The first list that arrives after
   // login is the baseline (no toast for old history); anything appended
@@ -127,6 +128,7 @@
     if (n.itemId) navigate(`/title/${encodeURIComponent(n.itemId)}`);
     else if (n.type === 'download' || n.type === 'complete') navigate('/downloads');
     else if (n.type === 'organizer') navigate('/organizer');
+    else if (n.type === 'storage') navigate('/system');
   }
   function agoShort(ts) {
     const m = Math.floor((Date.now() - ts) / 60000);
@@ -278,6 +280,7 @@
             <div class="who meta">System</div>
             {#if can('canDashboard')}<button onclick={() => go('/system')}>Dashboard</button>{/if}
             {#if isAdmin}<button onclick={() => go('/users')}>Users</button>{/if}
+            {#if isAdmin}<button onclick={() => go('/duplicates')}>Duplicates</button>{/if}
             {#if can('canDownload')}<button onclick={() => go('/downloads')}>Downloads</button>{/if}
             {#if can('canOrganizer')}<button onclick={() => go('/organizer')}>Organizer</button>{/if}
             {#if can('canLogs')}<button onclick={() => go('/logs')}>Logs</button>{/if}
@@ -326,6 +329,8 @@
       <Logs />
     {:else if $route.name === 'users' && isAdmin}
       <Users />
+    {:else if $route.name === 'duplicates' && isAdmin}
+      <Duplicates />
     {:else}
       <Home onopen={openItem} onplay={playItem} />
     {/if}

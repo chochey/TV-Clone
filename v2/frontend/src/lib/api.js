@@ -98,6 +98,10 @@ export const api = {
 
   // Media management
   deleteMedia: (id) => fetch(`/api/media/${encodeURIComponent(id)}`, opts('DELETE')).then(json),
+  duplicates: () => fetch('/api/duplicates', opts('GET')).then(json),
+
+  // Storage health (dashboard)
+  storage: () => fetch('/api/storage', opts('GET')).then(json),
 
   // System actions
   scan: () => fetch('/api/scan', opts('POST')).then(json),

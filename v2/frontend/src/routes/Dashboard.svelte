@@ -6,6 +6,7 @@
   let sys = $state(null);
   let rel = $state(null);
   let org = $state(null);
+  let storage = $state(null); // {pool, drives} with SMART + projection
   let watching = $state([]);
   let timer;
 
@@ -25,9 +26,19 @@
     try { stats = await api.stats(); } catch {}
     try { org = await api.organizerStatus(); } catch {}
     try { rel = await api.reliability(); } catch {}
+    try { storage = await api.storage(); } catch {}
     timer = setInterval(tick, 15000);
   });
   onDestroy(() => clearInterval(timer));
+
+  // SMART verdict for a drive row: FAIL beats warnings beats OK.
+  function smartBadge(s) {
+    if (!s || !s.ok) return { label: 'no SMART', cls: 'dim' };
+    if (s.passed === false) return { label: 'FAILING', cls: 'bad' };
+    const warn = (s.reallocated || 0) + (s.pending || 0) + (s.uncorrectable || 0);
+    if (warn > 0) return { label: `${warn} bad sectors`, cls: 'warn' };
+    return { label: 'healthy', cls: 'good' };
+  }
 
   const relChecks = $derived(rel?.checks ? Object.entries(rel.checks) : []);
   function checkLabel(k) {
@@ -76,13 +87,27 @@
 
     <section class="card wide">
       <h2 class="meta">Storage</h2>
-      {#if sys?.disks}
-        {#each sys.disks as d (d.mount)}
-          <div class="kv disk"><span title={d.source}>{d.mount}</span>
-            <strong>{d.percent}%</strong> <em>{fmtBytes(d.available)} free of {fmtBytes(d.total)}</em>
+      {#if storage?.pool}
+        <div class="kv disk"><span>Media pool</span>
+          <strong>{storage.pool.pct}%</strong>
+          <em>{fmtBytes(storage.pool.avail)} free of {fmtBytes(storage.pool.size)}{storage.pool.projection ? ` · full in ~${storage.pool.projection.daysLeft} days at the current rate` : ''}</em>
+        </div>
+        <div class="gauge" class:hot={storage.pool.pct >= 90}><span style={`width:${storage.pool.pct}%`}></span></div>
+
+        {#each storage.drives as d (d.mount)}
+          {@const badge = smartBadge(d.smart)}
+          <div class="kv disk drive">
+            <span title={d.mount}>{d.label}</span>
+            <strong>{d.pct}%</strong>
+            <em>{fmtBytes(d.avail)} free</em>
+            <em class={badge.cls}>● {badge.label}</em>
+            {#if d.smart?.tempC != null}<em class={d.smart.tempC >= 60 ? 'warn' : ''}>{d.smart.tempC}°C</em>{/if}
+            {#if d.smart?.powerOnHours != null}<em>{Math.round(d.smart.powerOnHours / 24 / 365 * 10) / 10}y on</em>{/if}
           </div>
-          <div class="gauge" class:hot={d.percent >= 90}><span style={`width:${d.percent}%`}></span></div>
+          <div class="gauge" class:hot={d.pct >= 95}><span style={`width:${d.pct}%`}></span></div>
         {/each}
+      {:else if storage}
+        <div class="dim">Storage info unavailable.</div>
       {:else}<div class="dim">…</div>{/if}
     </section>
 
@@ -119,9 +144,11 @@
   .kv span:first-child { color: var(--ink-soft); flex: 0 0 auto; min-width: 130px; }
   .kv.disk span:first-child { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .kv em { font-style: normal; color: var(--ink-faint); font-size: 0.82rem; }
-  .good { color: #7ed491; }
-  .bad { color: #ff6b6b; }
-  .warn { color: #ffb46b; font-size: 0.85rem; }
+  .good { color: #7ed491 !important; }
+  .bad { color: #ff6b6b !important; }
+  .warn { color: #ffb46b !important; }
+  .kv.drive { flex-wrap: wrap; }
+  .kv.drive span:first-child { flex: 0 1 auto; max-width: 40%; }
   .dim { color: var(--ink-faint); }
   .gauge {
     height: 4px; background: rgba(242, 242, 244, 0.12);

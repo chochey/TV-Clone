@@ -213,6 +213,17 @@ const requests = require('./lib/requests')({ DATA_DIR, loadJSON, saveJSON });
 const notifyLogLib = require('./lib/notify-log');
 const notifyLog = notifyLogLib({ DATA_DIR, loadJSON, saveJSON });
 
+// Storage health (lib/storage-health.js) — pool/drive fill, SMART, fill-rate
+// projection; state-transition alerts land in the notification history.
+const storageHealth = require('./lib/storage-health')({
+  DATA_DIR, loadJSON, saveJSON,
+  onAlert: ({ title, body }) => {
+    console.log(`[Storage] ALERT: ${title} — ${body}`);
+    notifyLog.push({ type: 'storage', title, body, audience: 'dashboard' });
+    notifyClients('notifications-updated');
+  },
+});
+
 // ══════════════════════════════════════════════════════════════════════
 // ── Library scanner ──────────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════
@@ -2232,6 +2243,32 @@ app.get('/api/system/stats', requirePermission('canDashboard'), (_req, res) => {
   res.json(systemStats.snapshot({ activeTranscodes: Object.keys(transcodeSessions).length }));
 });
 
+// Pool + per-drive fill, SMART health, fill-rate projection.
+app.get('/api/storage', requirePermission('canDashboard'), async (_req, res) => {
+  try {
+    res.json({ ok: true, ...(await storageHealth.snapshot()) });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// Duplicate copies of the same movie/episode — sorted by reclaimable bytes.
+const { findDuplicates } = require('./lib/duplicates');
+app.get('/api/duplicates', requireAdminSession, (_req, res) => {
+  const lib = scanLibrary();
+  const enriched = lib.map((i) => {
+    // Directory relative to the library root — shown to the admin and used
+    // to distrust filenames whose folder says a different season.
+    const fp = fileIndex[i.id];
+    const relDir = fp && i.folderPath ? path.dirname(path.relative(i.folderPath, fp)) : null;
+    const base = relDir && relDir !== '.' ? { ...i, relDir } : i;
+    if (base.type !== 'movie') return base;
+    const meta = getMetadataForItem(base);
+    return meta?.imdbID ? { ...base, imdbID: meta.imdbID, omdbTitle: meta.omdbTitle } : base;
+  });
+  const groups = findDuplicates(enriched);
+  const totalWasted = groups.reduce((s, g) => s + g.wasted, 0);
+  res.json({ ok: true, groups: groups.slice(0, 200), groupCount: groups.length, totalWasted });
+});
+
 const reliability = require('./lib/reliability');
 app.get('/api/reliability/status', requirePermission('canDashboard'), async (_req, res) => {
   try {
@@ -3347,6 +3384,11 @@ app.listen(PORT, '0.0.0.0', () => {
   // shortly after boot; async, so active streams are unaffected, and
   // clients only get poked if something actually changed.
   setTimeout(() => { rescanLibraryAsync('startup-selfheal').catch(() => {}); }, 10_000);
+
+  // Storage health: snapshot + alert check shortly after boot, then hourly.
+  // Also records the daily usage sample that feeds the fill projection.
+  setTimeout(() => { storageHealth.tick().catch(() => {}); }, 30_000);
+  setInterval(() => { storageHealth.tick().catch(() => {}); }, 60 * 60 * 1000).unref();
   setTimeout(async () => {
     try {
       const dockerStatus = await dockerInspect([...sys.ALLOWED_CONTAINERS]);
