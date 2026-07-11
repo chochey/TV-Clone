@@ -86,9 +86,19 @@
     try { torrents = await api.torrents(); err = ''; }
     catch (e) { err = e.body?.error || 'qBittorrent unreachable.'; if (!torrents) torrents = []; }
   }
+
+  // Mullvad is prepaid — show how much tunnel time is left before
+  // downloads silently stop. Server caches the lookup for 6h.
+  let vpn = $state(null); // {configured, daysLeft, expires, active} | {configured:false}
+  function vpnCls(d) {
+    if (d <= 3) return 'bad';
+    if (d <= 7) return 'warn';
+    return 'good';
+  }
   onMount(() => {
     refresh();
     timer = setInterval(refresh, 5000);
+    api.vpnStatus().then((v) => { vpn = v; }).catch(() => {});
     api.searchPlugins()
       .then((p) => { plugins = (p || []).filter((x) => x.enabled); })
       .catch(() => {});
@@ -177,7 +187,14 @@
 </script>
 
 <div class="page">
-  <header><h1 class="display">Downloads</h1></header>
+  <header>
+    <h1 class="display">Downloads</h1>
+    {#if vpn?.configured && vpn.daysLeft != null}
+      <span class="vpnchip {vpnCls(vpn.daysLeft)}" title={`Mullvad paid time runs out ${new Date(vpn.expires).toLocaleDateString()}`}>
+        ● Mullvad · {vpn.daysLeft === 0 ? 'expires today' : `${vpn.daysLeft} day${vpn.daysLeft === 1 ? '' : 's'} left`}
+      </span>
+    {/if}
+  </header>
 
   <form class="add" onsubmit={add}>
     <input type="text" placeholder="Paste a magnet link or torrent URL" bind:value={magnet} spellcheck="false" />
@@ -298,7 +315,19 @@
 
 <style>
   .page { padding: calc(64px + var(--s5)) var(--gutter) var(--s7); max-width: 1000px; margin: 0 auto; }
-  header { margin-bottom: var(--s5); }
+  header {
+    margin-bottom: var(--s5);
+    display: flex; align-items: baseline; gap: var(--s3); flex-wrap: wrap;
+  }
+  .vpnchip {
+    font-size: 0.78rem; font-weight: 600;
+    padding: 4px 12px; border-radius: 99px;
+    background: rgba(242, 242, 244, 0.07);
+    box-shadow: inset 0 0 0 1px var(--line);
+  }
+  .vpnchip.good { color: #7ed491; }
+  .vpnchip.warn { color: #ffb46b; }
+  .vpnchip.bad { color: #ff6b6b; }
   h1 { font-size: clamp(1.8rem, 3.4vw, 2.6rem); }
 
   .add { display: flex; gap: var(--s2); margin-bottom: var(--s3); }

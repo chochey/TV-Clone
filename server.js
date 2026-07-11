@@ -2749,6 +2749,45 @@ app.get('/api/qbt/status', requirePermission('canDownload'), requireQbt, async (
   } catch { res.json({ connected: false }); }
 });
 
+// ── Mullvad time remaining ────────────────────────────────────────────
+// Downloads ride the Mullvad tunnel, and Mullvad is prepaid — when the
+// account runs dry the VPN (and every torrent behind it) silently dies.
+// Surface the paid-time expiry on the Downloads page. The account number
+// lives only in the service env (MULLVAD_ACCOUNT); expiry moves slowly,
+// so cache for 6 hours and serve stale data on API hiccups.
+const MULLVAD_ACCOUNT = (process.env.MULLVAD_ACCOUNT || '').replace(/\s+/g, '');
+let mullvadCache = { at: 0, data: null };
+app.get('/api/vpn/status', requirePermission('canDownload'), async (_req, res) => {
+  if (!MULLVAD_ACCOUNT) return res.json({ configured: false });
+  if (Date.now() - mullvadCache.at < 6 * 3600_000 && mullvadCache.data) {
+    return res.json(mullvadCache.data);
+  }
+  try {
+    // App API two-step: account number -> short-lived bearer -> account info.
+    // (The old www/accounts/<number>/ endpoint returns ACCOUNT_NOT_FOUND now.)
+    const tr = await fetch('https://api.mullvad.net/auth/v1/token', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ account_number: MULLVAD_ACCOUNT }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    const tok = await tr.json();
+    if (!tr.ok || !tok.access_token) throw new Error(tok.code || `auth HTTP ${tr.status}`);
+    const ar = await fetch('https://api.mullvad.net/accounts/v1/accounts/me', {
+      headers: { Authorization: `Bearer ${tok.access_token}` },
+      signal: AbortSignal.timeout(10_000),
+    });
+    const acct = await ar.json();
+    if (!ar.ok || !acct.expiry) throw new Error(acct.code || `account HTTP ${ar.status}`);
+    const daysLeft = Math.max(0, Math.floor((new Date(acct.expiry) - Date.now()) / 86400_000));
+    mullvadCache = { at: Date.now(), data: { configured: true, expires: acct.expiry, daysLeft, active: daysLeft > 0 } };
+    res.json(mullvadCache.data);
+  } catch (e) {
+    // Serve the last good reading rather than flapping the UI.
+    if (mullvadCache.data) return res.json(mullvadCache.data);
+    res.json({ configured: true, error: String(e.message || e) });
+  }
+});
+
 // Search plugins
 app.get('/api/qbt/search/plugins', requirePermission('canDownload'), requireQbt, async (_req, res) => {
   try {

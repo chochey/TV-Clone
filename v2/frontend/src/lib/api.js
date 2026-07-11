@@ -82,6 +82,7 @@ export const api = {
     fetch(`/api/qbt/search/results?id=${encodeURIComponent(id)}&limit=${limit}`, opts('GET')).then(json),
   searchStop: (id) => fetch('/api/qbt/search/stop', opts('POST', { id })).then(json).catch(() => ({})),
   torrents: () => fetch('/api/qbt/torrents', opts('GET')).then(json),
+  vpnStatus: () => fetch('/api/vpn/status', opts('GET')).then(json),
   torrentAdd: (urls) => fetch('/api/qbt/torrents/add', opts('POST', { urls })).then(json),
   torrentPause: (hashes) => fetch('/api/qbt/torrents/pause', opts('POST', { hashes })).then(json),
   torrentResume: (hashes) => fetch('/api/qbt/torrents/resume', opts('POST', { hashes })).then(json),
