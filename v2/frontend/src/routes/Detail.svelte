@@ -108,9 +108,9 @@
   async function confirmDelete() {
     deleting = true;
     try {
-      for (const t of deleteTargets) {
-        await api.deleteMedia(t.id);
-      }
+      // One batched request for the whole show — the server pays the
+      // library-cache rewrite once instead of once per episode.
+      await api.deleteMediaBatch(deleteTargets.map((t) => t.id));
       library.update((list) => {
         const ids = new Set(deleteTargets.map((t) => t.id));
         return list.filter((i) => !ids.has(i.id));

@@ -1292,10 +1292,13 @@ app.delete('/api/skip-segments/:id', requireAuth, (req, res) => {
 });
 
 // ── Delete media from server (admin only) ────────────────────────────
-app.delete('/api/media/:id', requireAdminSession, async (req, res) => {
-  const id = req.params.id;
+// Per-item deletion: file, caches, sprites, subs, indexes. The expensive
+// tail (media-info save, 10MB library cache rewrite, profile purge, client
+// notify) lives in finishDelete()/purgeIdsFromProfiles() so a whole-show
+// batch pays it once instead of once per episode.
+function deleteMediaItem(id) {
   const filePath = fileIndex[id];
-  if (!filePath) return res.status(404).json({ error: 'Media not found' });
+  if (!filePath) return { ok: false, status: 404, error: 'Media not found' };
 
   const item = (libraryCache || []).find(i => i.id === id);
   const title = item?.title || path.basename(filePath);
@@ -1306,17 +1309,16 @@ app.delete('/api/media/:id', requireAdminSession, async (req, res) => {
     console.log(`[Delete] Removed file: ${filePath}`);
   } catch (err) {
     console.error(`[Delete] Failed to remove file: ${filePath}`, err.message);
-    return res.status(500).json({ error: 'Failed to delete file: ' + err.message });
+    return { ok: false, status: 500, error: 'Failed to delete file: ' + err.message };
   }
 
-  // 2. Clean up probe/media info caches
+  // 2. Clean up probe/media info caches (saved once in finishDelete)
   delete probeCache[filePath];
   delete pixFmtCache[filePath];
   delete audioProbeCache[filePath];
   delete audioTracksCache[filePath];
   delete subProbeCache[filePath];
   markDirty();
-  saveMediaInfo();
 
   // 3. Clean up corrupted file registry
   if (corruptedFiles[id]) {
@@ -1363,27 +1365,70 @@ app.delete('/api/media/:id', requireAdminSession, async (req, res) => {
     }
   } catch {}
 
-  // 7. Remove from all profile data
-  for (const [profileId] of profileDataCache) {
-    const data = loadProfileData(profileId);
-    let changed = false;
-    if (data.progress[id]) { delete data.progress[id]; changed = true; }
-    if (data.watched[id] !== undefined) { delete data.watched[id]; changed = true; }
-    if (data.history.some(h => h.id === id)) { data.history = data.history.filter(h => h.id !== id); changed = true; }
-    if (data.queue.includes(id)) { data.queue = data.queue.filter(q => q !== id); changed = true; }
-    if (data.dismissed?.continueWatching?.[id]) { delete data.dismissed.continueWatching[id]; changed = true; }
-    if (data.dismissed?.recentlyAdded?.[id]) { delete data.dismissed.recentlyAdded[id]; changed = true; }
-    if (changed) saveProfileData(profileId, data);
-  }
-
-  // 8. Remove from fileIndex and update library cache in-place
+  // 7. Remove from in-memory indexes (cache file written in finishDelete)
   delete fileIndex[id];
   delete posterIndex[id];
   if (libraryCache) libraryCache = libraryCache.filter(i => i.id !== id);
-  saveLibraryCache();
 
   console.log(`[Delete] Fully cleaned up "${title}" (${id})`);
-  res.json({ ok: true, title });
+  return { ok: true, title };
+}
+
+// One pass over every profile for the whole id set — a 200-episode show
+// touches each profile file once, not 200 times.
+function purgeIdsFromProfiles(idSet) {
+  for (const [profileId] of profileDataCache) {
+    const data = loadProfileData(profileId);
+    let changed = false;
+    for (const id of idSet) {
+      if (data.progress[id]) { delete data.progress[id]; changed = true; }
+      if (data.watched[id] !== undefined) { delete data.watched[id]; changed = true; }
+      if (data.queue.includes(id)) { data.queue = data.queue.filter(q => q !== id); changed = true; }
+      if (data.dismissed?.continueWatching?.[id]) { delete data.dismissed.continueWatching[id]; changed = true; }
+      if (data.dismissed?.recentlyAdded?.[id]) { delete data.dismissed.recentlyAdded[id]; changed = true; }
+    }
+    if (data.history.some(h => idSet.has(h.id))) {
+      data.history = data.history.filter(h => !idSet.has(h.id));
+      changed = true;
+    }
+    if (changed) saveProfileData(profileId, data);
+  }
+}
+
+function finishDelete() {
+  saveMediaInfo();
+  saveLibraryCache();
+  libraryVersion++; // move the ETag
+  notifyClients('library-updated');
+}
+
+app.delete('/api/media/:id', requireAdminSession, (req, res) => {
+  const r = deleteMediaItem(req.params.id);
+  if (!r.ok) return res.status(r.status).json({ error: r.error });
+  purgeIdsFromProfiles(new Set([req.params.id]));
+  finishDelete();
+  res.json({ ok: true, title: r.title });
+});
+
+// Batch delete — one request for a whole show instead of one per episode,
+// with the cache rewrite and client notify paid once at the end.
+app.post('/api/media/delete-batch', requireAdminSession, (req, res) => {
+  const ids = Array.isArray(req.body?.ids) ? req.body.ids.filter((x) => typeof x === 'string') : [];
+  if (!ids.length) return res.status(400).json({ error: 'No ids given' });
+  if (ids.length > 2000) return res.status(400).json({ error: 'Too many ids' });
+
+  const deleted = [];
+  const failed = [];
+  for (const id of ids) {
+    const r = deleteMediaItem(id);
+    if (r.ok) deleted.push({ id, title: r.title });
+    else failed.push({ id, error: r.error });
+  }
+  if (deleted.length) {
+    purgeIdsFromProfiles(new Set(deleted.map((d) => d.id)));
+    finishDelete();
+  }
+  res.json({ ok: failed.length === 0, deleted: deleted.length, failed });
 });
 
 // API to trigger intro detection for a show
@@ -2757,11 +2802,9 @@ app.get('/api/qbt/status', requirePermission('canDownload'), requireQbt, async (
 // so cache for 6 hours and serve stale data on API hiccups.
 const MULLVAD_ACCOUNT = (process.env.MULLVAD_ACCOUNT || '').replace(/\s+/g, '');
 let mullvadCache = { at: 0, data: null };
-app.get('/api/vpn/status', requirePermission('canDownload'), async (_req, res) => {
-  if (!MULLVAD_ACCOUNT) return res.json({ configured: false });
-  if (Date.now() - mullvadCache.at < 6 * 3600_000 && mullvadCache.data) {
-    return res.json(mullvadCache.data);
-  }
+async function fetchMullvadStatus() {
+  if (!MULLVAD_ACCOUNT) return { configured: false };
+  if (Date.now() - mullvadCache.at < 6 * 3600_000 && mullvadCache.data) return mullvadCache.data;
   try {
     // App API two-step: account number -> short-lived bearer -> account info.
     // (The old www/accounts/<number>/ endpoint returns ACCOUNT_NOT_FOUND now.)
@@ -2780,13 +2823,47 @@ app.get('/api/vpn/status', requirePermission('canDownload'), async (_req, res) =
     if (!ar.ok || !acct.expiry) throw new Error(acct.code || `account HTTP ${ar.status}`);
     const daysLeft = Math.max(0, Math.floor((new Date(acct.expiry) - Date.now()) / 86400_000));
     mullvadCache = { at: Date.now(), data: { configured: true, expires: acct.expiry, daysLeft, active: daysLeft > 0 } };
-    res.json(mullvadCache.data);
+    return mullvadCache.data;
   } catch (e) {
     // Serve the last good reading rather than flapping the UI.
-    if (mullvadCache.data) return res.json(mullvadCache.data);
-    res.json({ configured: true, error: String(e.message || e) });
+    if (mullvadCache.data) return mullvadCache.data;
+    return { configured: true, error: String(e.message || e) };
   }
+}
+app.get('/api/vpn/status', requirePermission('canDownload'), async (_req, res) => {
+  res.json(await fetchMullvadStatus());
 });
+
+// Low-time alerts into the notification bell, same state-transition idea as
+// the storage alerts: fire once when paid time crosses 7 then 3 days left,
+// re-arm after a top-up. Without this the only warning is the Downloads
+// page chip — and the VPN dying takes every torrent down silently.
+const VPN_ALERT_FILE = path.join(DATA_DIR, 'vpn_alerts.json');
+let vpnAlertState = loadJSON(VPN_ALERT_FILE, { alertedAt: null });
+async function vpnAlertTick() {
+  const s = await fetchMullvadStatus();
+  if (!s.configured || s.daysLeft == null) return;
+  if (s.daysLeft > 7) {
+    // Topped up — re-arm both thresholds.
+    if (vpnAlertState.alertedAt != null) {
+      vpnAlertState = { alertedAt: null };
+      saveJSON(VPN_ALERT_FILE, vpnAlertState);
+    }
+    return;
+  }
+  const crossed = s.daysLeft <= 3 ? 3 : 7;
+  if (vpnAlertState.alertedAt != null && vpnAlertState.alertedAt <= crossed) return; // already alerted this tier
+  vpnAlertState = { alertedAt: crossed };
+  saveJSON(VPN_ALERT_FILE, vpnAlertState);
+  const when = s.expires ? new Date(s.expires).toLocaleDateString() : 'soon';
+  notifyLog.push({
+    type: 'vpn',
+    title: crossed === 3 ? 'Mullvad about to expire' : 'Mullvad running low',
+    body: `${s.daysLeft} day${s.daysLeft === 1 ? '' : 's'} of VPN time left (${when}) — top up or downloads stop.`,
+    audience: 'download',
+  });
+  notifyClients('notifications-updated');
+}
 
 // Search plugins
 app.get('/api/qbt/search/plugins', requirePermission('canDownload'), requireQbt, async (_req, res) => {
@@ -3435,6 +3512,9 @@ app.listen(PORT, '0.0.0.0', () => {
   // Also records the daily usage sample that feeds the fill projection.
   setTimeout(() => { storageHealth.tick().catch(() => {}); }, 30_000);
   setInterval(() => { storageHealth.tick().catch(() => {}); }, 60 * 60 * 1000).unref();
+  // Mullvad expiry check — cheap (6h-cached fetch), so twice a day is plenty.
+  setTimeout(() => { vpnAlertTick().catch(() => {}); }, 45_000);
+  setInterval(() => { vpnAlertTick().catch(() => {}); }, 12 * 60 * 60 * 1000).unref();
   setTimeout(async () => {
     try {
       const dockerStatus = await dockerInspect([...sys.ALLOWED_CONTAINERS]);

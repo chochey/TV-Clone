@@ -83,6 +83,7 @@ export const api = {
   searchStop: (id) => fetch('/api/qbt/search/stop', opts('POST', { id })).then(json).catch(() => ({})),
   torrents: () => fetch('/api/qbt/torrents', opts('GET')).then(json),
   vpnStatus: () => fetch('/api/vpn/status', opts('GET')).then(json),
+  deleteMediaBatch: (ids) => fetch('/api/media/delete-batch', opts('POST', { ids })).then(json),
   torrentAdd: (urls) => fetch('/api/qbt/torrents/add', opts('POST', { urls })).then(json),
   torrentPause: (hashes) => fetch('/api/qbt/torrents/pause', opts('POST', { hashes })).then(json),
   torrentResume: (hashes) => fetch('/api/qbt/torrents/resume', opts('POST', { hashes })).then(json),

@@ -94,7 +94,7 @@
 
   // ── Notifications ────────────────────────────────────────────────────
   let bellOpen = $state(false);
-  const ICON = { download: '↓', complete: '✓', added: '✚', organizer: '⚠', storage: '▤' };
+  const ICON = { download: '↓', complete: '✓', added: '✚', organizer: '⚠', storage: '▤', vpn: '⛨' };
   // Notifications come from the server's history (/api/notifications) and
   // are gated by the canNotify permission. The first list that arrives after
   // login is the baseline (no toast for old history); anything appended
@@ -126,7 +126,7 @@
   function notifClick(n) {
     bellOpen = false;
     if (n.itemId) navigate(`/title/${encodeURIComponent(n.itemId)}`);
-    else if (n.type === 'download' || n.type === 'complete') navigate('/downloads');
+    else if (n.type === 'download' || n.type === 'complete' || n.type === 'vpn') navigate('/downloads');
     else if (n.type === 'organizer') navigate('/organizer');
     else if (n.type === 'storage') navigate('/system');
   }
