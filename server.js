@@ -3217,12 +3217,14 @@ app.get('/api/organizer/fix-queue', requireAdminSession, async (_req, res) => {
   const aliases = getOrganizerAliases();
   const queue = organizerTools.parseOrganizerFixQueue(readOrganizerLogLines(), aliases).slice(0, 100);
 
-  // What's physically in Share (skip qbt's working dir and dotfiles).
-  // Items younger than 10 min may just be awaiting the next organizer poll.
+  // What's physically in Share (skip qbt's working dir, dotfiles, and
+  // underscore-prefixed admin parking folders like _review — the organizer
+  // ignores those too). Items younger than 10 min may just be awaiting the
+  // next organizer poll.
   let shareEntries = [];
   try {
     const names = (await fs.promises.readdir(ORGANIZER_SOURCE_DIR))
-      .filter((n) => !n.startsWith('.') && n.toLowerCase() !== 'incomplete');
+      .filter((n) => !n.startsWith('.') && !n.startsWith('_') && n.toLowerCase() !== 'incomplete');
     shareEntries = await Promise.all(names.map(async (name) => {
       let mtime = 0;
       try { mtime = (await fs.promises.stat(path.join(ORGANIZER_SOURCE_DIR, name))).mtimeMs; } catch {}
