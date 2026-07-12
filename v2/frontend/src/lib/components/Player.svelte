@@ -369,6 +369,9 @@
       }
     } catch {}
   }
+  // Sprites bake at 160×90 server-side; display them scaled up — the mild
+  // upscale reads fine for a soft preview and beats rebaking every sheet.
+  const THUMB_SCALE = 1.5;
   function thumbStyle(t) {
     const per = sprite.cols * sprite.rows;
     const fi = Math.min(Math.floor(t / sprite.interval), sprite.totalSheets * per - 1);
@@ -376,10 +379,12 @@
     const pos = fi % per;
     const col = pos % sprite.cols;
     const row = Math.floor(pos / sprite.cols);
+    const w = sprite.width * THUMB_SCALE;
+    const h = sprite.height * THUMB_SCALE;
     return `background-image:url(/api/sprites/${encodeURIComponent(item.id)}/${sheet});` +
-      `background-size:${sprite.cols * sprite.width}px ${sprite.rows * sprite.height}px;` +
-      `background-position:-${col * sprite.width}px -${row * sprite.height}px;` +
-      `width:${sprite.width}px;height:${sprite.height}px`;
+      `background-size:${sprite.cols * w}px ${sprite.rows * h}px;` +
+      `background-position:-${col * w}px -${row * h}px;` +
+      `width:${w}px;height:${h}px`;
   }
 
   // ── Scrubber ────────────────────────────────────────────────────────
@@ -400,7 +405,8 @@
     else if (total) {
       hoverT = barTime(e.clientX);
       const r = bar.getBoundingClientRect();
-      hoverX = Math.max(40, Math.min(r.width - 40, e.clientX - r.left));
+      // Clamp so the (scaled) thumb never hangs off the player edges.
+      hoverX = Math.max(124, Math.min(r.width - 124, e.clientX - r.left));
     }
   }
   function barUp(e) {
