@@ -16,6 +16,7 @@
   import Logs from './routes/Logs.svelte';
   import Users from './routes/Users.svelte';
   import Duplicates from './routes/Duplicates.svelte';
+  import Episodes from './routes/Episodes.svelte';
   import Stats from './routes/Stats.svelte';
   import Player from './lib/components/Player.svelte';
   import { notifications, unreadCount, markAllRead, clearNotifications, setNotificationsEnabled, loadNotifications } from './lib/notifications.js';
@@ -94,7 +95,7 @@
 
   // ── Notifications ────────────────────────────────────────────────────
   let bellOpen = $state(false);
-  const ICON = { download: '↓', complete: '✓', added: '✚', organizer: '⚠', storage: '▤', vpn: '⛨' };
+  const ICON = { download: '↓', complete: '✓', added: '✚', organizer: '⚠', storage: '▤', vpn: '⛨', episode: '◈' };
   // Notifications come from the server's history (/api/notifications) and
   // are gated by the canNotify permission. The first list that arrives after
   // login is the baseline (no toast for old history); anything appended
@@ -127,6 +128,7 @@
     bellOpen = false;
     if (n.itemId) navigate(`/title/${encodeURIComponent(n.itemId)}`);
     else if (n.type === 'download' || n.type === 'complete' || n.type === 'vpn') navigate('/downloads');
+    else if (n.type === 'episode') navigate('/episodes');
     else if (n.type === 'organizer') navigate('/organizer');
     else if (n.type === 'storage') navigate('/system');
   }
@@ -281,6 +283,7 @@
             {#if can('canDashboard')}<button onclick={() => go('/system')}>Dashboard</button>{/if}
             {#if isAdmin}<button onclick={() => go('/users')}>Users</button>{/if}
             {#if isAdmin}<button onclick={() => go('/duplicates')}>Duplicates</button>{/if}
+            {#if can('canDownload')}<button onclick={() => go('/episodes')}>Episodes</button>{/if}
             {#if can('canDownload')}<button onclick={() => go('/downloads')}>Downloads</button>{/if}
             {#if can('canOrganizer')}<button onclick={() => go('/organizer')}>Organizer</button>{/if}
             {#if can('canLogs')}<button onclick={() => go('/logs')}>Logs</button>{/if}
@@ -331,6 +334,8 @@
       <Users />
     {:else if $route.name === 'duplicates' && isAdmin}
       <Duplicates />
+    {:else if $route.name === 'episodes' && can('canDownload')}
+      <Episodes />
     {:else}
       <Home onopen={openItem} onplay={playItem} />
     {/if}

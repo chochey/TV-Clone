@@ -3254,6 +3254,106 @@ app.get('/api/organizer/fix-queue', requireAdminSession, async (_req, res) => {
   res.json({ ok: true, queue, aliases, leftovers });
 });
 
+// ── Episode index: missing-episode report + new-episode tracker ─────────
+// One OMDb-vs-library diff engine (lib/episode-index.js). Torrent search
+// and download stay inside the gluetun/Mullvad container as always — the
+// only traffic here is OMDb metadata, same as poster fetches.
+const episodeIndex = require('./lib/episode-index')({
+  DATA_DIR, loadJSON, saveJSON,
+  apiKey: OMDB_API_KEY, baseUrl: OMDB_BASE_URL,
+});
+const { buildHoldings } = require('./lib/episode-index');
+
+function episodeShowMeta(showName) {
+  const year = parseYearFromName(showName);
+  const title = stripYearFromName(showName);
+  const c = omdb.getCached(title, year);
+  return c ? { imdbID: c.imdbID, omdbYear: c.omdbYear, omdbTitle: c.omdbTitle } : null;
+}
+
+let episodeRefreshRunning = false;
+let lastEpisodeReport = null;
+
+app.get('/api/episodes/report', requirePermission('canDownload'), ensureLibrary, async (_req, res) => {
+  // Cache-only pass (budget 0) — instant, never spends OMDb calls.
+  const report = await episodeIndex.buildReport({
+    holdings: buildHoldings(scanLibrary() || []),
+    getShowMeta: episodeShowMeta,
+    budget: 0,
+  });
+  lastEpisodeReport = report;
+  res.json({ ok: true, refreshing: episodeRefreshRunning, ...report });
+});
+
+app.post('/api/episodes/refresh', requirePermission('canDownload'), ensureLibrary, (req, res) => {
+  if (episodeRefreshRunning) return res.json({ ok: true, started: false, refreshing: true });
+  episodeRefreshRunning = true;
+  const budget = Math.min(500, parseInt(req.body?.budget, 10) || 300);
+  (async () => {
+    try {
+      const report = await episodeIndex.buildReport({
+        holdings: buildHoldings(scanLibrary() || []),
+        getShowMeta: episodeShowMeta,
+        budget,
+      });
+      lastEpisodeReport = report;
+      console.log(`[Episodes] Refresh done: ${report.budgetUsed} OMDb calls, ${report.staleSlots} slots still stale`);
+    } catch (e) {
+      console.error('[Episodes] Refresh failed:', e.message);
+    } finally {
+      episodeRefreshRunning = false;
+      notifyClients('episodes-updated');
+    }
+  })();
+  res.json({ ok: true, started: true, refreshing: true });
+});
+
+// Daily tracker: for ongoing shows, refresh the newest season and notify
+// once per newly-aired episode that the library doesn't have.
+const EPISODE_ALERTS_FILE = path.join(DATA_DIR, 'episode_alerts.json');
+let episodeAlertSeen = loadJSON(EPISODE_ALERTS_FILE, {});
+async function episodeTrackerTick() {
+  const report = await episodeIndex.buildReport({
+    holdings: require('./lib/episode-index').buildHoldings(scanLibrary() || []),
+    getShowMeta: episodeShowMeta,
+    budget: 80,
+    onlyOngoing: true,
+  });
+  const now = Date.now();
+  const RECENT = 14 * 86_400_000;
+  let pushed = 0;
+  for (const show of report.shows) {
+    const fresh = [];
+    for (const s of show.seasons) {
+      for (const m of s.missing) {
+        const airTs = m.released ? Date.parse(m.released) : NaN;
+        if (!Number.isFinite(airTs) || now - airTs > RECENT) continue;
+        const key = `${show.imdbID}|${s.season}|${m.episode}`;
+        if (episodeAlertSeen[key]) continue;
+        episodeAlertSeen[key] = now;
+        fresh.push({ season: s.season, ...m });
+      }
+    }
+    if (!fresh.length) continue;
+    pushed += fresh.length;
+    const first = fresh[0];
+    const code = `S${String(first.season).padStart(2, '0')}E${String(first.episode).padStart(2, '0')}`;
+    notifyLog.push({
+      type: 'episode',
+      title: `New episode: ${show.show}`,
+      body: fresh.length === 1
+        ? `${code}${first.title ? ` — ${first.title}` : ''} aired ${first.released} and isn't in the library yet.`
+        : `${fresh.length} new episodes aired (latest ${code}) and aren't in the library yet.`,
+      audience: 'download',
+    });
+  }
+  if (pushed) {
+    saveJSON(EPISODE_ALERTS_FILE, episodeAlertSeen);
+    notifyClients('notifications-updated');
+    console.log(`[Episodes] Tracker: ${pushed} new episode alert(s)`);
+  }
+}
+
 app.post('/api/organizer/preview', requireAdminSession, async (_req, res) => {
   if (!fs.existsSync(ORGANIZER_SCRIPT)) {
     return res.status(404).json({ ok: false, error: `Organizer script not found: ${ORGANIZER_SCRIPT}` });
@@ -3517,6 +3617,10 @@ app.listen(PORT, '0.0.0.0', () => {
   // Mullvad expiry check — cheap (6h-cached fetch), so twice a day is plenty.
   setTimeout(() => { vpnAlertTick().catch(() => {}); }, 45_000);
   setInterval(() => { vpnAlertTick().catch(() => {}); }, 12 * 60 * 60 * 1000).unref();
+  // New-episode tracker for ongoing shows — season lists are 24h-cached, so
+  // a daily pass costs at most ~60 OMDb calls.
+  setTimeout(() => { episodeTrackerTick().catch(() => {}); }, 90_000);
+  setInterval(() => { episodeTrackerTick().catch(() => {}); }, 24 * 60 * 60 * 1000).unref();
   setTimeout(async () => {
     try {
       const dockerStatus = await dockerInspect([...sys.ALLOWED_CONTAINERS]);

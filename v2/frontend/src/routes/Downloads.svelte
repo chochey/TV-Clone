@@ -1,6 +1,7 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
   import { api } from '../lib/api.js';
+  import { route } from '../lib/router.js';
 
   let torrents = $state(null);
   let magnet = $state('');
@@ -102,6 +103,11 @@
     api.searchPlugins()
       .then((p) => { plugins = (p || []).filter((x) => x.enabled); })
       .catch(() => {});
+    // Deep link from the Episodes page: /downloads?q=Show S03E07
+    if ($route.q) {
+      q = $route.q;
+      startSearch();
+    }
   });
   onDestroy(() => { clearInterval(timer); stopSearch(); });
 
@@ -113,7 +119,7 @@
   }
 
   async function startSearch(e) {
-    e.preventDefault();
+    e?.preventDefault();
     if (!q.trim()) return;
     await stopSearch();
     searching = true;
