@@ -85,7 +85,7 @@
     {#if newEpisodes.length}
       <section class="block">
         <h2>New episodes <span class="count">{newEpisodes.length}</span></h2>
-        {#each newEpisodes as e (e.show + e.season + e.episode)}
+        {#each newEpisodes as e (`${e.show}|${e.season}|${e.episode}`)}
           <div class="row">
             <div class="rinfo">
               <span class="rtitle">{e.show} <strong>{epCode(e.season, e.episode)}</strong>{e.title ? ` — ${e.title}` : ''}</span>
@@ -110,7 +110,7 @@
               <span class="slabel">Season {season.season}</span>
               <span class="shave">{season.held}/{season.total ?? '?'} held</span>
               <div class="chips">
-                {#each season.missing as m (m.episode)}
+                {#each season.missing as m, mi (mi)}
                   <button class="chip" title={`${m.title || 'Unknown title'}${m.released ? ` · aired ${m.released}` : ''} — click to search`}
                           onclick={() => searchFor(s.show, season.season, m.episode)}>
                     E{String(m.episode).padStart(2, '0')}
