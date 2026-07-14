@@ -1351,16 +1351,31 @@ function deleteMediaItem(id) {
     }
   } catch {}
 
-  // 6b. Remove the parent media folder if deleting the file left it empty.
-  // This prevents the organizer from treating an empty movie folder as an
-  // existing destination when a replacement copy is downloaded later.
+  // 6b. Remove the parent media folder if no real media is left in it.
+  // Deleting only when the folder is byte-empty left release scraps behind
+  // ("[TGx]Downloaded from...txt", .nfo, poster .jpg) — and a leftover
+  // scrap made the organizer think the title still existed, so it deleted
+  // a re-downloaded copy as a duplicate (the Kraven the Hunter data loss).
+  // Sweep the folder if nothing of value (video/subtitle/other media) remains.
   try {
     const parentDir = path.dirname(filePath);
     if (parentDir && parentDir !== path.dirname(parentDir)) {
-      const remaining = fs.readdirSync(parentDir);
-      if (remaining.length === 0) {
-        fs.rmdirSync(parentDir);
-        console.log(`[Delete] Removed empty folder: ${parentDir}`);
+      const MEDIA_EXT = new Set([
+        '.mkv', '.mp4', '.avi', '.m4v', '.webm', '.mov', '.mpg', '.mpeg', '.ts', '.wmv', '.flv',
+        '.srt', '.sub', '.ass', '.idx', '.ssa', '.vtt',
+      ]);
+      const SCRAP_EXT = new Set(['.txt', '.nfo', '.jpg', '.jpeg', '.png', '.url', '.md5', '.sfv', '.exe']);
+      const walk = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
+        const p = path.join(dir, e.name);
+        return e.isDirectory() ? walk(p) : [p];
+      });
+      const files = walk(parentDir);
+      const hasMedia = files.some((f) => MEDIA_EXT.has(path.extname(f).toLowerCase()));
+      const onlyScraps = files.every((f) => SCRAP_EXT.has(path.extname(f).toLowerCase()));
+      if (!hasMedia && onlyScraps) {
+        // rm the whole folder tree — only release-junk is left.
+        fs.rmSync(parentDir, { recursive: true, force: true });
+        console.log(`[Delete] Removed folder (only scraps left, ${files.length} file(s)): ${parentDir}`);
       }
     }
   } catch {}
