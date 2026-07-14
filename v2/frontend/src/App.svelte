@@ -33,7 +33,7 @@
   function showToast(msg) {
     toast = msg;
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => { toast = ''; }, 2200);
+    toastTimer = setTimeout(() => { toast = ''; }, 3000);
   }
 
   onMount(async () => {
@@ -529,18 +529,18 @@
   main { position: relative; }
 
   .toast {
-    position: fixed; left: 50%; bottom: var(--s5); transform: translateX(-50%);
+    position: fixed; top: calc(64px + var(--s3)); right: var(--s4);
     z-index: 100;
     background: var(--bg-raised); color: var(--ink);
     font-size: 0.9rem; font-weight: 500;
     padding: 12px 20px; border-radius: 99px;
     box-shadow: 0 12px 34px rgba(0, 0, 0, 0.5), 0 0 0 1px var(--line-strong);
     animation: toastin var(--t-med) var(--ease);
-    max-width: 86vw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    max-width: 42vw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   @keyframes toastin {
-    from { opacity: 0; transform: translateX(-50%) translateY(8px); }
-    to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+    from { opacity: 0; transform: translateY(-8px); }
+    to   { opacity: 1; transform: translateY(0); }
   }
 
   @media (max-width: 700px) {
