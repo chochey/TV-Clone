@@ -1790,15 +1790,23 @@ function getDriveIds(filePaths) {
 // Pause sprite generation when any playback is active to prioritize disk I/O
 function waitForTranscodeIdle(timeoutMs = SPRITE_IDLE_WAIT_MS) {
   return new Promise((resolve) => {
-    const deadline = Date.now() + timeoutMs;
+    const softDeadline = Date.now() + timeoutMs;
     const check = () => {
       const transcodeActive = Object.keys(transcodeSessions).length > 0;
       const playbackRecent = (Date.now() - lastPlaybackAt) < 60000;
+      // Fully idle — safe to generate.
       if (!transcodeActive && !playbackRecent) return resolve();
-      if (Date.now() >= deadline) {
-        console.warn(`[SPRITE] waitForTranscodeIdle timed out after ${Math.round(timeoutMs / 1000)}s, resuming anyway`);
-        return resolve();
-      }
+      // A live transcode session means someone is streaming RIGHT NOW. Sprite
+      // ffmpeg shares the Intel GPU and the USB read bandwidth, so resuming
+      // into an active transcode starves it — it falls behind real-time, the
+      // player drains its buffer and freezes until a refresh (the "Ray Donovan
+      // stops every so often" bug). Never resume while a session is live; the
+      // session's own 2-min idle reap guarantees this can't wedge forever.
+      if (transcodeActive) { setTimeout(check, 5000); return; }
+      // No active session, but a segment was requested in the last 60s — a
+      // brief gap between sessions. The soft timeout escapes here so a stale
+      // lastPlaybackAt (e.g. a viewer who closed the tab) can't wedge sprites.
+      if (Date.now() >= softDeadline) return resolve();
       setTimeout(check, 2000);
     };
     check();
