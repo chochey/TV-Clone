@@ -187,6 +187,7 @@
     session.set(null);
     playing = null;
     username = ''; password = '';
+    searchQuery.set('');   // don't leak the last user's search to the next
     navigate('/');
     phase = 'login';
   }
@@ -435,11 +436,13 @@
     color: var(--ink-faint);
   }
   .marksub { margin-top: calc(-1 * var(--s4)); letter-spacing: 0.3em; color: var(--ink-faint); }
-  nav { display: flex; gap: var(--s5); margin-left: var(--s6); }
+  nav { display: flex; gap: var(--s5); margin-left: var(--s4); }
 
-  /* Persistent search box filling the middle of the bar */
+  /* Persistent search box filling the middle of the bar. Explicit side
+     margins (not `auto`) so flex-grow actually expands the box — auto
+     margins absorb the free space first and leave it crushed to the icon. */
   .searchbox {
-    flex: 1; min-width: 0; max-width: 440px; margin: 0 auto;
+    flex: 1; min-width: 0; max-width: 440px; margin: 0 var(--s4);
     display: flex; align-items: center; gap: 8px;
     background: rgba(242, 242, 244, 0.08);
     box-shadow: inset 0 0 0 1px var(--line);
@@ -575,15 +578,22 @@
     to   { opacity: 1; transform: translateY(0); }
   }
 
-  @media (max-width: 700px) {
+  /* Tablet + small laptop: trim the fat (brand letter-spacing, nav gaps,
+     side margins) so the nav and a usable search box coexist on one row
+     well below desktop widths, instead of the box crushing to its icon. */
+  @media (max-width: 900px) {
     .brandsub { display: none; }
+    .brand { letter-spacing: 0.2em; font-size: 0.92rem; }
+    nav { gap: var(--s3); margin-left: var(--s3); }
+    .searchbox { margin: 0 var(--s3); }
+    .bell { margin-left: var(--s3); }
   }
+  /* Phones: even trimmed, brand + 3 nav links + icons leave no room for a
+     usable search. Hand the row to search — the thing that was requested —
+     and drop the text nav. Home is the logo; Films/Series are a tap into
+     search results. Tablets and up keep the nav alongside the box. */
   @media (max-width: 560px) {
     .topbar { padding: var(--s3) var(--s4); gap: var(--s2); }
-    .brand { letter-spacing: 0.2em; font-size: 0.92rem; }
-    /* Phones can't fit brand + 3 nav links + a usable search + icons on one
-       row, so the row goes to search (the thing that was just requested).
-       Home is the logo; Films/Series are a tap into search results. */
     nav { display: none; }
     .searchbox { max-width: none; margin: 0 auto 0 var(--s3); padding: 0 12px; }
     .bell { margin-left: 0; }

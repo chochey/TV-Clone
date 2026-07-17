@@ -68,17 +68,7 @@
 
 <style>
   .search { padding: calc(64px + var(--s5)) var(--gutter) var(--s7); max-width: var(--maxw); margin: 0 auto; }
-  .q {
-    width: 100%; max-width: 680px; display: block;
-    font-size: 1.35rem; font-weight: 500;
-    background: transparent; border: none;
-    border-bottom: 2px solid var(--line-strong); border-radius: 0;
-    padding: 10px 2px 14px;
-  }
-  .q:focus { border-bottom-color: var(--ink); }
-  .q::-webkit-search-cancel-button { -webkit-appearance: none; }
-
-  .rescount { margin: var(--s4) 0 var(--s4); }
+  .rescount { margin: 0 0 var(--s4); }
   .grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
@@ -90,6 +80,5 @@
 
   @media (max-width: 640px) {
     .grid { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: var(--s3) var(--s2); }
-    .q { font-size: 1.1rem; }
   }
 </style>
