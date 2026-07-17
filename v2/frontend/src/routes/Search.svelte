@@ -1,6 +1,7 @@
 <script>
   import PosterCard from '../lib/components/PosterCard.svelte';
   import { library, collapseShows, searchQuery } from '../lib/stores.js';
+  import { searchLibrary } from '../lib/search.js';
 
   let { onopen, onplay } = $props();
 
@@ -13,27 +14,7 @@
 
   // Everything, one card per title.
   const pool = $derived(collapseShows($library));
-
-  function haystack(i) {
-    return `${i.showName || ''} ${i.title || ''} ${i.omdbTitle || ''}`
-      .replace(/^\(auto\)\s*/i, '').toLowerCase();
-  }
-
-  const results = $derived.by(() => {
-    const needle = $q.trim().toLowerCase();
-    if (needle.length < 2) return [];
-    const scored = [];
-    for (const i of pool) {
-      const h = haystack(i);
-      const pos = h.indexOf(needle);
-      if (pos === -1) continue;
-      // startsWith beats word-start beats substring; newer breaks ties
-      const wordStart = pos === 0 || h[pos - 1] === ' ';
-      scored.push({ i, score: (pos === 0 ? 0 : wordStart ? 1 : 2) * 1e13 + pos * 1e9 - (i.addedAt || 0) / 1e3 });
-    }
-    scored.sort((a, b) => a.score - b.score);
-    return scored.map((s) => s.i);
-  });
+  const results = $derived(searchLibrary(pool, $q));
 
   $effect(() => { $q; shown = PAGE; });
 

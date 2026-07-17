@@ -1,7 +1,9 @@
 <script>
   import { onMount } from 'svelte';
   import { api } from './lib/api.js';
-  import { library, session, loadLibrary, searchQuery } from './lib/stores.js';
+  import { library, session, loadLibrary, searchQuery, collapseShows } from './lib/stores.js';
+  import { searchLibrary } from './lib/search.js';
+  import { posterUrl } from './lib/api.js';
   import { route, navigate } from './lib/router.js';
   import { nextEpisodeOf, prevEpisodeOf } from './lib/format.js';
   import Home from './routes/Home.svelte';
@@ -82,6 +84,32 @@
   }
   function playItem(item) {
     playing = item;
+  }
+
+  // ── Header live search: results drop down as you type, no page jump ───
+  let searchFocused = $state(false);
+  const searchPool = $derived(collapseShows($library));
+  const searchMatches = $derived(searchLibrary(searchPool, $searchQuery));
+  const searchSuggestions = $derived(searchMatches.slice(0, 8));
+  const searchMore = $derived(searchMatches.length - searchSuggestions.length);
+  const searchDropOpen = $derived(
+    searchFocused && $searchQuery.trim().length >= 2 && searchMatches.length > 0
+  );
+  function pickResult(item) {
+    searchFocused = false;
+    openItem(item);
+  }
+  function clearSearch() {
+    searchQuery.set('');
+    searchFocused = true;
+  }
+  function seeAllResults() {
+    searchFocused = false;
+    navigate('/search');
+  }
+  function onSearchKey(e) {
+    if (e.key === 'Escape') { searchFocused = false; e.currentTarget.blur(); }
+    else if (e.key === 'Enter' && searchSuggestions[0]) pickResult(searchSuggestions[0]);
   }
 
   // ── User menu: history/requests + permission-gated system pages ──────
@@ -230,15 +258,43 @@
       <a class:active={$route.name === 'movies'} href="/movies" onclick={(e) => { e.preventDefault(); navigate('/movies'); }}>Films</a>
       <a class:active={$route.name === 'shows'} href="/shows" onclick={(e) => { e.preventDefault(); navigate('/shows'); }}>Series</a>
     </nav>
-    <div class="searchbox">
+    <div class="searchbox" class:open={searchDropOpen} onclick={(e) => e.stopPropagation()}>
       <svg class="sicon" viewBox="0 0 24 24" width="17" height="17" fill="currentColor" aria-hidden="true"><path d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"/></svg>
       <input
-        class="searchinput" type="search" placeholder="Search"
+        class="searchinput" type="search" placeholder="Search films and series" enterkeyhint="search"
         autocomplete="off" spellcheck="false"
         bind:value={$searchQuery}
-        onfocus={() => { if ($route.name !== 'search') navigate('/search'); }}
-        oninput={() => { if ($route.name !== 'search') navigate('/search'); }}
+        onfocus={() => { searchFocused = true; }}
+        onblur={() => { setTimeout(() => { searchFocused = false; }, 140); }}
+        onkeydown={onSearchKey}
       />
+      {#if $searchQuery.trim()}
+        <button class="sclear" aria-label="Clear search" onclick={clearSearch}>
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      {/if}
+
+      {#if searchDropOpen}
+        <div class="search-drop" role="listbox">
+          {#each searchSuggestions as item (item.id)}
+            {@const t = item.showName || item.title || item.omdbTitle || 'Untitled'}
+            <button class="sresult" onclick={() => pickResult(item)}>
+              {#if posterUrl(item)}
+                <img src={posterUrl(item)} alt="" loading="lazy" />
+              {:else}
+                <span class="sthumb"></span>
+              {/if}
+              <span class="sr-text">
+                <span class="sr-title">{t}</span>
+                <span class="sr-meta">{(item.year || item.omdbYear || '')}{item.type === 'show' ? ' · Series' : ' · Film'}</span>
+              </span>
+            </button>
+          {/each}
+          {#if searchMore > 0}
+            <button class="sresult see-all" onclick={seeAllResults}>See all {searchMatches.length} results</button>
+          {/if}
+        </div>
+      {/if}
     </div>
     {#if canNotify}
     <div class="bell">
@@ -443,6 +499,7 @@
      margins (not `auto`) so flex-grow actually expands the box — auto
      margins absorb the free space first and leave it crushed to the icon. */
   .searchbox {
+    position: relative;
     flex: 1; min-width: 0; margin: 0 var(--s5);
     display: flex; align-items: center; gap: 8px;
     background: rgba(242, 242, 244, 0.08);
@@ -454,6 +511,8 @@
     background: rgba(242, 242, 244, 0.12);
     box-shadow: inset 0 0 0 1px var(--line-strong);
   }
+  /* Square off the bottom while the results panel is attached below. */
+  .searchbox.open { border-radius: 20px; }
   .sicon { color: var(--ink-faint); flex: 0 0 auto; }
   .searchinput {
     flex: 1; min-width: 0;
@@ -463,6 +522,42 @@
   }
   .searchinput::placeholder { color: var(--ink-faint); }
   .searchinput::-webkit-search-cancel-button { -webkit-appearance: none; }
+  .sclear {
+    flex: 0 0 auto; display: grid; place-items: center;
+    width: 22px; height: 22px; border-radius: 99px; color: var(--ink-faint);
+    transition: color var(--t-fast), background var(--t-fast);
+  }
+  .sclear:hover { color: var(--ink); background: rgba(242, 242, 244, 0.14); }
+
+  /* Live-results dropdown — matches appear here as you type, no page jump. */
+  .search-drop {
+    position: absolute; top: calc(100% + 8px); left: 0;
+    width: min(440px, 92vw); max-height: min(70vh, 560px); overflow-y: auto;
+    background: rgba(17, 17, 22, 0.98); backdrop-filter: blur(16px);
+    border-radius: var(--r-md); padding: var(--s2);
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.6), 0 0 0 1px var(--line-strong);
+    display: flex; flex-direction: column; gap: 2px; z-index: 60;
+  }
+  .sresult {
+    display: flex; align-items: center; gap: var(--s2);
+    padding: 6px 8px; border-radius: var(--r-sm); text-align: left;
+    transition: background var(--t-fast);
+  }
+  .sresult:hover { background: rgba(242, 242, 244, 0.1); }
+  .sresult img, .sthumb {
+    width: 34px; height: 50px; flex: 0 0 auto; border-radius: 4px;
+    object-fit: cover; background: rgba(242, 242, 244, 0.08);
+  }
+  .sr-text { display: flex; flex-direction: column; min-width: 0; }
+  .sr-title { font-size: 0.88rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sr-meta { font-size: 0.75rem; color: var(--ink-faint); }
+  .see-all { justify-content: center; color: var(--ink-soft); font-size: 0.82rem; font-weight: 600; padding: 10px; }
+  .see-all:hover { color: var(--ink); }
+  @media (max-width: 880px) {
+    /* The box isn't wide enough here for a left-anchored panel to stay on
+       screen, so pin the panel across the viewport under the bar instead. */
+    .search-drop { position: fixed; left: var(--s4); right: var(--s4); top: 54px; width: auto; max-width: 480px; }
+  }
 
   .bell { position: relative; margin-left: var(--s5); }
   .bellbtn {
