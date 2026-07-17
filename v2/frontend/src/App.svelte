@@ -531,8 +531,12 @@
 
   /* Live-results dropdown — matches appear here as you type, no page jump. */
   .search-drop {
+    /* Anchored under the box's left edge. The box sits ~560px in from the
+       left on desktop, so cap the width to the space remaining to the
+       viewport's right edge — never runs off-screen, up to a 680px ceiling.
+       (Narrower screens fall through to the fixed rule below.) */
     position: absolute; top: calc(100% + 8px); left: 0;
-    width: min(440px, 92vw); max-height: min(70vh, 560px); overflow-y: auto;
+    width: min(680px, calc(100vw - 580px)); max-height: min(70vh, 560px); overflow-y: auto;
     background: rgba(17, 17, 22, 0.98); backdrop-filter: blur(16px);
     border-radius: var(--r-md); padding: var(--s2);
     box-shadow: 0 18px 50px rgba(0, 0, 0, 0.6), 0 0 0 1px var(--line-strong);
@@ -553,10 +557,10 @@
   .sr-meta { font-size: 0.75rem; color: var(--ink-faint); }
   .see-all { justify-content: center; color: var(--ink-soft); font-size: 0.82rem; font-weight: 600; padding: 10px; }
   .see-all:hover { color: var(--ink); }
-  @media (max-width: 880px) {
-    /* The box isn't wide enough here for a left-anchored panel to stay on
+  @media (max-width: 980px) {
+    /* The box isn't wide enough here for the left-anchored panel to stay on
        screen, so pin the panel across the viewport under the bar instead. */
-    .search-drop { position: fixed; left: var(--s4); right: var(--s4); top: 54px; width: auto; max-width: 480px; }
+    .search-drop { position: fixed; left: var(--s4); right: var(--s4); top: 54px; width: auto; max-width: 640px; }
   }
 
   .bell { position: relative; margin-left: var(--s5); }
