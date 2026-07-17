@@ -1,7 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { api } from './lib/api.js';
-  import { library, session, loadLibrary } from './lib/stores.js';
+  import { library, session, loadLibrary, searchQuery } from './lib/stores.js';
   import { route, navigate } from './lib/router.js';
   import { nextEpisodeOf, prevEpisodeOf } from './lib/format.js';
   import Home from './routes/Home.svelte';
@@ -228,8 +228,17 @@
       <a class:active={$route.name === 'home'} href="/" onclick={(e) => { e.preventDefault(); navigate('/'); }}>Home</a>
       <a class:active={$route.name === 'movies'} href="/movies" onclick={(e) => { e.preventDefault(); navigate('/movies'); }}>Films</a>
       <a class:active={$route.name === 'shows'} href="/shows" onclick={(e) => { e.preventDefault(); navigate('/shows'); }}>Series</a>
-      <a class:active={$route.name === 'search'} href="/search" onclick={(e) => { e.preventDefault(); navigate('/search'); }}>Search</a>
     </nav>
+    <div class="searchbox">
+      <svg class="sicon" viewBox="0 0 24 24" width="17" height="17" fill="currentColor" aria-hidden="true"><path d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"/></svg>
+      <input
+        class="searchinput" type="search" placeholder="Search"
+        autocomplete="off" spellcheck="false"
+        bind:value={$searchQuery}
+        onfocus={() => { if ($route.name !== 'search') navigate('/search'); }}
+        oninput={() => { if ($route.name !== 'search') navigate('/search'); }}
+      />
+    </div>
     {#if canNotify}
     <div class="bell">
       <button class="bellbtn" aria-label="Notifications" aria-expanded={bellOpen}
@@ -426,7 +435,30 @@
     color: var(--ink-faint);
   }
   .marksub { margin-top: calc(-1 * var(--s4)); letter-spacing: 0.3em; color: var(--ink-faint); }
-  nav { display: flex; gap: var(--s5); margin-left: auto; }
+  nav { display: flex; gap: var(--s5); margin-left: var(--s6); }
+
+  /* Persistent search box filling the middle of the bar */
+  .searchbox {
+    flex: 1; min-width: 0; max-width: 440px; margin: 0 auto;
+    display: flex; align-items: center; gap: 8px;
+    background: rgba(242, 242, 244, 0.08);
+    box-shadow: inset 0 0 0 1px var(--line);
+    border-radius: 99px; padding: 0 14px;
+    transition: box-shadow var(--t-fast), background var(--t-fast);
+  }
+  .searchbox:focus-within {
+    background: rgba(242, 242, 244, 0.12);
+    box-shadow: inset 0 0 0 1px var(--line-strong);
+  }
+  .sicon { color: var(--ink-faint); flex: 0 0 auto; }
+  .searchinput {
+    flex: 1; min-width: 0;
+    background: transparent; border: none; outline: none;
+    color: var(--ink); font-size: 0.9rem; font-weight: 500;
+    padding: 9px 0;
+  }
+  .searchinput::placeholder { color: var(--ink-faint); }
+  .searchinput::-webkit-search-cancel-button { -webkit-appearance: none; }
 
   .bell { position: relative; margin-left: var(--s5); }
   .bellbtn {
@@ -547,9 +579,13 @@
     .brandsub { display: none; }
   }
   @media (max-width: 560px) {
-    .topbar { padding: var(--s3) var(--s4); }
+    .topbar { padding: var(--s3) var(--s4); gap: var(--s2); }
     .brand { letter-spacing: 0.2em; font-size: 0.92rem; }
-    nav { gap: var(--s3); }
-    nav a { font-size: 0.82rem; }
+    /* Phones can't fit brand + 3 nav links + a usable search + icons on one
+       row, so the row goes to search (the thing that was just requested).
+       Home is the logo; Films/Series are a tap into search results. */
+    nav { display: none; }
+    .searchbox { max-width: none; margin: 0 auto 0 var(--s3); padding: 0 12px; }
+    .bell { margin-left: 0; }
   }
 </style>

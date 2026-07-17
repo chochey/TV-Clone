@@ -5,6 +5,7 @@ import { loadNotifications } from './notifications.js';
 export const session = writable(null);     // { loggedIn, profileId, name, role }
 export const library = writable([]);       // full library array
 export const libraryLoaded = writable(false);
+export const searchQuery = writable('');   // shared: header search box <-> Search page
 
 // Continue Watching: in-progress items, most-recent first, de-duped per show.
 export const continueWatching = derived(library, ($lib) => {

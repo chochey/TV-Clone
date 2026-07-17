@@ -1,11 +1,13 @@
 <script>
   import PosterCard from '../lib/components/PosterCard.svelte';
-  import { library, collapseShows } from '../lib/stores.js';
+  import { library, collapseShows, searchQuery } from '../lib/stores.js';
 
   let { onopen, onplay } = $props();
 
   const PAGE = 60;
-  let q = $state('');
+  // Bind straight to the shared store so the header search box and this
+  // page's own input are always the same value.
+  const q = searchQuery;
   let shown = $state(PAGE);
   let sentinel = $state(null);
 
@@ -18,7 +20,7 @@
   }
 
   const results = $derived.by(() => {
-    const needle = q.trim().toLowerCase();
+    const needle = $q.trim().toLowerCase();
     if (needle.length < 2) return [];
     const scored = [];
     for (const i of pool) {
@@ -33,7 +35,7 @@
     return scored.map((s) => s.i);
   });
 
-  $effect(() => { q; shown = PAGE; });
+  $effect(() => { $q; shown = PAGE; });
 
   $effect(() => {
     if (!sentinel) return;
@@ -46,14 +48,8 @@
 </script>
 
 <div class="search">
-  <!-- svelte-ignore a11y_autofocus -->
-  <input
-    class="q" type="search" placeholder="Search films and series…"
-    bind:value={q} autofocus autocomplete="off" spellcheck="false"
-  />
-
-  {#if q.trim().length >= 2}
-    <p class="meta rescount">{results.length} result{results.length === 1 ? '' : 's'}</p>
+  {#if $q.trim().length >= 2}
+    <p class="meta rescount">{results.length} result{results.length === 1 ? '' : 's'} for “{$q.trim()}”</p>
     <div class="grid">
       {#each results.slice(0, shown) as item (item.id)}
         <PosterCard {item} {onopen} {onplay} />
@@ -63,10 +59,10 @@
       <div class="sentinel" bind:this={sentinel}></div>
     {/if}
     {#if !results.length}
-      <p class="empty">Nothing matches “{q.trim()}”.</p>
+      <p class="empty">Nothing matches “{$q.trim()}”.</p>
     {/if}
   {:else}
-    <p class="empty hint">Type at least two characters.</p>
+    <p class="empty hint">Search films and series from the bar above.</p>
   {/if}
 </div>
 
