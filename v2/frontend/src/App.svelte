@@ -438,11 +438,12 @@
   .marksub { margin-top: calc(-1 * var(--s4)); letter-spacing: 0.3em; color: var(--ink-faint); }
   nav { display: flex; gap: var(--s5); margin-left: var(--s4); }
 
-  /* Persistent search box filling the middle of the bar. Explicit side
+  /* Persistent search box that fills the bar between the nav and the icons
+     (rather than a narrow pill marooned in the middle). Explicit side
      margins (not `auto`) so flex-grow actually expands the box — auto
      margins absorb the free space first and leave it crushed to the icon. */
   .searchbox {
-    flex: 1; min-width: 0; max-width: 440px; margin: 0 var(--s4);
+    flex: 1; min-width: 0; margin: 0 var(--s5);
     display: flex; align-items: center; gap: 8px;
     background: rgba(242, 242, 244, 0.08);
     box-shadow: inset 0 0 0 1px var(--line);
