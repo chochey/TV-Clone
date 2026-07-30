@@ -44,6 +44,19 @@ must re-probe via `probeFileAsync()` when `pixFmtCache[filePath]` is missing, ev
 if `probeCache` already has the codec cached. This was the second bug -- the initial
 fix worked for fresh probes but not for files already in the codec cache.
 
+### Browser-friendly transcode caps (July 2026)
+`QUALITY_PRESETS` cap OUTPUT height so browsers (esp. Firefox software-decoding
+H.264) aren't force-fed full 4K/1440p: low=720p, auto(default)=1080p, high=null
+(source resolution, for genuine 4K playback). All H.264 encode branches also use
+`-profile:v main` (drops High-profile 8x8 transform → cheaper client decode).
+The downscale is `scale=-2:'min(maxH,ih)'` (never upscales) applied **in software
+before hwupload** — this box's Intel UHD 630 VAAPI driver has **no scale_vaapi/VPP**
+(scale_vaapi fails "VAProfile not supported"), so GPU-domain scaling is impossible.
+That's why capping lives on the software-decode branch (10-bit + non-VAAPI-decodable,
+which is where ~all 4K lands since 4K is near-always 10-bit HEVC/AV1); the 8-bit
+fast GPU path stays uncapped (zero regression, and >1080p 8-bit there is rare).
+Do not "optimize" this to scale_vaapi or bump back to High profile.
+
 ### saveJSON is async, saveJSONSync is for startup only
 `saveJSON()` does non-blocking writes (async fs.writeFile + atomic rename).
 `saveJSONSync()` exists only for startup/migration code that must complete before

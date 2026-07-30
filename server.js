@@ -2468,9 +2468,12 @@ function cleanupSession(id, keepFiles) {
 }
 
 const QUALITY_PRESETS = {
-  low:  { vaapiQp: 32, maxrate: '2M', bufsize: '4M', crf: 28 },
-  auto: { vaapiQp: 22, maxrate: '4M', bufsize: '8M', crf: 23 },
-  high: { vaapiQp: 18, maxrate: '8M', bufsize: '16M', crf: 18 },
+  // maxH caps the OUTPUT height so browsers (esp. Firefox software-decoding
+  // H.264) aren't force-fed full 4K/1440p. 'high' = null → source resolution
+  // untouched (pick it for genuine 4K playback). min(maxH,ih) never upscales.
+  low:  { vaapiQp: 32, maxrate: '2M', bufsize: '4M', crf: 28, maxH: 720 },
+  auto: { vaapiQp: 22, maxrate: '4M', bufsize: '8M', crf: 23, maxH: 1080 },
+  high: { vaapiQp: 18, maxrate: '8M', bufsize: '16M', crf: 18, maxH: null },
 };
 
 const VAAPI_DECODE_CODECS = new Set(['h264', 'hevc', 'vp8', 'vp9']);
@@ -2520,21 +2523,27 @@ function startFfmpeg(id, filePath, sessionDir, seekTime, startSegNum, audioStrea
   } else if (vaapiAvailable()) {
     const pixFmt = pixFmtCache[filePath] || '';
     const is10bit = pixFmt.includes('10le') || pixFmt.includes('10be') || pixFmt.includes('p010');
+    // Downscale filter for capped presets. This driver has no scale_vaapi/VPP,
+    // so the resize is done in software (before the GPU upload) — which is why
+    // capping is applied on the software-decode branch below, not the fast one.
+    const scaleSw = preset.maxH ? `scale=-2:'min(${preset.maxH},ih)',` : '';
     if (is10bit || !canVaapiDecode(filePath)) {
-      // Software decode, then upload frames to the GPU for H.264 encode. This
-      // handles 10-bit sources and legacy AVI/XVID MPEG-4 files that VAAPI
-      // cannot reliably hardware-decode.
+      // Software decode → (optional downscale) → nv12 → GPU upload → H.264 encode.
+      // Handles 10-bit sources (this is where ~all 4K lands — 4K is near-always
+      // 10-bit HEVC) and legacy AVI/XVID MPEG-4 that VAAPI can't hardware-decode.
+      // -profile:v main drops High-profile 8x8 transform to ease client decode.
       ffmpegArgs.push(
         '-vaapi_device', '/dev/dri/renderD128',
-        '-vf', 'format=nv12,hwupload',
-        '-c:v', 'h264_vaapi', '-qp', String(preset.vaapiQp), '-maxrate', preset.maxrate, '-bufsize', preset.bufsize,
+        '-vf', `${scaleSw}format=nv12,hwupload`,
+        '-c:v', 'h264_vaapi', '-profile:v', 'main', '-qp', String(preset.vaapiQp), '-maxrate', preset.maxrate, '-bufsize', preset.bufsize,
       );
     } else {
-      // 8-bit source: full hardware decode + encode pipeline (fastest)
+      // 8-bit source, no cap ('high' preset): full hardware decode + encode
+      // pipeline (fastest, zero-copy on the GPU).
       ffmpegArgs.splice(ffmpegArgs.indexOf('-i'), 0,
         '-hwaccel', 'vaapi', '-hwaccel_device', '/dev/dri/renderD128', '-hwaccel_output_format', 'vaapi',
       );
-      ffmpegArgs.push('-c:v', 'h264_vaapi', '-qp', String(preset.vaapiQp), '-maxrate', preset.maxrate, '-bufsize', preset.bufsize);
+      ffmpegArgs.push('-c:v', 'h264_vaapi', '-profile:v', 'main', '-qp', String(preset.vaapiQp), '-maxrate', preset.maxrate, '-bufsize', preset.bufsize);
     }
     ffmpegArgs.push(
       '-c:a', 'aac', '-ac', '2', '-b:a', '192k',
@@ -2542,7 +2551,8 @@ function startFfmpeg(id, filePath, sessionDir, seekTime, startSegNum, audioStrea
     );
   } else {
     ffmpegArgs.push(
-      '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', String(preset.crf),
+      ...(preset.maxH ? ['-vf', `scale=-2:'min(${preset.maxH},ih)'`] : []),
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-profile:v', 'main', '-crf', String(preset.crf),
       '-maxrate', preset.maxrate, '-bufsize', preset.bufsize,
       '-pix_fmt', 'yuv420p',
       '-c:a', 'aac', '-ac', '2', '-b:a', '192k',
