@@ -95,6 +95,17 @@ export const api = {
   // On-demand OMDb enrichment (server caches hits AND misses)
   metadata: (id) => fetch(`/api/metadata/${encodeURIComponent(id)}`, opts('GET')).then(json),
 
+  // Row dismissals — the server keeps these per profile and clears one
+  // automatically when you play the item again.
+  dismissed: () => fetch('/api/dismissed', opts('GET')).then(json).catch(() => ({ continueWatching: {}, recentlyAdded: {} })),
+  dismissContinue: (id) => fetch(`/api/dismissed/continue-watching/${encodeURIComponent(id)}`, opts('POST')).then(json).catch(() => ({})),
+  undismissContinue: (id) => fetch(`/api/dismissed/continue-watching/${encodeURIComponent(id)}`, opts('DELETE')).then(json).catch(() => ({})),
+
+  // Intro/recap/outro timestamps for the Skip Intro button. The server tries a
+  // per-episode override, then the show-level entry, then IntroDB; {} means
+  // "nothing known" and is a perfectly normal answer, so never throw.
+  skipSegments: (id) => fetch(`/api/skip-segments/${encodeURIComponent(id)}`, opts('GET')).then(json).catch(() => ({})),
+
   // Profile management (admin)
   profileCreate: (body) => fetch('/api/profiles', opts('POST', body)).then(json),
   profileUpdate: (id, body) => fetch(`/api/profiles/${encodeURIComponent(id)}`, opts('PUT', body)).then(json),

@@ -1,7 +1,7 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
-  import { api, streamUrl } from '../api.js';
-  import { library, session } from '../stores.js';
+  import { api, streamUrl, posterUrl, backdropUrl } from '../api.js';
+  import { library, session, dismissed, AUTO_WATCHED_PERCENT } from '../stores.js';
   import { loadHls, parseVtt, cueAt, fmtTime } from '../player-core.js';
   import { episodeCode, episodeTitle } from '../format.js';
 
@@ -38,13 +38,91 @@
   let openMenu = $state('');
 
   const QUALITIES = [
-    { key: 'low', label: 'Data Saver' },
-    { key: 'auto', label: 'Auto' },
-    { key: 'high', label: 'High' },
+    { key: 'low', label: 'Data Saver (720p)' },
+    { key: 'auto', label: 'Auto (1080p)' },
+    { key: 'high', label: 'Full quality (up to 4K)' },
   ];
+
+  const SPEEDS = [0.75, 1, 1.25, 1.5, 1.75, 2];
+  let speed = $state(parseFloat(localStorage.getItem('v2Speed')) || 1);
+  function setSpeed(s) {
+    speed = s;
+    localStorage.setItem('v2Speed', String(s));
+    openMenu = '';
+    applySpeed();
+  }
+  // An HLS session restart swaps the source out from under the element, and a
+  // reloaded source can come back at 1x — so re-assert the rate rather than
+  // setting it once.
+  function applySpeed() { if (video && video.playbackRate !== speed) video.playbackRate = speed; }
 
   const total = $derived(totalDur || (isDirect ? videoDur : seekOffset + videoDur));
   const shownTime = $derived(scrubbing ? scrubTarget : cur);
+  // What the scrub thumbnail/clock is aiming at: the drag target while
+  // dragging, the pointer position while merely hovering.
+  const previewT = $derived(scrubbing ? scrubTarget : hoverT);
+
+  // ── Skip Intro ───────────────────────────────────────────────────────
+  // The server already knows where intros are (a per-episode override, a
+  // show-level entry, or IntroDB). It answers {} when it doesn't — that's
+  // the common case for films, so treat it as normal, not an error.
+  let intro = $state(null); // { start, end } in real-timeline seconds
+  // Only offer the skip while we're actually inside the intro, and only when
+  // it lands somewhere useful — a bogus range (end <= start, or past the end
+  // of the file) would strand the viewer at the credits.
+  const introValid = $derived(
+    !!intro && intro.end > intro.start && (!total || intro.end < total - 2),
+  );
+  const inIntro = $derived(
+    introValid && !scrubbing && cur >= intro.start && cur < intro.end - 0.5,
+  );
+
+  function skipIntro() {
+    if (!introValid) return;
+    seekTo(intro.end);
+    poke();
+  }
+
+  // ── Up next / autoplay ───────────────────────────────────────────────
+  // Nobody sits through the credits, so waiting for `ended` means autoplay
+  // effectively never fires. Advance early instead — but only as early as we
+  // can prove is safe: if the server knows where the credits start we roll
+  // shortly into them, otherwise we wait for the true end so we can never cut
+  // off content in a file that stops abruptly.
+  const UPNEXT_LEAD = 30;   // seconds the card is on screen before advancing
+  const OUTRO_GRACE = 10;   // once credits start, how long before advancing
+
+  let outro = $state(null);
+  let upnextDismissed = $state(false);
+  let advanced = false;     // one-shot: `ended` and the countdown both land here
+
+  const advanceAt = $derived(
+    !total ? 0
+      : (outro && outro.start > 0 && outro.start < total
+        ? Math.min(outro.start + OUTRO_GRACE, total)
+        : total),
+  );
+  const upnextIn = $derived(Math.max(0, Math.ceil(advanceAt - cur)));
+  const nearEnd = $derived(
+    !!total && !upnextDismissed && !scrubbing && !error
+    && cur >= advanceAt - UPNEXT_LEAD && cur < total,
+  );
+  const showUpnext = $derived(nearEnd && !!next);
+  // Finishing the last episode used to just dump you back on whatever page was
+  // behind the player with no explanation. Say so instead.
+  const showFinale = $derived(nearEnd && !next && !!item.showName);
+
+  function goNext() {
+    if (advanced) return;
+    advanced = true;
+    saveProgress(true);
+    if (next) onnext?.(next);
+    else onclose?.();
+  }
+
+  $effect(() => {
+    if (showUpnext && upnextIn <= 0) goNext();
+  });
 
   let hls = null;
   let loadSeq = 0;
@@ -215,7 +293,22 @@
     const pct = Math.round((t / total) * 100);
     api.progress({ id: item.id, currentTime: t, duration: total, profile: $session?.profileId });
     const prog = { currentTime: t, duration: total, percent: pct, updatedAt: Date.now() };
-    library.update((list) => list.map((i) => (i.id === item.id ? { ...i, progress: prog } : i)));
+    // Mirror the two things the server does with this same call, so the UI
+    // doesn't lag a page-load behind: it auto-marks watched above
+    // AUTO_WATCHED_PERCENT, and it un-dismisses anything you actively play.
+    // Without the first, finishing an episode leaves the show page still
+    // offering the episode you just watched.
+    library.update((list) => list.map((i) => (
+      i.id === item.id ? { ...i, progress: prog, watched: i.watched || pct > AUTO_WATCHED_PERCENT } : i
+    )));
+    if (pct > 0) {
+      dismissed.update((d) => {
+        if (!d.continueWatching?.[item.id]) return d;
+        const cw = { ...d.continueWatching };
+        delete cw[item.id];
+        return { ...d, continueWatching: cw };
+      });
+    }
   }
 
   // ── Subtitles: custom cue rendering so HLS session restarts (video
@@ -315,6 +408,9 @@
   }
   function onVideoClick() {
     if (touchRecently) return;
+    // An open menu should close on the next click anywhere, like every other
+    // player — and closing it shouldn't also pause what you're watching.
+    if (openMenu) { openMenu = ''; poke(); return; }
     togglePlay();
     poke();
   }
@@ -331,9 +427,15 @@
     onclose?.();
   }
   function handleEnded() {
-    saveProgress(true);
-    if (next) onnext?.(next);
-    else onclose?.();
+    // Cancelling the up-next card means "don't roll on". Honour that at the
+    // natural end too — otherwise Cancel only hides the card and the episode
+    // advances anyway, which is exactly what the viewer said no to.
+    if (upnextDismissed) {
+      saveProgress(true);
+      onclose?.();
+      return;
+    }
+    goNext(); // shared one-shot, so the countdown can't fire this a second time
   }
 
   // ── Seek-preview sprites (v1's sheets: cols×rows tiles, one per
@@ -394,19 +496,28 @@
     const p = Math.max(0, Math.min(1, (clientX - r.left) / r.width));
     return p * total;
   }
+  // Keep the preview pinned to the pointer for both hover and drag — a
+  // thumbnail that vanishes the moment you press down is missing at exactly
+  // the moment you're using it to aim (and touch never hovers at all).
+  function trackPointer(clientX) {
+    if (!bar) return;
+    const r = bar.getBoundingClientRect();
+    hoverX = Math.max(124, Math.min(r.width - 124, clientX - r.left));
+  }
   function barDown(e) {
     if (!total) return;
     scrubbing = true;
     scrubTarget = barTime(e.clientX);
+    trackPointer(e.clientX);
     bar.setPointerCapture(e.pointerId);
   }
   function barMove(e) {
-    if (scrubbing) scrubTarget = barTime(e.clientX);
-    else if (total) {
+    if (scrubbing) {
+      scrubTarget = barTime(e.clientX);
+      trackPointer(e.clientX);
+    } else if (total) {
       hoverT = barTime(e.clientX);
-      const r = bar.getBoundingClientRect();
-      // Clamp so the (scaled) thumb never hangs off the player edges.
-      hoverX = Math.max(124, Math.min(r.width - 124, e.clientX - r.left));
+      trackPointer(e.clientX);
     }
   }
   function barUp(e) {
@@ -417,6 +528,9 @@
 
   function onKey(e) {
     if (e.target.closest('input')) return;
+    // Never shadow browser/OS chords — without this, Ctrl+F (find) toggles
+    // fullscreen and Cmd+ArrowLeft (back) seeks instead.
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
     switch (e.key) {
       case ' ': case 'k': e.preventDefault(); togglePlay(); poke(); break;
       case 'ArrowLeft': e.preventDefault(); seekTo(cur - 10); poke(); break;
@@ -450,13 +564,20 @@
     // Full record: fresh resume point, subtitles, sync offset, audio tracks.
     try { full = await api.item(item.id); } catch { full = null; }
     const prog = full?.progress || item.progress || {};
-    const start = (prog.percent || 0) >= 95 ? 0 : (prog.currentTime > 5 ? prog.currentTime : 0);
+    const start = (prog.percent || 0) >= AUTO_WATCHED_PERCENT ? 0 : (prog.currentTime > 5 ? prog.currentTime : 0);
     cur = start;
 
     if (isDirect) { seekOffset = 0; loadDirect(start); }
     else loadHlsSession(start);
 
     loadSprites();
+    // Don't block playback on this — the button just appears once it lands.
+    api.skipSegments(item.id).then((s) => {
+      const i = s?.intro;
+      if (i && typeof i.start === 'number' && typeof i.end === 'number') intro = i;
+      const o = s?.outro;
+      if (o && typeof o.start === 'number') outro = o;
+    }).catch(() => {});
     progressTimer = setInterval(() => { if (!paused) saveProgress(); }, 5000);
     poke();
   });
@@ -509,8 +630,8 @@
     onpause={() => { paused = true; pausedAt = Date.now(); saveProgress(); poke(); }}
     onwaiting={() => { buffering = true; }}
     onstalled={() => { buffering = true; }}
-    onplaying={() => { buffering = false; }}
-    oncanplay={() => { buffering = false; }}
+    onplaying={() => { buffering = false; applySpeed(); }}
+    oncanplay={() => { buffering = false; applySpeed(); }}
     ontimeupdate={onTimeUpdate}
     onprogress={onProgress}
     ondurationchange={() => { videoDur = video?.duration || 0; }}
@@ -536,6 +657,43 @@
     </div>
   {/if}
 
+  {#if inIntro && !error}
+    <button class="skipintro" class:lifted={controlsOn} onclick={skipIntro}>
+      Skip Intro
+    </button>
+  {/if}
+
+  {#if showUpnext}
+    <div class="upnext" class:lifted={controlsOn}>
+      {#if posterUrl(next) || backdropUrl(next)}
+        <img class="unart" src={posterUrl(next) || backdropUrl(next)} alt="" loading="lazy" decoding="async" />
+      {/if}
+      <div class="unbody">
+        <span class="unlabel">Up next in {upnextIn}s</span>
+        <span class="untitle">{episodeCode(next)}</span>
+        <span class="unsub">{episodeTitle(next)}</span>
+        <div class="unrow">
+          <button class="unplay" onclick={goNext}>Play now</button>
+          <button class="uncancel" onclick={() => { upnextDismissed = true; }}>Cancel</button>
+        </div>
+      </div>
+    </div>
+  {/if}
+
+  {#if showFinale}
+    <div class="upnext" class:lifted={controlsOn}>
+      <div class="unbody">
+        <span class="unlabel">That's the last one</span>
+        <span class="untitle">{title}</span>
+        <span class="unsub">You've reached the end of what's here.</span>
+        <div class="unrow">
+          <button class="unplay" onclick={close}>Back to browse</button>
+          <button class="uncancel" onclick={() => { upnextDismissed = true; }}>Keep watching</button>
+        </div>
+      </div>
+    </div>
+  {/if}
+
   <div class="topbar-p">
     <button class="iconbtn back" onclick={close} aria-label="Close player">
       <svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
@@ -556,12 +714,12 @@
         <div class="filled" style={`width:${total ? Math.min(100, (shownTime / total) * 100) : 0}%`}></div>
         <div class="knob" style={`left:${total ? Math.min(100, (shownTime / total) * 100) : 0}%`}></div>
       </div>
-      {#if hoverT >= 0 && !scrubbing}
+      {#if scrubbing || hoverT >= 0}
         <div class="hoverwrap" style={`left:${hoverX}px`}>
           {#if sprite}
-            <div class="hoverthumb" style={thumbStyle(hoverT)}></div>
+            <div class="hoverthumb" style={thumbStyle(previewT)}></div>
           {/if}
-          <div class="hovertime">{fmtTime(hoverT)}</div>
+          <div class="hovertime">{fmtTime(previewT)}</div>
         </div>
       {/if}
     </div>
@@ -648,6 +806,22 @@
         </div>
       {/if}
 
+      <!-- Speed is a property of the video element, so it applies to direct
+           play and transcoded streams alike — not gated on !isDirect. -->
+      <div class="menuwrap">
+        <button class="iconbtn speedbtn" aria-label="Playback speed"
+                onclick={(e) => { e.stopPropagation(); openMenu = openMenu === 'speed' ? '' : 'speed'; }}>
+          <span class:on={speed !== 1}>{speed}×</span>
+        </button>
+        {#if openMenu === 'speed'}
+          <div class="menu" onclick={(e) => e.stopPropagation()}>
+            {#each SPEEDS as s (s)}
+              <button class:active={speed === s} onclick={() => setSpeed(s)}>{s === 1 ? 'Normal' : `${s}×`}</button>
+            {/each}
+          </div>
+        {/if}
+      </div>
+
       {#if !isDirect}
         <div class="menuwrap">
           <button class="iconbtn" aria-label="Quality"
@@ -692,7 +866,85 @@
     pointer-events: none;
     transition: bottom var(--t-med);
   }
-  .cue.lifted { bottom: 13%; }
+  .cue.lifted { bottom: max(13%, 96px); }
+
+  /* Bottom-right, the convention viewers already know. Deliberately NOT
+     hidden by `.idle` like the other chrome: the intro window is short, so a
+     button that vanishes with the controls is one you miss. */
+  .skipintro {
+    position: absolute; right: max(var(--s4), env(safe-area-inset-right)); bottom: 12%;
+    z-index: 6;
+    background: rgba(11, 11, 14, 0.72); color: var(--ink);
+    border: 1.5px solid rgba(242, 242, 244, 0.55);
+    font-size: 0.95rem; font-weight: 600; letter-spacing: 0.01em;
+    padding: 11px 26px; border-radius: var(--r-sm);
+    cursor: pointer;
+    transition: background var(--t-fast), border-color var(--t-fast), bottom var(--t-med);
+    animation: skipin var(--t-med) var(--ease);
+  }
+  .skipintro.lifted { bottom: max(17%, 108px); }
+  .skipintro:hover, .skipintro:focus-visible {
+    background: var(--cta); color: var(--cta-ink); border-color: var(--cta);
+  }
+  @keyframes skipin {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  /* The fade starts at opacity 0, so anything that stops it from advancing
+     would leave an invisible-but-clickable button. Drop the animation
+     entirely rather than risk that. */
+  @media (prefers-reduced-motion: reduce) {
+    .skipintro { animation: none; }
+  }
+  @media (max-width: 560px) {
+    .skipintro { padding: 9px 18px; font-size: 0.86rem; }
+  }
+
+  /* Up-next card: same bottom-right corner as Skip Intro. They can never be
+     on screen together (one is the first minute, the other the last). */
+  .upnext {
+    position: absolute; right: max(var(--s4), env(safe-area-inset-right)); bottom: 12%;
+    z-index: 6;
+    display: flex; gap: var(--s3); align-items: stretch;
+    width: min(400px, calc(100vw - 2 * var(--s4)));
+    padding: var(--s3);
+    background: rgba(11, 11, 14, 0.92);
+    border-radius: var(--r-md);
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.6), 0 0 0 1px var(--line-strong);
+    transition: bottom var(--t-med);
+    animation: skipin var(--t-med) var(--ease);
+  }
+  .upnext.lifted { bottom: max(17%, 108px); }
+  .unart {
+    width: 64px; flex: 0 0 64px;
+    object-fit: cover; border-radius: var(--r-sm);
+    background: var(--bg-raised);
+  }
+  .unbody { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+  .unlabel {
+    font-size: 0.68rem; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+  .untitle { font-size: 0.95rem; font-weight: 700; }
+  .unsub {
+    font-size: 0.8rem; color: var(--ink-soft);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .unrow { display: flex; gap: var(--s2); margin-top: var(--s2); }
+  .unplay, .uncancel {
+    font-size: 0.84rem; font-weight: 600;
+    padding: 7px 16px; border-radius: 99px; cursor: pointer;
+    transition: background var(--t-fast);
+  }
+  .unplay { background: var(--cta); color: var(--cta-ink); }
+  .unplay:hover { background: var(--ink); }
+  .uncancel { background: rgba(242, 242, 244, 0.14); color: var(--ink); }
+  .uncancel:hover { background: rgba(242, 242, 244, 0.26); }
+
+  @media (max-width: 560px) {
+    .upnext { left: var(--s4); width: auto; }
+    .unart { width: 48px; flex-basis: 48px; }
+  }
 
   .spin-wrap {
     position: absolute; inset: 0; display: grid; place-items: center;
@@ -716,10 +968,14 @@
     font-weight: 600; padding: 11px 24px; border-radius: var(--r-sm);
   }
 
+  /* index.html opts into viewport-fit=cover, so on a notched phone — and
+     landscape is the main way anyone watches — the notch and the home
+     indicator sit over the chrome unless we pad around them. */
   .topbar-p {
     position: absolute; top: 0; left: 0; right: 0;
     display: flex; align-items: center; gap: var(--s3);
-    padding: var(--s4);
+    padding: max(var(--s4), env(safe-area-inset-top)) max(var(--s4), env(safe-area-inset-right))
+             var(--s4) max(var(--s4), env(safe-area-inset-left));
     background: linear-gradient(rgba(0,0,0,0.7), transparent);
     transition: opacity var(--t-med);
   }
@@ -729,7 +985,8 @@
 
   .controls {
     position: absolute; left: 0; right: 0; bottom: 0;
-    padding: 0 var(--s4) var(--s3);
+    padding: 0 max(var(--s4), env(safe-area-inset-right))
+             max(var(--s3), env(safe-area-inset-bottom)) max(var(--s4), env(safe-area-inset-left));
     background: linear-gradient(transparent, rgba(0,0,0,0.85));
     transition: opacity var(--t-med);
   }
@@ -822,6 +1079,15 @@
     white-space: nowrap;
   }
   .nextbtn:hover { background: rgba(242, 242, 244, 0.24); }
+
+  /* Speed reads as a value, not a glyph, so it gets type instead of an icon.
+     It stays dim at 1x and lights up when you've changed it — the control
+     should be able to tell you it's on without opening the menu. */
+  .speedbtn span {
+    font-size: 0.82rem; font-weight: 700; letter-spacing: 0.02em;
+    font-variant-numeric: tabular-nums;
+  }
+  .speedbtn span.on { color: #6db3ff; }
 
   .menuwrap { position: relative; }
   .menu {
