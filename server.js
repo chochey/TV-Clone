@@ -735,6 +735,31 @@ app.post('/api/profiles', requireAdminSession, (req, res) => {
   res.json({ ok: true, profile: { id, name, username: uname, hasPin: !!pin, hasPassword: !!password, avatar, role: profile.role, permissions: validPerms } });
 });
 
+// Sessions snapshot role+permissions at login and are restored from disk on
+// restart, so a token outlives the account it belongs to: deleting a profile
+// or demoting it leaves a fully working cookie behind. Every change to who a
+// profile IS must therefore revoke its sessions. exceptToken spares the
+// caller's own cookie so an admin editing themselves isn't logged out.
+function revokeProfileSessions(profileId, exceptToken = null) {
+  let revoked = 0;
+  for (const [token, s] of sessions) {
+    if (s.profileId !== profileId || token === exceptToken) continue;
+    revokeAdminToken(token);
+    sessions.delete(token);
+    revoked++;
+  }
+  if (revoked) {
+    persistSessions();
+    console.log(`[Sessions] Revoked ${revoked} session(s) for profile ${profileId}`);
+  }
+  return revoked;
+}
+
+function sessionTokenOf(req) {
+  const m = (req.headers.cookie || '').match(new RegExp(`${COOKIE_NAME}=([a-f0-9]{64})`));
+  return m ? m[1] : (req.headers['x-session-token'] || null);
+}
+
 app.put('/api/profiles/:id', requireAdminSession, (req, res) => {
   const p = config.profiles.find(p => p.id === req.params.id);
   if (!p) return res.status(404).json({ error: 'Profile not found' });
@@ -752,6 +777,10 @@ app.put('/api/profiles/:id', requireAdminSession, (req, res) => {
   if (req.body.permissions !== undefined) p.permissions = Array.isArray(req.body.permissions) ? req.body.permissions.filter(x => VALID_PERMISSIONS.includes(x)) : [];
   if (req.body.password !== undefined) p.password = req.body.password ? hashPassword(req.body.password) : '';
   saveJSON(CONFIG_FILE, config);
+  // A new password must invalidate the old cookies, and a role/permission
+  // change only takes effect once the stale snapshot in the session is gone.
+  const authzChanged = req.body.password !== undefined || req.body.role !== undefined || req.body.permissions !== undefined;
+  if (authzChanged) revokeProfileSessions(p.id, sessionTokenOf(req));
   res.json({ ok: true });
 });
 
@@ -759,6 +788,7 @@ app.delete('/api/profiles/:id', requireAdminSession, (req, res) => {
   if (config.profiles.length <= 1) return res.status(400).json({ error: 'Must keep at least one profile' });
   config.profiles = config.profiles.filter(p => p.id !== req.params.id);
   saveJSON(CONFIG_FILE, config);
+  revokeProfileSessions(req.params.id);
   // Delete profile data file
   profileDataCache.delete(req.params.id);
   const dataPath = profileDataPath(req.params.id);
