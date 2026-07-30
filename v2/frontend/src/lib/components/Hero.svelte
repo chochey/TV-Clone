@@ -1,6 +1,6 @@
 <script>
   import { posterUrl, backdropUrl } from '../api.js';
-  import { enrichItem } from '../stores.js';
+  import { enrichItem, AUTO_WATCHED_PERCENT } from '../stores.js';
   let { item, onopen, onplay } = $props();
 
   $effect(() => { if (!posterUrl(item)) enrichItem(item.id); });
@@ -12,7 +12,7 @@
   const runtime = $derived(item.runtime && item.runtime !== 'N/A' ? item.runtime : '');
   const genres = $derived((item.genre || (item.genres || []).join(', ') || '').split(',').slice(0, 3).map((g) => g.trim()).filter(Boolean));
   const plot = $derived(item.plot && item.plot !== 'N/A' ? item.plot : '');
-  const resuming = $derived(item.progress?.percent > 0 && item.progress?.percent < 95);
+  const resuming = $derived(item.progress?.percent > 0 && item.progress?.percent < AUTO_WATCHED_PERCENT);
 
   // The real star of the hero: a landscape still from the actual file.
   // Preload it off-DOM; until it lands (or if it 404s) the blurred poster
@@ -87,10 +87,13 @@
   .backdrop {
     position: absolute; inset: 0;
     width: 100%; height: 100%; object-fit: cover; object-position: center 25%;
-    animation: reveal var(--t-slow) var(--ease) both, drift 24s ease-in-out infinite alternate;
+    animation: reveal var(--t-slow) var(--ease) both;
   }
   @keyframes reveal { from { opacity: 0; } to { opacity: 1; } }
-  @keyframes drift { from { transform: scale(1); } to { transform: scale(1.05); } }
+  /* NOTE: a continuous `drift` scale animation used to live here. It forced the
+     hero (with its 64px-blur .ambient sibling) to recomposite every frame, non-
+     stop — cheap on Windows/D3D but it pegs Linux/NVIDIA WebRender and made the
+     whole UI (scroll + video) janky. Removed; not worth the global stutter. */
 
   /* One scrim, three jobs: keep the topbar, the left column and the row
      seam readable while the middle of the still stays bright. */

@@ -1,7 +1,10 @@
 <script>
   import { posterUrl, backdropUrl } from '../api.js';
-  import { enrichItem } from '../stores.js';
-  let { item, onopen, onplay } = $props();
+  import { enrichItem, dismissFromContinue, AUTO_WATCHED_PERCENT } from '../stores.js';
+  import { episodeCode } from '../format.js';
+  // resume: rendered in the Continue Watching row — show which episode and how
+  // much is left, and offer a way to drop it from the row.
+  let { item, onopen, onplay, resume = false } = $props();
 
   // No poster? Ask OMDb once — the store patch re-renders this card.
   $effect(() => { if (!posterUrl(item)) enrichItem(item.id); });
@@ -12,6 +15,16 @@
   const year = $derived(item.year || item.omdbYear || '');
   const rating = $derived(item.imdbRating && item.imdbRating !== 'N/A' ? item.imdbRating : '');
   const pct = $derived(item.progress?.percent || 0);
+  const minsLeft = $derived.by(() => {
+    const p = item.progress;
+    if (!p?.duration || !p?.currentTime) return 0;
+    return Math.max(0, Math.round((p.duration - p.currentTime) / 60));
+  });
+  // "S3 · E7 · 24 min left" beats repeating "2008 · Series" on a resume card.
+  const resumeLine = $derived(
+    [item.epInfo ? episodeCode(item) : '', minsLeft ? `${minsLeft} min left` : '']
+      .filter(Boolean).join(' · '),
+  );
 
   // Art ladder: poster -> frame extracted from the file itself (cropped to
   // 2:3 by object-fit) -> typographic placeholder. Never a broken image.
@@ -29,10 +42,10 @@
 
 <div class="card" role="button" tabindex="0"
      onclick={() => onopen?.(item)}
-     onkeydown={(e) => (e.key === 'Enter' || e.key === ' ') && onopen?.(item)}>
+     onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onopen?.(item); } }}>
   <div class="art">
     {#if artSrc}
-      <img src={artSrc} alt={title} loading="lazy" onerror={artError} />
+      <img src={artSrc} alt={title} loading="lazy" decoding="async" onerror={artError} />
     {:else}
       <div class="placeholder">
         <span class="ptitle">{title}</span>
@@ -49,15 +62,27 @@
       </button>
     </div>
 
+    {#if resume}
+      <button class="dismiss" title="Remove from Continue Watching"
+              aria-label={`Remove ${title} from Continue Watching`}
+              onclick={(e) => { e.stopPropagation(); dismissFromContinue(item); }}>
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+      </button>
+    {/if}
+
     <!-- Always-visible info strip -->
     <div class="info-strip">
       <span class="t">{title}</span>
       <span class="y">
-        {year}{item.type === 'show' ? ' · Series' : ''}{rating ? ` · ★ ${rating}` : ''}
+        {#if resume && resumeLine}
+          {resumeLine}
+        {:else}
+          {year}{item.type === 'show' ? ' · Series' : ''}{rating ? ` · ★ ${rating}` : ''}
+        {/if}
       </span>
     </div>
 
-    {#if pct > 0 && pct < 95}
+    {#if pct > 0 && pct < AUTO_WATCHED_PERCENT}
       <div class="progress"><span style={`width:${pct}%`}></span></div>
     {/if}
   </div>
@@ -100,10 +125,25 @@
     width: 22px; height: 22px; border-radius: 99px;
     display: grid; place-items: center;
     font-size: 0.7rem; font-weight: 700;
-    background: rgba(11, 11, 14, 0.75); color: var(--ink);
-    backdrop-filter: blur(6px);
+    background: rgba(11, 11, 14, 0.88); color: var(--ink);
     box-shadow: 0 0 0 1px var(--line-strong);
   }
+
+  /* Sits opposite the watched badge. Hidden until the card is hovered or
+     focused so it doesn't clutter the row, but always present on touch, where
+     there is no hover to reveal it. */
+  .dismiss {
+    position: absolute; top: 7px; left: 7px; z-index: 2;
+    width: 22px; height: 22px; border-radius: 99px;
+    display: grid; place-items: center;
+    background: rgba(11, 11, 14, 0.88); color: var(--ink-soft);
+    box-shadow: 0 0 0 1px var(--line-strong);
+    opacity: 0; transition: opacity var(--t-fast), color var(--t-fast);
+    cursor: pointer;
+  }
+  .card:hover .dismiss, .card:focus-within .dismiss, .dismiss:focus-visible { opacity: 1; }
+  .dismiss:hover { color: var(--ink); }
+  @media (hover: none) { .dismiss { opacity: 1; } }
 
   .hover-overlay {
     position: absolute; inset: 0;
@@ -111,6 +151,12 @@
     background: rgba(11, 11, 14, 0.4);
     opacity: 0; transition: opacity var(--t-med);
     pointer-events: none;
+  }
+  /* On touch there is no hover to reveal this, but `.play` re-enables pointer
+     events inside it — which left an invisible 48px play button in the middle
+     of every poster that hijacked the tap. Remove it where hover can't happen. */
+  @media (hover: none) {
+    .hover-overlay { display: none; }
   }
   .card:hover .hover-overlay, .card:focus-within .hover-overlay { opacity: 1; }
   .play {

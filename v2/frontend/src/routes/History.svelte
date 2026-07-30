@@ -1,7 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { api, posterUrl } from '../lib/api.js';
-  import { library, session } from '../lib/stores.js';
+  import { library, session, AUTO_WATCHED_PERCENT } from '../lib/stores.js';
   import { navigate } from '../lib/router.js';
   import { fmtTime } from '../lib/player-core.js';
 
@@ -52,10 +52,10 @@
           <div class="text">
             <span class="t">{(r.item?.showName || r.item?.title || r.title || r.id).replace(/^\(auto\)\s*/i, '')}</span>
             <span class="w meta">{when(r.timestamp)}</span>
-            {#if pct > 0 && pct < 95}
+            {#if pct > 0 && pct < AUTO_WATCHED_PERCENT}
               <span class="bar"><span style={`width:${pct}%`}></span></span>
               <span class="left">{r.item?.progress?.duration ? fmtTime(r.item.progress.duration - r.item.progress.currentTime) + ' left' : ''}</span>
-            {:else if r.item?.watched || pct >= 95}
+            {:else if r.item?.watched || pct >= AUTO_WATCHED_PERCENT}
               <span class="done meta">✓ Watched</span>
             {/if}
           </div>

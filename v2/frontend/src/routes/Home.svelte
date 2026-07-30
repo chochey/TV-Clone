@@ -33,7 +33,7 @@
   {/if}
 
   <div class="rows">
-    <Row title="Continue Watching" items={cont} {onopen} {onplay} />
+    <Row title="Continue Watching" items={cont} {onopen} {onplay} resume />
     <Row title="Recently Added" items={$recentlyAdded} {onopen} {onplay} size="lg" />
     {#each $genreClusters as cluster (cluster.name)}
       <Row title={cluster.name} items={cluster.items} {onopen} {onplay} />

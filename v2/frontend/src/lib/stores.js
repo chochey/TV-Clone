@@ -1,4 +1,4 @@
-import { writable, derived } from 'svelte/store';
+import { writable, derived, get } from 'svelte/store';
 import { api } from './api.js';
 import { loadNotifications } from './notifications.js';
 
@@ -7,10 +7,46 @@ export const library = writable([]);       // full library array
 export const libraryLoaded = writable(false);
 export const searchQuery = writable('');   // shared: header search box <-> Search page
 
+// Per-profile row dismissals, mirrored from the server so a hidden row stays
+// hidden across devices. Shape: { continueWatching: {id:true}, recentlyAdded: {} }
+export const dismissed = writable({ continueWatching: {}, recentlyAdded: {} });
+
+export async function loadDismissed() {
+  try { dismissed.set(await api.dismissed()); } catch {}
+}
+
+// Hiding is optimistic — the row should disappear on click, not on round-trip.
+// A show's card stands for the whole show, so dismiss every in-progress episode
+// of it; dismissing only the one on screen would just promote the next episode
+// into the slot, which reads as "the button didn't work".
+export function dismissFromContinue(item) {
+  const ids = item.showName
+    ? get(library)
+      .filter((m) => m.showName === item.showName && m.progress?.percent > 0 && m.progress?.percent < FINISHED_PERCENT)
+      .map((m) => m.id)
+    : [item.id];
+  dismissed.update((d) => {
+    const cw = { ...d.continueWatching };
+    for (const id of ids) cw[id] = true;
+    return { ...d, continueWatching: cw };
+  });
+  for (const id of ids) api.dismissContinue(id);
+}
+
+// Anything past this is "done". Mirrors AUTO_WATCHED_PERCENT in server.js —
+// keep the two in step, or the client will disagree with what the server
+// already recorded. The old client value of 95 sat above the server's, so
+// finished titles piled up in Continue Watching forever (112 of them were
+// stranded at 75-94%, stopped during the credits).
+export const AUTO_WATCHED_PERCENT = 92;
+const FINISHED_PERCENT = AUTO_WATCHED_PERCENT;
+
 // Continue Watching: in-progress items, most-recent first, de-duped per show.
-export const continueWatching = derived(library, ($lib) => {
+export const continueWatching = derived([library, dismissed], ([$lib, $dismissed]) => {
+  const hidden = $dismissed.continueWatching || {};
   const inProgress = $lib
-    .filter((m) => m.progress?.percent > 0 && m.progress?.percent < 95)
+    .filter((m) => m.progress?.percent > 0 && m.progress?.percent < FINISHED_PERCENT)
+    .filter((m) => !hidden[m.id])
     .sort((a, b) => (b.progress?.updatedAt || 0) - (a.progress?.updatedAt || 0));
   const seen = new Set();
   const out = [];
@@ -168,6 +204,7 @@ export async function loadLibrary(profileId) {
   const items = Array.isArray(data) ? data : data.items || [];
   library.set(items);
   libraryLoaded.set(true);
+  loadDismissed(); // rows the user hid, per profile — don't block the library on it
   startLiveUpdates(profileId);
   return items;
 }

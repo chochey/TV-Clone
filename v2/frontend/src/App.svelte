@@ -35,7 +35,22 @@
   function showToast(msg) {
     toast = msg;
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => { toast = ''; }, 3000);
+    toastTimer = setTimeout(() => { toast = ''; }, 5000);
+  }
+
+  // Fullscreen renders ONLY the fullscreened element (the player), so a toast
+  // mounted at the app root is invisible while watching fullscreen — the exact
+  // moment downloads finish. This action re-parents the toast into the
+  // fullscreen element (and back out when fullscreen ends). Svelte tracks the
+  // node by reference, so text updates and {#if} teardown survive the move.
+  function portalToFullscreen(node) {
+    const move = () => {
+      const fs = document.fullscreenElement;
+      if (fs && node.parentElement !== fs) fs.appendChild(node);
+    };
+    move();
+    document.addEventListener('fullscreenchange', move);
+    return { destroy() { document.removeEventListener('fullscreenchange', move); } };
   }
 
   onMount(async () => {
@@ -107,9 +122,24 @@
     searchFocused = false;
     navigate('/search');
   }
+  // Arrow keys move through the suggestions; Enter opens the highlighted one
+  // if you picked it deliberately, otherwise the full results page. Enter used
+  // to jump straight to whatever ranked first, which turns the web's most
+  // universal keypress into a guess.
+  let searchHighlight = $state(-1);
+  $effect(() => { $searchQuery; searchHighlight = -1; });
   function onSearchKey(e) {
-    if (e.key === 'Escape') { searchFocused = false; e.currentTarget.blur(); }
-    else if (e.key === 'Enter' && searchSuggestions[0]) pickResult(searchSuggestions[0]);
+    if (e.key === 'Escape') { searchFocused = false; e.currentTarget.blur(); return; }
+    if (e.key === 'ArrowDown' && searchSuggestions.length) {
+      e.preventDefault();
+      searchHighlight = Math.min(searchHighlight + 1, searchSuggestions.length - 1);
+    } else if (e.key === 'ArrowUp' && searchSuggestions.length) {
+      e.preventDefault();
+      searchHighlight = Math.max(searchHighlight - 1, -1);
+    } else if (e.key === 'Enter') {
+      if (searchHighlight >= 0 && searchSuggestions[searchHighlight]) pickResult(searchSuggestions[searchHighlight]);
+      else if ($searchQuery.trim().length >= 2) seeAllResults();
+    }
   }
 
   // ── User menu: history/requests + permission-gated system pages ──────
@@ -225,14 +255,14 @@
 
 {#if phase === 'loading'}
   <div class="splash">
-    <div class="mark display">CHOCHEY'S</div>
+    <div class="mark display"><span class="wordmark">CHOCHEY<span class="brandtv">TV</span></span></div>
     <div class="marksub meta">Media Server</div>
     <div class="spinner"></div>
   </div>
 {:else if phase === 'login'}
   <div class="splash">
     <form class="login" onsubmit={signIn}>
-      <div class="mark display">CHOCHEY'S</div>
+      <div class="mark display"><span class="wordmark">CHOCHEY<span class="brandtv">TV</span></span></div>
       <div class="marksub meta">Media Server</div>
       <input
         type="text" placeholder="Username" autocomplete="username"
@@ -251,7 +281,7 @@
 {:else}
   <header class="topbar" class:solid={scrollY > 24}>
     <button class="brand display" onclick={() => navigate('/')}>
-      CHOCHEY'S<span class="brandsub">MEDIA SERVER</span>
+      <span class="wordmark">CHOCHEY<span class="brandtv">TV</span></span>
     </button>
     <nav>
       <a class:active={$route.name === 'home'} href="/" onclick={(e) => { e.preventDefault(); navigate('/'); }}>Home</a>
@@ -276,9 +306,9 @@
 
       {#if searchDropOpen}
         <div class="search-drop" role="listbox">
-          {#each searchSuggestions as item (item.id)}
+          {#each searchSuggestions as item, i (item.id)}
             {@const t = item.showName || item.title || item.omdbTitle || 'Untitled'}
-            <button class="sresult" onclick={() => pickResult(item)}>
+            <button class="sresult" class:hi={i === searchHighlight} onclick={() => pickResult(item)}>
               {#if posterUrl(item)}
                 <img src={posterUrl(item)} alt="" loading="lazy" />
               {:else}
@@ -422,7 +452,7 @@
 {/if}
 
 {#if toast}
-  <div class="toast">{toast}</div>
+  <div class="toast" use:portalToFullscreen>{toast}</div>
 {/if}
 
 <style>
@@ -469,14 +499,16 @@
     position: fixed; top: 0; left: 0; right: 0; z-index: 50;
     display: flex; align-items: center; justify-content: space-between;
     padding: var(--s3) var(--gutter);
-    background: rgba(11, 11, 14, 0.92);
-    backdrop-filter: blur(12px);
+    /* No backdrop-filter: a blur on a FIXED bar re-blurs everything scrolling
+       behind it on every frame — a major scroll-jank source on Linux/NVIDIA
+       WebRender. The background is near-opaque anyway, so the blur added almost
+       nothing visually. Solid bg = the content just scrolls under a cheap layer. */
+    background: rgba(11, 11, 14, 0.96);
     border-bottom: 1px solid transparent;
     transition: background var(--t-med), border-color var(--t-med);
   }
   .topbar.solid {
-    background: rgba(11, 11, 14, 0.97);
-    backdrop-filter: blur(16px);
+    background: rgba(11, 11, 14, 0.985);
     border-bottom-color: var(--line);
   }
   .brand {
@@ -486,11 +518,8 @@
     color: var(--ink);
     white-space: nowrap;
   }
-  .brandsub {
-    font-size: 0.62rem; font-weight: 600;
-    letter-spacing: 0.3em;
-    color: var(--ink-faint);
-  }
+  .wordmark { display: inline-flex; align-items: baseline; }
+  .brandtv { color: var(--ink-soft); }
   .marksub { margin-top: calc(-1 * var(--s4)); letter-spacing: 0.3em; color: var(--ink-faint); }
   nav { display: flex; gap: var(--s5); margin-left: var(--s4); }
 
@@ -547,7 +576,7 @@
     padding: 6px 8px; border-radius: var(--r-sm); text-align: left;
     transition: background var(--t-fast);
   }
-  .sresult:hover { background: rgba(242, 242, 244, 0.1); }
+  .sresult:hover, .sresult.hi { background: rgba(242, 242, 244, 0.1); }
   .sresult img, .sthumb {
     width: 34px; height: 50px; flex: 0 0 auto; border-radius: 4px;
     object-fit: cover; background: rgba(242, 242, 244, 0.08);
@@ -682,7 +711,6 @@
      side margins) so the nav and a usable search box coexist on one row
      well below desktop widths, instead of the box crushing to its icon. */
   @media (max-width: 900px) {
-    .brandsub { display: none; }
     .brand { letter-spacing: 0.2em; font-size: 0.92rem; }
     nav { gap: var(--s3); margin-left: var(--s3); }
     .searchbox { margin: 0 var(--s3); }

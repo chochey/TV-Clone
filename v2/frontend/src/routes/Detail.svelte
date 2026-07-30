@@ -1,6 +1,6 @@
 <script>
   import { api, posterUrl, backdropUrl } from '../lib/api.js';
-  import { library, libraryLoaded, session, enrichItem } from '../lib/stores.js';
+  import { library, libraryLoaded, session, enrichItem, AUTO_WATCHED_PERCENT } from '../lib/stores.js';
   import { navigate } from '../lib/router.js';
   import { episodeTitle, episodeCode } from '../lib/format.js';
 
@@ -52,12 +52,18 @@
       (a.epInfo?.season ?? 999) - (b.epInfo?.season ?? 999) ||
       (a.epInfo?.episode ?? 999) - (b.epInfo?.episode ?? 999));
   });
-  const seasons = $derived(
-    [...new Set(episodes.map((e) => e.epInfo?.season).filter((s) => s != null))].sort((a, b) => a - b),
-  );
+  // Episodes whose season never parsed (specials, movies, oddly-named files)
+  // used to have no tab they could appear under, so they were in the library
+  // but unreachable from the show. Give them a home.
+  const EXTRAS = 'extras';
+  const hasExtras = $derived(episodes.some((e) => e.epInfo?.season == null));
+  const seasons = $derived([
+    ...[...new Set(episodes.map((e) => e.epInfo?.season).filter((s) => s != null))].sort((a, b) => a - b),
+    ...(hasExtras ? [EXTRAS] : []),
+  ]);
   const inProgressEp = $derived(
     episodes
-      .filter((e) => e.progress?.percent > 0 && e.progress?.percent < 95)
+      .filter((e) => e.progress?.percent > 0 && e.progress?.percent < AUTO_WATCHED_PERCENT)
       .sort((a, b) => (b.progress?.updatedAt || 0) - (a.progress?.updatedAt || 0))[0] || null,
   );
   // What the big Play button should start: mid-episode > first unwatched > pilot.
@@ -68,7 +74,11 @@
   $effect(() => {
     if (season == null && seasons.length) season = nextUp?.epInfo?.season ?? seasons[0];
   });
-  const seasonEpisodes = $derived(episodes.filter((e) => e.epInfo?.season === season));
+  const seasonEpisodes = $derived(
+    season === EXTRAS
+      ? episodes.filter((e) => e.epInfo?.season == null)
+      : episodes.filter((e) => e.epInfo?.season === season),
+  );
 
   // ── Backdrop stage (same ladder as the home hero) ──────────────────
   const artItem = $derived(isShow ? (nextUp || item) : item);
@@ -86,7 +96,7 @@
   $effect(() => { if (item && !posterUrl(item)) enrichItem(item.id); });
 
   const playTarget = $derived(isShow ? nextUp : m);
-  const resuming = $derived(playTarget?.progress?.percent > 0 && playTarget?.progress?.percent < 95);
+  const resuming = $derived(playTarget?.progress?.percent > 0 && playTarget?.progress?.percent < AUTO_WATCHED_PERCENT);
   const playLabel = $derived(
     (resuming ? 'Resume' : 'Play') + (isShow && playTarget?.epInfo ? ` ${episodeCode(playTarget)}` : ''),
   );
@@ -135,7 +145,10 @@
 {:else}
   <div class="detail">
     <div class="stage">
-      {#if poster && !posterFailed}
+      <!-- Ambient wash is the FALLBACK for a missing backdrop. Once the real
+           backdrop loads it covers this completely, so painting a 64px blur
+           underneath is invisible work on every title page. -->
+      {#if poster && !posterFailed && !backdropSrc}
         <div class="ambient" style={`background-image:url(${poster})`}></div>
       {/if}
       {#if backdropSrc}
@@ -145,7 +158,8 @@
     </div>
 
     <div class="content">
-      <button class="back" onclick={() => navigate('/')} aria-label="Back to home">← Home</button>
+      <!-- Go back where they came from (Films, Search, History), not always Home. -->
+      <button class="back" onclick={() => (history.length > 1 ? history.back() : navigate('/'))} aria-label="Go back">← Back</button>
 
       <div class="cols">
         <div class="posterwrap">
@@ -199,11 +213,11 @@
                   role="tab" aria-selected={s === season}
                   class:active={s === season}
                   onclick={() => { season = s; }}
-                >Season {s}</button>
+                >{s === EXTRAS ? 'Extras' : `Season ${s}`}</button>
               {/each}
             </div>
           {:else}
-            <h2 class="oneseason">Season {seasons[0]}</h2>
+            <h2 class="oneseason">{seasons[0] === EXTRAS ? 'Extras' : `Season ${seasons[0]}`}</h2>
           {/if}
 
           <div class="eplist">
@@ -212,10 +226,10 @@
               <div class="ep" class:nextup={e.id === nextUp?.id} role="button" tabindex="0"
                    onclick={() => onplay?.(e)}
                    onkeydown={(ev) => (ev.key === 'Enter' || ev.key === ' ') && onplay?.(e)}>
-                <span class="num">{e.epInfo?.episode === 0 ? 'SP' : e.epInfo?.episode}</span>
+                <span class="num">{e.epInfo?.episode === 0 ? 'SP' : (e.epInfo?.episode ?? '·')}</span>
                 <div class="eptext">
                   <span class="eptitle">{episodeTitle(e)}</span>
-                  {#if pct > 0 && pct < 95}
+                  {#if pct > 0 && pct < AUTO_WATCHED_PERCENT}
                     <span class="epbar"><span style={`width:${pct}%`}></span></span>
                   {/if}
                 </div>
