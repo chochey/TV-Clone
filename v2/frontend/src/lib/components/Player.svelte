@@ -287,11 +287,35 @@
   }
 
   // ── Progress sync (v1 contract: every 5s + on pause/close/ended) ────
-  function saveProgress(ended = false) {
-    if (!total) return;
+  // The position we'd persist right now, or null if we don't know one yet.
+  function progressPayload(ended = false) {
+    if (!total) return null;
     const t = ended ? total : cur;
+    return { id: item.id, currentTime: t, duration: total, profile: $session?.profileId };
+  }
+
+  // Last-gasp save for when the document is going away: closing the tab,
+  // quitting the browser, locking the phone. onDestroy does NOT run then, and
+  // a normal fetch would be cancelled mid-flight, so this goes out by beacon.
+  // Without it the only thing standing between you and a lost position is the
+  // 5s autosave -- and that doesn't run at all while paused, so a seek made
+  // while paused was simply lost.
+  let teardownSaved = false;
+  function flushProgressOnTeardown() {
+    if (teardownSaved) return;   // pagehide can follow visibilitychange
+    const body = progressPayload();
+    if (!body) return;
+    teardownSaved = true;
+    api.progressBeacon(body);
+  }
+
+  function saveProgress(ended = false) {
+    const body = progressPayload(ended);
+    if (!body) return;
+    const t = body.currentTime;
     const pct = Math.round((t / total) * 100);
-    api.progress({ id: item.id, currentTime: t, duration: total, profile: $session?.profileId });
+    teardownSaved = false; // a fresh position supersedes any teardown flush
+    api.progress(body);
     const prog = { currentTime: t, duration: total, percent: pct, updatedAt: Date.now() };
     // Mirror the two things the server does with this same call, so the UI
     // doesn't lag a page-load behind: it auto-marks watched above
@@ -579,8 +603,18 @@
       if (o && typeof o.start === 'number') outro = o;
     }).catch(() => {});
     progressTimer = setInterval(() => { if (!paused) saveProgress(); }, 5000);
+    // Both events, deliberately: pagehide is the reliable desktop signal for a
+    // closing tab, but mobile browsers frequently kill a backgrounded page
+    // without ever firing it, and visibilitychange is the one that survives an
+    // app switch or screen lock. flushProgressOnTeardown de-dupes.
+    window.addEventListener('pagehide', flushProgressOnTeardown);
+    document.addEventListener('visibilitychange', onVisibilityChange);
     poke();
   });
+
+  function onVisibilityChange() {
+    if (document.visibilityState === 'hidden') flushProgressOnTeardown();
+  }
 
   onDestroy(() => {
     clearInterval(progressTimer);
@@ -588,6 +622,11 @@
     clearTimeout(retryTimer);
     clearTimeout(touchTapTimer);
     clearTimeout(spritePollTimer);
+    // Must come off before the final save: a listener left behind would keep a
+    // closure over this item and could beacon a stale position later, clobbering
+    // whatever the viewer moved on to.
+    window.removeEventListener('pagehide', flushProgressOnTeardown);
+    document.removeEventListener('visibilitychange', onVisibilityChange);
     saveProgress();
     loadSeq++; // invalidate in-flight session loads
     destroyHls();

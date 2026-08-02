@@ -41,6 +41,16 @@ export const api = {
   queue: (profile) => fetch(`/api/queue?profile=${encodeURIComponent(profile)}`, opts('GET')).then(json).catch(() => []),
   history: (profile) => fetch(`/api/history?profile=${encodeURIComponent(profile)}`, opts('GET')).then(json).catch(() => []),
   progress: (body) => fetch('/api/progress', opts('POST', body)).then(json).catch(() => ({})),
+  // Same save, but for the moment the page is being torn down (tab closed,
+  // browser quit, phone locked). A fetch() in flight is cancelled when the
+  // document goes away; sendBeacon is handed to the browser, which delivers it
+  // regardless. Same-origin, so the session cookie still rides along.
+  progressBeacon: (body) => {
+    try {
+      const blob = new Blob([JSON.stringify(body)], { type: 'application/json' });
+      return navigator.sendBeacon('/api/progress', blob);
+    } catch { return false; }
+  },
   toggleWatched: (id, watched, profile) =>
     fetch(`/api/watched/${encodeURIComponent(id)}`, opts('POST', { watched, profile })).then(json).catch(() => ({})),
 
