@@ -132,6 +132,7 @@
   let recoverFromT = -1;   // position of the last auto-restart
   let root = $state(null);
   let progressTimer = null;
+  let stallTimer = null;
   let idleTimer = null;
 
   // ── Media loading ───────────────────────────────────────────────────
@@ -240,6 +241,50 @@
       return !(await r.json()).alive;
     } catch { return false; }
   }
+  // ── Stall watchdog ─────────────────────────────────────────────────
+  // The hls.js ERROR handler above bails on `!data.fatal`, but a buffer
+  // stall is NOT fatal — hls.js nudges a few times and then simply gives
+  // up, leaving the video frozen with nothing reported. Remuxed files are
+  // the usual cause: `-c:v copy` can only cut segments on keyframes, so a
+  // source with irregular keyframes yields segments from ~1s to ~10s and
+  // the playhead can land in a gap the nudger won't cross.
+  // Nothing else notices this, so watch playback directly: if we're meant
+  // to be playing and the clock isn't moving, hop the gap; if that keeps
+  // failing, rebuild the session.
+  const STALL_AFTER_MS = 3000;
+  let lastPos = -1;
+  let lastPosAt = 0;
+  let stallNudges = 0;
+
+  function stallCheck() {
+    if (!video || paused || error || scrubbing || video.readyState === 0) return;
+    const now = Date.now();
+    if (lastPos < 0 || Math.abs(video.currentTime - lastPos) > 0.05) {
+      lastPos = video.currentTime;      // progressing normally
+      lastPosAt = now;
+      stallNudges = 0;
+      return;
+    }
+    if (now - lastPosAt < STALL_AFTER_MS) return;
+
+    // Is there buffered media just ahead that we're failing to reach?
+    let target = -1;
+    for (let i = 0; i < (video.buffered?.length || 0); i++) {
+      const s = video.buffered.start(i);
+      if (s > video.currentTime && s - video.currentTime < 30) { target = s + 0.05; break; }
+    }
+    lastPosAt = now;
+    stallNudges++;
+    if (target > 0 && stallNudges <= 3) {
+      video.currentTime = target;       // skip the hole between segments
+      video.play().catch(() => {});
+    } else if (stallNudges > 3) {
+      stallNudges = 0;
+      if (isDirect) { video.play().catch(() => {}); return; }
+      recoverSession();                 // nothing ahead — rebuild from here
+    }
+  }
+
   function recoverSession() {
     if (recoverAttempts >= 3) { error = 'Playback failed after several retries.'; return; }
     recoverAttempts++;
@@ -603,6 +648,7 @@
       if (o && typeof o.start === 'number') outro = o;
     }).catch(() => {});
     progressTimer = setInterval(() => { if (!paused) saveProgress(); }, 5000);
+    stallTimer = setInterval(stallCheck, 1000);
     // Both events, deliberately: pagehide is the reliable desktop signal for a
     // closing tab, but mobile browsers frequently kill a backgrounded page
     // without ever firing it, and visibilitychange is the one that survives an
@@ -618,6 +664,7 @@
 
   onDestroy(() => {
     clearInterval(progressTimer);
+    clearInterval(stallTimer);
     clearTimeout(idleTimer);
     clearTimeout(retryTimer);
     clearTimeout(touchTapTimer);
