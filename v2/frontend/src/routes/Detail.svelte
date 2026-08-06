@@ -23,7 +23,16 @@
   const poster = $derived(posterUrl(m));
   const year = $derived(m.year || m.omdbYear || '');
   const rating = $derived(m.imdbRating && m.imdbRating !== 'N/A' ? m.imdbRating : '');
-  const runtime = $derived(m.runtime && m.runtime !== 'N/A' ? m.runtime : '');
+  // OMDb reports a per-episode runtime for some series and gets it badly wrong
+  // — Top Gear, Reacher, Fringe and eleven others come back as "1 min", which
+  // then leads the metadata row. Nothing real is under five minutes, so treat
+  // anything shorter as missing rather than printing a number we know is false.
+  const runtime = $derived.by(() => {
+    const raw = m.runtime;
+    if (!raw || raw === 'N/A') return '';
+    const mins = parseInt(String(raw), 10);
+    return Number.isFinite(mins) && mins < 5 ? '' : raw;
+  });
   const rated = $derived(m.rated && m.rated !== 'N/A' ? m.rated : '');
   const genres = $derived((m.genre || (m.genres || []).join(', ') || '').split(',').map((g) => g.trim()).filter(Boolean));
   const plot = $derived(m.plot && m.plot !== 'N/A' ? m.plot : '');

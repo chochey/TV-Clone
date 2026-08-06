@@ -51,8 +51,12 @@ export const api = {
       return navigator.sendBeacon('/api/progress', blob);
     } catch { return false; }
   },
+  // The id goes in the BODY — there is no /api/watched/:id route, and posting
+  // to one 404s. No .catch here on purpose: swallowing the error is what let
+  // this fail silently for so long, because the caller's optimistic update ran
+  // regardless and the tick only disappeared on the next library refresh.
   toggleWatched: (id, watched, profile) =>
-    fetch(`/api/watched/${encodeURIComponent(id)}`, opts('POST', { watched, profile })).then(json).catch(() => ({})),
+    fetch('/api/watched', opts('POST', { id, watched, profile })).then(json),
 
   // Health (loading screen)
   health: () => fetch('/api/health', opts('GET')).then(json).catch(() => null),

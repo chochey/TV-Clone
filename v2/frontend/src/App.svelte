@@ -53,22 +53,35 @@
     return { destroy() { document.removeEventListener('fullscreenchange', move); } };
   }
 
-  onMount(async () => {
-    // Wait for the v1 backend to be ready (it may be mid-scan).
-    let health = await api.health();
-    for (let i = 0; i < 30 && !(health && health.ready); i++) {
-      await new Promise((r) => setTimeout(r, 1500));
-      health = await api.health();
-    }
-    const me = await api.me();
-    if (me && me.loggedIn) {
+  // Why this is a named function and not just onMount: if anything in here
+  // throws, the splash has to stop spinning and offer a way out. loadLibrary
+  // was previously awaited bare, so a 500 — or the 502 you get for a few
+  // seconds after restarting the server from the account menu — left the app
+  // on the loading screen forever with no error and no retry.
+  let bootMsg = $state('');
+  async function boot() {
+    phase = 'loading';
+    bootMsg = '';
+    try {
+      let health = await api.health();
+      for (let i = 0; i < 30 && !(health && health.ready); i++) {
+        // health() resolves null when the server is unreachable, but returns
+        // {ready:false} while it is merely starting. Say which.
+        bootMsg = health ? 'Server is starting…' : 'Waiting for the server…';
+        await new Promise((r) => setTimeout(r, 1500));
+        health = await api.health();
+      }
+      const me = await api.me();
+      if (!me || !me.loggedIn) { phase = 'login'; return; }
       session.set(me);
       await loadLibrary(me.profileId);
       phase = 'ready';
-    } else {
-      phase = 'login';
+    } catch {
+      phase = 'offline';
     }
-  });
+  }
+
+  onMount(boot);
 
   // v1 auth is username + password (profiles stay hidden until signed in).
   async function signIn(e) {
@@ -258,6 +271,15 @@
     <div class="mark display"><span class="wordmark">CHOCHEY<span class="brandtv">TV</span></span></div>
     <div class="marksub meta">Media Server</div>
     <div class="spinner"></div>
+    {#if bootMsg}<p class="meta bootmsg">{bootMsg}</p>{/if}
+  </div>
+{:else if phase === 'offline'}
+  <div class="splash">
+    <div class="mark display"><span class="wordmark">CHOCHEY<span class="brandtv">TV</span></span></div>
+    <div class="marksub meta">Media Server</div>
+    <p class="err">Can't reach the server.</p>
+    <p class="meta bootmsg">It may still be restarting — give it a moment, then try again.</p>
+    <button class="cta retry" onclick={boot}>Try again</button>
   </div>
 {:else if phase === 'login'}
   <div class="splash">
@@ -494,6 +516,8 @@
   .cta:disabled { opacity: 0.4; cursor: default; }
   .cta:not(:disabled):hover { opacity: 0.88; }
   .err { color: #ff6b6b; font-size: 0.88rem; text-align: center; margin-top: var(--s2); }
+  .bootmsg { margin-top: var(--s3); text-align: center; }
+  .retry { margin-top: var(--s4); padding: 10px 26px; width: auto; }
 
   .topbar {
     position: fixed; top: 0; left: 0; right: 0; z-index: 50;
