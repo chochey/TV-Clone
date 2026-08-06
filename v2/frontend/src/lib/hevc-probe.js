@@ -7,24 +7,39 @@
 // with PIPELINE_ERROR_DECODE the moment a real frame arrived. Shipping
 // passthrough off those answers would have handed people a black screen.
 //
-// So we decode a real clip and confirm pixels came out of it. The clip is one
-// GOP cut from the library with `-c:v copy`, so it is exactly the kind of data
-// passthrough would deliver: Main 10, level 4.0, 1920x816, hvc1-tagged.
+// So we decode real clips and confirm pixels came out of them. Each is a
+// single GOP cut from the library with `-c:v copy`, so they are exactly the
+// kind of data passthrough delivers: Main 10, hvc1-tagged, untouched bitstream.
+//
+// The answer is a *level*, not a yes/no, because the server refuses to pass
+// through anything above what the browser demonstrably decoded.
 
-const PROBE_URL = '/hevc-probe.mp4';
-const PROBE_MIME = 'video/mp4; codecs="hvc1.2.4.L120.B0"';
-
-// The level the probe clip proves, in ffprobe units (×3, so 120 is L4.0). The
-// server refuses passthrough above whatever we report here, which is why this
-// is the clip's real level and not a guess — a decoder that handles L4.0 has
-// not thereby shown it handles the L5.1 files in the library.
-export const PROBE_LEVEL = 120;
+// Clips are tried highest level first. HEVC levels are hierarchical, so a
+// decoder that handles L5.1 necessarily handles L4.0 — meaning a capable
+// browser downloads exactly one clip and stops. A browser that fails the high
+// clip falls back to the low one rather than giving up on passthrough
+// entirely. Both are Main 10 (the library is overwhelmingly 10-bit) and cut
+// from real files with `-c:v copy`, so they are the same shape of data
+// passthrough actually delivers.
+//
+// Levels are in ffprobe units (×3): 120 = L4.0, 153 = L5.1. Measured across a
+// 150-file sample: 85% of the library is L4.0, and 10.7% sits above it, so the
+// high clip is what unlocks that tail.
+const PROBE_CLIPS = [
+  { url: '/hevc-probe-l153.mp4', level: 153, mime: 'video/mp4; codecs="hvc1.2.4.L153.B0"' },
+  { url: '/hevc-probe.mp4',      level: 120, mime: 'video/mp4; codecs="hvc1.2.4.L120.B0"' },
+];
 
 const STORAGE_KEY = 'v2HevcProbe';
+// Bump whenever the clip set or the pass/fail rule changes. Without this, a
+// browser that cached a verdict under the old single-clip probe would keep
+// reporting the old ceiling forever — the UA has not changed, so nothing else
+// would ever invalidate it, and the higher tier would go unused.
+const PROBE_VERSION = 2;
 // Browsers gain and lose codec support across versions, and a GPU driver
 // change can flip it without the version moving. Re-probing on a new UA string
-// is cheap insurance; the clip is 45 KB and this runs once per browser build.
-const probeIdentity = () => navigator.userAgent;
+// is cheap insurance; the clips are small and this runs once per browser build.
+const probeIdentity = () => `v${PROBE_VERSION}|${navigator.userAgent}`;
 
 function readCached() {
   try {
@@ -42,10 +57,20 @@ function writeCached(level, reason) {
   } catch {}
 }
 
-// Called when a passthrough session fails to play. Whatever the probe decided,
-// reality disagreed — so stop claiming the capability for this browser.
-export function markHevcBroken(reason = 'playback failed') {
-  writeCached(0, reason);
+// Called when a passthrough session fails to play. Reality disagreed with the
+// probe, so the claimed ceiling comes down — but only by one step. A file that
+// failed at L5.1 says nothing about whether L4.0 works, and the L4.0 tier is
+// 85% of the library, so abandoning it on one bad file would give up most of
+// the benefit. Falls to 0 (no passthrough at all) once the lowest tier fails.
+export function demoteHevc(reason = 'playback failed') {
+  const current = readCached()?.level ?? 0;
+  const lower = PROBE_CLIPS
+    .map((c) => c.level)
+    .filter((l) => l < current)
+    .sort((a, b) => b - a);
+  const next = lower.length ? lower[0] : 0;
+  writeCached(next, reason);
+  return next;
 }
 
 let inflight = null;
@@ -66,12 +91,21 @@ export function hevcMaxLevel() {
 }
 
 async function runProbe() {
+  // Highest first: the first clip that genuinely decodes sets the ceiling, and
+  // everything below it is implied.
+  for (const clip of PROBE_CLIPS) {
+    if (await decodes(clip)) return clip.level;
+  }
+  return 0;
+}
+
+async function decodes(clip) {
   // A negative answer from the APIs is still worth honouring — they
   // under-report far less often than they over-report, and it saves the
-  // download entirely.
-  if (window.MediaSource && !MediaSource.isTypeSupported(PROBE_MIME)) {
+  // download entirely. A positive answer proves nothing, so it is not trusted.
+  if (window.MediaSource && !MediaSource.isTypeSupported(clip.mime)) {
     const v = document.createElement('video');
-    if (!v.canPlayType(PROBE_MIME)) return 0;
+    if (!v.canPlayType(clip.mime)) return false;
   }
 
   const video = document.createElement('video');
@@ -88,14 +122,14 @@ async function runProbe() {
   document.body.appendChild(video);
 
   try {
-    video.src = PROBE_URL;
+    video.src = clip.url;
     const loaded = await new Promise((resolve) => {
       const done = (ok) => { clearTimeout(t); resolve(ok); };
       const t = setTimeout(() => done(false), 8000);
       video.addEventListener('loadeddata', () => done(true), { once: true });
       video.addEventListener('error', () => done(false), { once: true });
     });
-    if (!loaded || !video.videoWidth) return 0;
+    if (!loaded || !video.videoWidth) return false;
 
     try { await video.play(); } catch {}
 
@@ -112,7 +146,7 @@ async function runProbe() {
     }
 
     // Corroborate with actual pixels. A decoder that failed leaves the canvas
-    // uniform; this clip is a dark scene but still spans a range of ~178.
+    // uniform; both clips were chosen to span a luminance range well over 100.
     let spread = 0;
     try {
       const c = document.createElement('canvas');
@@ -129,7 +163,7 @@ async function runProbe() {
       spread = max - min;
     } catch { spread = 0; }
 
-    return (spread > 6 || presented) ? PROBE_LEVEL : 0;
+    return spread > 6 || presented;
   } finally {
     try { video.pause(); video.removeAttribute('src'); video.load(); } catch {}
     video.remove();

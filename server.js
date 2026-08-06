@@ -2292,7 +2292,17 @@ app.delete('/api/corrupted/:id', requireAdminSession, (req, res) => {
 // GET /api/now-watching — who is actively watching (progress ping within last 60s)
 app.get('/api/now-watching', requirePermission('canLogs'), (_req, res) => {
   const cutoff = Date.now() - 60000;
-  const active = Object.values(nowWatching).filter(w => w.updatedAt >= cutoff);
+  const active = Object.values(nowWatching).filter(w => w.updatedAt >= cutoff).map(w => {
+    // The live session is the source of truth: it reflects the path actually
+    // taken, including a passthrough that fell back to transcoding mid-play,
+    // which the item's static streamMode would not show. Direct play never
+    // creates a session, so fall back to the computed mode for those.
+    const sess = transcodeSessions[w.id];
+    const fp = fileIndex[w.id];
+    const delivery = sess?.delivery
+      || (fp && getStreamMode(fp) === 'direct' ? 'direct' : null);
+    return { ...w, delivery };
+  });
   res.json(active);
 });
 
@@ -2509,7 +2519,7 @@ function startFfmpeg(id, filePath, sessionDir, seekTime, startSegNum, audioStrea
   // The branching lives in lib/ffmpeg-args.js so it can be unit-tested without
   // spawning ffmpeg or booting the server. Everything it needs is resolved
   // from the probe caches here and passed in as plain values.
-  const { args: ffmpegArgs, hevcCopy } = buildFfmpegArgs({
+  const { args: ffmpegArgs, hevcCopy, delivery } = buildFfmpegArgs({
     filePath, sessionDir, seekTime, startSegNum, audioStreamIndex,
     mode, preset,
     srcHeight: heightCache[filePath] || 0,
@@ -2550,6 +2560,7 @@ function startFfmpeg(id, filePath, sessionDir, seekTime, startSegNum, audioStrea
     startSeg: startSegNum,
     lastRestartAt: Date.now(),
     startedAt: Date.now(),
+    delivery,
   };
 }
 

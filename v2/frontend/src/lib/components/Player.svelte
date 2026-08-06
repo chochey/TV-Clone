@@ -4,7 +4,7 @@
   import { library, session, dismissed, AUTO_WATCHED_PERCENT } from '../stores.js';
   import { loadHls, parseVtt, cueAt, fmtTime } from '../player-core.js';
   import { episodeCode, episodeTitle } from '../format.js';
-  import { hevcMaxLevel, markHevcBroken } from '../hevc-probe.js';
+  import { hevcMaxLevel, demoteHevc } from '../hevc-probe.js';
 
   // Remounted per item via {#key} in App — `item` is static for this mount.
   let { item, next = null, prev = null, onclose, onnext, onprev } = $props();
@@ -315,15 +315,15 @@
 
   // Abandon HEVC passthrough and rebuild the session as an ordinary transcode.
   // `persist` distinguishes the two ways it can go wrong: a fatal media error
-  // means this browser genuinely cannot decode what the probe said it could,
-  // so the verdict is rewritten for the whole browser. A stall is weaker
-  // evidence — it can be a network hiccup or one oddly-cut file — so it only
-  // disables passthrough for the item in hand and leaves the verdict alone.
+  // means this browser genuinely could not decode what the probe said it could,
+  // so the claimed level comes down a step for the whole browser. A stall is
+  // weaker evidence — it can be a network hiccup or one oddly-cut file — so it
+  // only disables passthrough for the item in hand and leaves the verdict alone.
   function fallbackFromPassthrough(reason, persist) {
     if (!passthroughActive) return false;
     passthroughActive = false;
     hevcBlocked = true;
-    if (persist) markHevcBroken(reason);
+    if (persist) demoteHevc(reason);
     // The failed attempt was a gamble on a capability; the transcode that
     // replaces it starts with a clean retry budget rather than inheriting the
     // strikes spent proving the gamble wrong.

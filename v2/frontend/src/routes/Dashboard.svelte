@@ -10,6 +10,23 @@
   let watching = $state([]);
   let timer;
 
+  // How a live stream is reaching the viewer. The cheap paths hand the file's
+  // own video through untouched; the transcode paths rebuild every frame, so
+  // seeing which one a session picked is the whole diagnostic value here.
+  // Modifier classes are d-* rather than the page's .good/.warn/.bad, because
+  // these are only ever applied dynamically. Svelte prunes scoped rules it
+  // cannot see used in the markup, so a shared class survives only as long as
+  // something else in this file happens to use it statically — the .ok rule
+  // was silently dropped that way. The d-* rules below are :global on the
+  // modifier for exactly this reason.
+  const DELIVERY = {
+    direct:            { label: 'direct',        cls: 'd-good', hint: 'Served straight off disk — no FFmpeg at all' },
+    passthrough:       { label: 'passthrough',   cls: 'd-good', hint: 'HEVC copied to a client that can decode it — no re-encoding' },
+    remux:             { label: 'remux',         cls: 'd-ok',   hint: 'Video copied, container and audio rebuilt' },
+    'transcode-gpu':   { label: 'transcode',     cls: 'd-warn', hint: 'Re-encoding every frame on the GPU' },
+    'transcode-cpu':   { label: 'transcode·cpu', cls: 'd-bad',  hint: 'Re-encoding on the CPU — no GPU acceleration in use' },
+  };
+
   function fmtBytes(b) {
     if (b == null) return '—';
     if (b < 1e9) return (b / 1e6).toFixed(0) + ' MB';
@@ -130,7 +147,9 @@
       <h2 class="meta">Now watching</h2>
       {#if watching.length}
         {#each watching as w (w.profileName + w.id)}
-          <div class="kv"><span>{w.profileName}</span><strong>{w.title}</strong>
+          <div class="kv"><span>{w.profileName}</span>
+            <strong>{w.title}{#if w.delivery}<span class="dmode {DELIVERY[w.delivery]?.cls ?? ''}"
+              title={DELIVERY[w.delivery]?.hint ?? ''}>{DELIVERY[w.delivery]?.label ?? w.delivery}</span>{/if}</strong>
             <em>{w.percent ? `${Math.round(w.percent)}%` : ''}</em></div>
         {/each}
       {:else}
@@ -162,6 +181,20 @@
   .good { color: #7ed491 !important; }
   .bad { color: #ff6b6b !important; }
   .warn { color: #ffb46b !important; }
+  /* Delivery badge on Now Watching. Outlined in currentColor so the colour
+     comes entirely from the d-* modifier. Those are :global because they are
+     applied dynamically and Svelte would otherwise prune them as unused. */
+  .dmode {
+    margin-left: 8px; padding: 0 6px;
+    border: 1px solid currentColor; border-radius: 99px;
+    font-size: 0.66rem; font-weight: 700; letter-spacing: 0.04em;
+    text-transform: uppercase; vertical-align: middle;
+    white-space: nowrap; opacity: 0.85;
+  }
+  .dmode:global(.d-good) { color: #7ed491; }
+  .dmode:global(.d-ok)   { color: var(--ink-soft); }
+  .dmode:global(.d-warn) { color: #ffb46b; }
+  .dmode:global(.d-bad)  { color: #ff6b6b; }
   .kv.drive { flex-wrap: wrap; }
   .kv.drive span:first-child { flex: 0 1 auto; max-width: 40%; }
   .dim { color: var(--ink-faint); }
