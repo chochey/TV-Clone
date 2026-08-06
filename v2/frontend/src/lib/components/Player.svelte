@@ -230,6 +230,9 @@
     });
     hls.loadSource(url);
     hls.attachMedia(video);
+    // Fresh measurement window per session — a seek restarts the decoder, and
+    // carrying counts across would blame the new session for the old one.
+    if (passthroughActive) startFrameCounter(); else stopFrameCounter();
     hls.on(H.Events.MANIFEST_PARSED, () => {
       if (seq !== loadSeq) return;
       video.addEventListener('canplaythrough', () => { video.play().catch(() => {}); }, { once: true });
@@ -266,6 +269,107 @@
       return !(await r.json()).alive;
     } catch { return false; }
   }
+  // ── Playback-quality watchdog (passthrough only) ───────────────────
+  // Passthrough moves decoding from the server to this browser. The capability
+  // probe proves a frame comes out of the decoder — it cannot prove the
+  // decoder sustains 24fps, and those are different questions. A browser
+  // software-decoding 10-bit HEVC drops frames while audio stays perfect,
+  // which reads as stuttering video rather than as an error, so nothing else
+  // in the player notices it.
+  //
+  // getVideoPlaybackQuality() is the obvious signal but Firefox has reported
+  // totalVideoFrames as 0 here, and Firefox is exactly the browser that
+  // software-decodes HEVC. requestVideoFrameCallback fires once per frame
+  // actually presented, works in both, and needs no knowledge of the source
+  // frame rate: if fewer than MIN_PRESENTED_FPS frames reach the screen per
+  // second of ordinary playback, the picture is visibly breaking up whatever
+  // the source was.
+  // Crucially, one bad window is NOT enough. Observed in testing: passthrough
+  // stuttered for a while after a seek and then settled on its own with no
+  // intervention — a decoder warming up, or a burst of segment fetches
+  // competing with decode. Demoting on that would have permanently disabled a
+  // tier that was about to work fine. Only sustained trouble counts.
+  const QUALITY_WINDOW_MS = 6000;
+  const BAD_WINDOWS_BEFORE_DEMOTING = 3;   // ~18s of continuous breakage
+  const MIN_PRESENTED_FPS = 14;   // well under any real source (23.976 lowest)
+  const MAX_DROP_RATIO = 0.15;
+  // Give a new session time to settle before judging it at all.
+  const QUALITY_GRACE_MS = 8000;
+  let presentedFrames = 0;
+  let qualityWindowAt = 0;
+  let qualityBase = null;
+  let badWindows = 0;
+  let rvfcHandle = null;
+
+  function countPresentedFrame() {
+    presentedFrames++;
+    if (video?.requestVideoFrameCallback) {
+      rvfcHandle = video.requestVideoFrameCallback(countPresentedFrame);
+    }
+  }
+
+  function startFrameCounter() {
+    presentedFrames = 0;
+    // The window opens after the grace period, so start-up and post-seek
+    // catch-up are never sampled.
+    qualityWindowAt = Date.now() + QUALITY_GRACE_MS;
+    qualityBase = null;
+    badWindows = 0;
+    if (video?.requestVideoFrameCallback && rvfcHandle === null) {
+      rvfcHandle = video.requestVideoFrameCallback(countPresentedFrame);
+    }
+  }
+
+  function stopFrameCounter() {
+    if (video?.cancelVideoFrameCallback && rvfcHandle !== null) {
+      try { video.cancelVideoFrameCallback(rvfcHandle); } catch {}
+    }
+    rvfcHandle = null;
+  }
+
+  function qualityCheck() {
+    // Only passthrough is worth retreating from — a transcode already sends
+    // the easiest stream we can produce, so dropping frames there means the
+    // machine is simply too slow and switching paths would not help.
+    if (!passthroughActive || !video || paused || error || scrubbing) return;
+    if (video.playbackRate !== 1) return;          // speed changes skew the count
+    const now = Date.now();
+    if (now - qualityWindowAt < QUALITY_WINDOW_MS) return;
+
+    const seconds = (now - qualityWindowAt) / 1000;
+    const fps = presentedFrames / seconds;
+    presentedFrames = 0;
+    qualityWindowAt = now;
+
+    // Corroborate with the decoder's own count where it is populated, so a
+    // browser that simply lacks requestVideoFrameCallback cannot be demoted
+    // on a count that was never incremented.
+    let dropRatio = 0;
+    const q = video.getVideoPlaybackQuality?.();
+    if (q && q.totalVideoFrames > 0) {
+      if (qualityBase) {
+        const dd = q.droppedVideoFrames - qualityBase.dropped;
+        const dt = q.totalVideoFrames - qualityBase.total;
+        if (dt > 30) dropRatio = dd / dt;
+      }
+      qualityBase = { dropped: q.droppedVideoFrames, total: q.totalVideoFrames };
+    }
+
+    const starved = video.requestVideoFrameCallback && fps > 0 && fps < MIN_PRESENTED_FPS;
+    const dropping = dropRatio > MAX_DROP_RATIO;
+    if (!starved && !dropping) { badWindows = 0; return; }   // recovered on its own
+
+    if (++badWindows < BAD_WINDOWS_BEFORE_DEMOTING) return;
+
+    // Sustained across every window since it started going wrong — this is not
+    // a decoder settling in. Persist it, because the next episode would stutter
+    // identically.
+    fallbackFromPassthrough(
+      starved ? `only ${fps.toFixed(1)} fps reaching the screen` : `${Math.round(dropRatio * 100)}% of frames dropped`,
+      true,
+    );
+  }
+
   // ── Stall watchdog ─────────────────────────────────────────────────
   // The hls.js ERROR handler above bails on `!data.fatal`, but a buffer
   // stall is NOT fatal — hls.js nudges a few times and then simply gives
@@ -697,7 +801,7 @@
       if (o && typeof o.start === 'number') outro = o;
     }).catch(() => {});
     progressTimer = setInterval(() => { if (!paused) saveProgress(); }, 5000);
-    stallTimer = setInterval(stallCheck, 1000);
+    stallTimer = setInterval(() => { stallCheck(); qualityCheck(); }, 1000);
     // Both events, deliberately: pagehide is the reliable desktop signal for a
     // closing tab, but mobile browsers frequently kill a backgrounded page
     // without ever firing it, and visibilitychange is the one that survives an
@@ -718,6 +822,7 @@
     clearTimeout(retryTimer);
     clearTimeout(touchTapTimer);
     clearTimeout(spritePollTimer);
+    stopFrameCounter();
     // Must come off before the final save: a listener left behind would keep a
     // closure over this item and could beacon a stale position later, clobbering
     // whatever the viewer moved on to.
