@@ -4,11 +4,21 @@
   import { library, session, dismissed, AUTO_WATCHED_PERCENT } from '../stores.js';
   import { loadHls, parseVtt, cueAt, fmtTime } from '../player-core.js';
   import { episodeCode, episodeTitle } from '../format.js';
+  import { hevcMaxLevel, markHevcBroken } from '../hevc-probe.js';
 
   // Remounted per item via {#key} in App — `item` is static for this mount.
   let { item, next = null, prev = null, onclose, onnext, onprev } = $props();
 
   const isDirect = item.streamMode === 'direct';
+  // HEVC can be copied straight through to a browser that can decode it,
+  // instead of being re-encoded to H.264 for the whole runtime.
+  const isHevc = (item.codec || '').toLowerCase() === 'hevc';
+  // Set when passthrough has already failed on this item, so the retry after a
+  // failure asks for a plain transcode instead of looping on the same fault.
+  let hevcBlocked = false;
+  // Whether the session currently loading/playing is a passthrough attempt —
+  // the fallback must only fire for those, never for an ordinary transcode.
+  let passthroughActive = false;
   const title = $derived(item.showName || item.title || '');
   const subline = $derived(item.showName ? `${episodeCode(item)} — ${episodeTitle(item)}` : (item.year || ''));
 
@@ -164,6 +174,16 @@
     try { H = await loadHls(); } catch { error = 'Failed to load the video engine.'; return; }
     const params = new URLSearchParams({ start: String(start), quality });
     if (audioTrack != null) params.set('audio', String(audioTrack));
+    // Ask for passthrough only after this browser has actually decoded a real
+    // HEVC clip. The probe runs once per browser build and is cached, so this
+    // costs nothing after the first HEVC play. The server still applies its own
+    // level ceiling, so a claim here is a request, not a guarantee.
+    passthroughActive = false;
+    if (isHevc && !hevcBlocked) {
+      const lvl = await hevcMaxLevel();
+      if (seq !== loadSeq) return;  // a seek landed while probing
+      if (lvl > 0) { params.set('hevcMaxLevel', String(lvl)); passthroughActive = true; }
+    }
     const url = `/hls/${encodeURIComponent(item.id)}/master.m3u8?${params}`;
 
     // Warm the ffmpeg session and read the duration/offset headers; hls.js
@@ -217,6 +237,11 @@
     });
     hls.on(H.Events.ERROR, async (_e, data) => {
       if (!data.fatal) return;
+      // A passthrough session that dies on a media error is a capability
+      // misjudgement, not a transient fault — hls.recoverMediaError() would
+      // just fail the same way. Give up the claim and rebuild as a transcode.
+      if (data.type === H.ErrorTypes.MEDIA_ERROR
+          && fallbackFromPassthrough('fatal media error', true)) return;
       hlsRetries++;
       if (hlsRetries > 3) { error = 'Playback failed after several retries.'; return; }
       if (data.type === H.ErrorTypes.NETWORK_ERROR) {
@@ -281,8 +306,32 @@
     } else if (stallNudges > 3) {
       stallNudges = 0;
       if (isDirect) { video.play().catch(() => {}); return; }
+      // Rebuilding an identical passthrough session would stall identically.
+      // Come back as a transcode instead of looping on the same fault.
+      if (fallbackFromPassthrough('stalled', false)) return;
       recoverSession();                 // nothing ahead — rebuild from here
     }
+  }
+
+  // Abandon HEVC passthrough and rebuild the session as an ordinary transcode.
+  // `persist` distinguishes the two ways it can go wrong: a fatal media error
+  // means this browser genuinely cannot decode what the probe said it could,
+  // so the verdict is rewritten for the whole browser. A stall is weaker
+  // evidence — it can be a network hiccup or one oddly-cut file — so it only
+  // disables passthrough for the item in hand and leaves the verdict alone.
+  function fallbackFromPassthrough(reason, persist) {
+    if (!passthroughActive) return false;
+    passthroughActive = false;
+    hevcBlocked = true;
+    if (persist) markHevcBroken(reason);
+    // The failed attempt was a gamble on a capability; the transcode that
+    // replaces it starts with a clean retry budget rather than inheriting the
+    // strikes spent proving the gamble wrong.
+    hlsRetries = 0;
+    recoverAttempts = 0;
+    notice = 'Switching to a compatible stream…';
+    loadHlsSession(cur);
+    return true;
   }
 
   function recoverSession() {

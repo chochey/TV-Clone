@@ -229,6 +229,7 @@ const storageHealth = require('./lib/storage-health')({
 // ══════════════════════════════════════════════════════════════════════
 
 const { findPosterInDir: _findPoster, findSubtitles: _findSubs } = require('./lib/fs-helpers');
+const { buildFfmpegArgs } = require('./lib/ffmpeg-args');
 const findPosterInDir = (dir, baseName) => _findPoster(dir, baseName, POSTER_EXT);
 const findSubtitles = (dir, baseName) => _findSubs(dir, baseName, SUBTITLE_EXT);
 
@@ -239,7 +240,7 @@ let subtitleIndex = {};  // subId -> { absPath, format }
 // ── Codec probing (lib/probe.js) ────────────────────────────────────────
 const probe = require('./lib/probe')({ DATA_DIR, loadJSON, saveJSON });
 const {
-  probeCache, pixFmtCache, audioProbeCache, audioTracksCache, subProbeCache, heightCache,
+  probeCache, pixFmtCache, audioProbeCache, audioTracksCache, subProbeCache, heightCache, levelCache,
   corruptedFiles, durationCache,
   probeFileAsync,
   probeDurationAsync, probeDurationWithReason,
@@ -2486,7 +2487,7 @@ function canVaapiDecode(filePath) {
   return VAAPI_DECODE_CODECS.has(codec);
 }
 
-function startFfmpeg(id, filePath, sessionDir, seekTime, startSegNum, audioStreamIndex, quality) {
+function startFfmpeg(id, filePath, sessionDir, seekTime, startSegNum, audioStreamIndex, quality, hevcPassthrough = false) {
   // Kill existing process but keep files (segments already produced are still valid)
   if (transcodeSessions[id]) {
     try { transcodeSessions[id].process.kill('SIGTERM'); } catch {}
@@ -2496,99 +2497,33 @@ function startFfmpeg(id, filePath, sessionDir, seekTime, startSegNum, audioStrea
 
   const mode = getStreamMode(filePath);
   const preset = Object.hasOwn(QUALITY_PRESETS, quality) ? QUALITY_PRESETS[quality] : QUALITY_PRESETS.auto;
-  const ffmpegArgs = ['-hide_banner', '-loglevel', 'error', '-threads', String(FFMPEG_TRANSCODE_THREADS)];
-  if (seekTime > 0) ffmpegArgs.push('-ss', String(seekTime));
-  ffmpegArgs.push('-i', filePath);
 
-  // Map specific video and audio streams
-  if (audioStreamIndex !== undefined && audioStreamIndex !== null) {
-    ffmpegArgs.push('-map', '0:v:0', '-map', `0:${audioStreamIndex}`);
-  }
+  // Channel count of the track we are actually about to serve — multichannel
+  // AAC must be downmixed or Firefox blacks out the whole element. A count of
+  // 0 means "not probed yet", which the builder treats as safe to copy.
+  const tracks = audioTracksCache[filePath] || [];
+  const chosenTrack = (audioStreamIndex !== undefined && audioStreamIndex !== null)
+    ? tracks.find(t => t.index === audioStreamIndex)
+    : tracks[0];
 
-  // A capped preset only means anything if we actually re-encode the video.
-  // `-c:v copy` (remux) and the VAAPI fast path both hand the source through at
-  // its native resolution, so a 4K file could sail past the cap. Promote to a
-  // real encode ONLY when the source genuinely exceeds it: an unknown height
-  // (probed before heights were cached) or a source already inside the cap must
-  // keep the cheap path, or every 1080p remux in the library turns into a
-  // full re-encode.
-  // Only re-encode when the saving is worth it. Plenty of "1080p" masters are
-  // actually 1088 (padded to mod-16), and 1082 vs 1080 is not worth turning a
-  // free copy into a full encode — but 1440 and 2160 are. A 20% margin keeps
-  // near-cap sources on the cheap path while still catching the real offenders.
-  const DOWNSCALE_MARGIN = 1.2;
-  const srcHeight = heightCache[filePath] || 0;
-  const needsDownscale = !!preset.maxH && srcHeight > preset.maxH * DOWNSCALE_MARGIN;
-
-  if ((mode === 'remux' || mode === 'remux-audio') && !needsDownscale) {
-    const audioCodec = audioProbeCache[filePath];
-    // Channel count of the track we're about to serve. Multichannel (5.1/7.1)
-    // AAC must be downmixed to stereo — Firefox can't decode it and shows a
-    // black screen. Other browser-native codecs copy through untouched.
-    const tracks = audioTracksCache[filePath] || [];
-    const chosen = (audioStreamIndex !== undefined && audioStreamIndex !== null)
-      ? tracks.find(t => t.index === audioStreamIndex)
-      : tracks[0];
-    const channels = chosen?.channels || 0;
-    const multichannelAac = audioCodec === 'aac' && channels > 2;
-    const canCopyAudio = BROWSER_AUDIO_CODECS.has(audioCodec) && !multichannelAac;
-    ffmpegArgs.push('-c:v', 'copy');
-    if (canCopyAudio) {
-      ffmpegArgs.push('-c:a', 'copy');
-    } else {
-      ffmpegArgs.push('-c:a', 'aac', '-ac', '2', '-b:a', '192k');
-    }
-  } else if (vaapiAvailable()) {
-    const pixFmt = pixFmtCache[filePath] || '';
-    const is10bit = pixFmt.includes('10le') || pixFmt.includes('10be') || pixFmt.includes('p010');
-    // Downscale filter for capped presets. This driver has no scale_vaapi/VPP,
-    // so the resize is done in software (before the GPU upload) — which is why
-    // capping is applied on the software-decode branch below, not the fast one.
-    const scaleSw = preset.maxH ? `scale=-2:'min(${preset.maxH},ih)',` : '';
-    // needsDownscale sends 8-bit H.264 down the software route too. That path
-    // is slower, but it is the only one that can resize here, and without it an
-    // oversized 8-bit source would take the fast path and come out uncapped —
-    // exactly the hole this is meant to close.
-    if (is10bit || !canVaapiDecode(filePath) || needsDownscale) {
-      // Software decode → (optional downscale) → nv12 → GPU upload → H.264 encode.
-      // Handles 10-bit sources (this is where ~all 4K lands — 4K is near-always
-      // 10-bit HEVC) and legacy AVI/XVID MPEG-4 that VAAPI can't hardware-decode.
-      // -profile:v main drops High-profile 8x8 transform to ease client decode.
-      ffmpegArgs.push(
-        '-vaapi_device', '/dev/dri/renderD128',
-        '-vf', `${scaleSw}format=nv12,hwupload`,
-        '-c:v', 'h264_vaapi', '-profile:v', 'main', '-qp', String(preset.vaapiQp), '-maxrate', preset.maxrate, '-bufsize', preset.bufsize,
-      );
-    } else {
-      // 8-bit source, no cap ('high' preset): full hardware decode + encode
-      // pipeline (fastest, zero-copy on the GPU).
-      ffmpegArgs.splice(ffmpegArgs.indexOf('-i'), 0,
-        '-hwaccel', 'vaapi', '-hwaccel_device', '/dev/dri/renderD128', '-hwaccel_output_format', 'vaapi',
-      );
-      ffmpegArgs.push('-c:v', 'h264_vaapi', '-profile:v', 'main', '-qp', String(preset.vaapiQp), '-maxrate', preset.maxrate, '-bufsize', preset.bufsize);
-    }
-    ffmpegArgs.push(
-      '-c:a', 'aac', '-ac', '2', '-b:a', '192k',
-      '-af', 'aresample=async=1:first_pts=0',
-    );
-  } else {
-    ffmpegArgs.push(
-      ...(preset.maxH ? ['-vf', `scale=-2:'min(${preset.maxH},ih)'`] : []),
-      '-c:v', 'libx264', '-preset', 'ultrafast', '-profile:v', 'main', '-crf', String(preset.crf),
-      '-maxrate', preset.maxrate, '-bufsize', preset.bufsize,
-      '-pix_fmt', 'yuv420p',
-      '-c:a', 'aac', '-ac', '2', '-b:a', '192k',
-      '-af', 'aresample=async=1:first_pts=0',
-    );
-  }
-
-  ffmpegArgs.push(
-    '-f', 'hls', '-hls_time', String(HLS_SEG_DURATION), '-hls_list_size', '0',
-    '-hls_flags', 'temp_file', '-hls_playlist_type', 'event',
-    '-hls_segment_filename', path.join(sessionDir, 'seg_%04d.ts'),
-    '-start_number', String(startSegNum),
-    path.join(sessionDir, 'stream.m3u8'),
-  );
+  // The branching lives in lib/ffmpeg-args.js so it can be unit-tested without
+  // spawning ffmpeg or booting the server. Everything it needs is resolved
+  // from the probe caches here and passed in as plain values.
+  const { args: ffmpegArgs, hevcCopy } = buildFfmpegArgs({
+    filePath, sessionDir, seekTime, startSegNum, audioStreamIndex,
+    mode, preset,
+    srcHeight: heightCache[filePath] || 0,
+    pixFmt: pixFmtCache[filePath] || '',
+    audioCodec: audioProbeCache[filePath] || '',
+    audioChannels: chosenTrack?.channels || 0,
+    videoCodec: (probeCache[filePath] || '').toLowerCase(),
+    hevcPassthrough,
+    vaapiAvailable: vaapiAvailable(),
+    vaapiCanDecode: canVaapiDecode(filePath),
+    threads: FFMPEG_TRANSCODE_THREADS,
+    segDuration: HLS_SEG_DURATION,
+  });
+  if (hevcCopy) console.log(`[HLS] ${id.slice(0,8)} HEVC passthrough — copying video, fMP4 segments`);
 
   const proc = spawn('ffmpeg', ffmpegArgs);
   let _ffmpegStderr = '';
@@ -2649,6 +2584,11 @@ app.get('/hls/:id/master.m3u8', requireAuth, ensureLibrary, async (req, res) => 
   const audioTrack = req.query.audio !== undefined ? parseInt(req.query.audio, 10) : null;
   const rawQuality = req.query.quality;
   const quality = Object.hasOwn(QUALITY_PRESETS, rawQuality) ? rawQuality : 'auto';
+  // Highest HEVC level this client actually decoded in a real clip test
+  // (ffprobe units — 120 is L4.0). Absent or 0 means no passthrough. The
+  // client owns this claim, but the blast radius is one failed session that
+  // it then retries without the flag, so it needs no more trust than that.
+  const clientHevcLevel = Math.max(0, parseInt(req.query.hevcMaxLevel, 10) || 0);
   const sessionDir = path.join(TRANSCODE_DIR, id);
 
   // Ensure session dir stays within transcode directory
@@ -2664,7 +2604,13 @@ app.get('/hls/:id/master.m3u8', requireAuth, ensureLibrary, async (req, res) => 
     const sameSeek = (transcodeSessions[id].seekOffset || 0) === startTime;
     const sameAudio = (transcodeSessions[id].audioTrack || null) === audioTrack;
     const sameQuality = (transcodeSessions[id].quality || 'auto') === quality;
-    if (sameSeek && sameAudio && sameQuality && fs.existsSync(m3u8Path) && fs.statSync(m3u8Path).size > 0) {
+    // Sessions are keyed by item id, so two clients watching the same title
+    // share one. A passthrough session serves fMP4/HEVC that an incapable
+    // client cannot decode, so capability is part of session identity — without
+    // this, the second viewer inherits a stream their browser will not play.
+    const samePassthrough = (transcodeSessions[id].hevcMaxLevel || 0) === clientHevcLevel;
+    if (sameSeek && sameAudio && sameQuality && samePassthrough
+        && fs.existsSync(m3u8Path) && fs.statSync(m3u8Path).size > 0) {
       // Verify m3u8 actually has segment data (not just a header from a killed session)
       try {
         const content = fs.readFileSync(m3u8Path, 'utf-8');
@@ -2706,7 +2652,8 @@ app.get('/hls/:id/master.m3u8', requireAuth, ensureLibrary, async (req, res) => 
   // backfills lazily as things are played rather than re-probing 9k files at once.)
   // `=== undefined`, not falsy: a probed-but-heightless file is stored as 0, and
   // treating that as "missing" would re-probe it on every request forever.
-  if (!probeCache[filePath] || (vaapiAvailable() && !pixFmtCache[filePath]) || heightCache[filePath] === undefined) {
+  if (!probeCache[filePath] || (vaapiAvailable() && !pixFmtCache[filePath])
+      || heightCache[filePath] === undefined || levelCache[filePath] === undefined) {
     await probeFileAsync(filePath);
   }
 
@@ -2714,7 +2661,11 @@ app.get('/hls/:id/master.m3u8', requireAuth, ensureLibrary, async (req, res) => 
   try {
     if (fs.existsSync(sessionDir)) {
       fs.readdirSync(sessionDir).forEach(f => {
-        if (f.endsWith('.ts') || f === 'stream.m3u8' || f === 'manifest.m3u8')
+        // .m4s/init.mp4 belong to fMP4 passthrough sessions. Leaving them
+        // behind would let a stale init segment — with the wrong codec
+        // configuration — get served to the next session for this item.
+        if (f.endsWith('.ts') || f.endsWith('.m4s') || f === 'init.mp4'
+            || f === 'stream.m3u8' || f === 'manifest.m3u8')
           fs.unlinkSync(path.join(sessionDir, f));
       });
     }
@@ -2722,8 +2673,16 @@ app.get('/hls/:id/master.m3u8', requireAuth, ensureLibrary, async (req, res) => 
   if (!fs.existsSync(sessionDir)) fs.mkdirSync(sessionDir, { recursive: true });
 
   const mode = getStreamMode(filePath);
+  // Pass HEVC through untouched only when the client proved it can decode AND
+  // the file's level is known to be within what it demonstrated. An unknown
+  // level (0) keeps transcoding rather than gambling on a decoder that may
+  // reject it — a wrong guess costs the viewer a black screen.
+  const srcLevel = levelCache[filePath] || 0;
+  const hevcPassthrough = clientHevcLevel > 0
+    && (probeCache[filePath] || '').toLowerCase() === 'hevc'
+    && srcLevel > 0 && srcLevel <= clientHevcLevel;
   console.log(`[HLS] Starting ${mode} for ${id.slice(0,8)} at ${startTime.toFixed(1)}s${audioTrack !== null ? ` audio:${audioTrack}` : ''} quality:${quality}`);
-  startFfmpeg(id, filePath, sessionDir, startTime, 0, audioTrack, quality);
+  startFfmpeg(id, filePath, sessionDir, startTime, 0, audioTrack, quality, hevcPassthrough);
 
   // Store the seek offset, audio track, quality, and viewer info on the session
   if (transcodeSessions[id]) {
@@ -2731,6 +2690,7 @@ app.get('/hls/:id/master.m3u8', requireAuth, ensureLibrary, async (req, res) => 
     transcodeSessions[id].audioTrack = audioTrack;
     transcodeSessions[id].quality = quality;
     transcodeSessions[id].filePath = filePath;
+    transcodeSessions[id].hevcMaxLevel = clientHevcLevel;
     const sess = getSession(req);
     let profileName = null;
     if (sess) {
@@ -2779,12 +2739,22 @@ app.get('/hls/:id/master.m3u8', requireAuth, ensureLibrary, async (req, res) => 
   }, 100);
 });
 
+// TS segments are MPEG transport streams; fMP4 segments and the init segment
+// are ISO-BMFF. Serving an .m4s as video/mp2t makes some browsers refuse it.
+function segmentContentType(segName) {
+  if (segName.endsWith('.m3u8')) return 'application/vnd.apple.mpegurl';
+  if (segName.endsWith('.m4s') || segName.endsWith('.mp4')) return 'video/mp4';
+  return 'video/mp2t';
+}
+
 app.get('/hls/:id/:segment', requireAuth, (req, res) => {
   const id = req.params.id;
   const segName = req.params.segment;
 
-  // Validate segment name — only allow expected HLS patterns
-  if (!/^(seg_\d+\.ts|stream\.m3u8)$/.test(segName)) {
+  // Validate segment name — only allow expected HLS patterns. fMP4 sessions
+  // (HEVC passthrough, which cannot ride MPEG-TS through hls.js) add .m4s
+  // segments and a shared init.mp4 carrying the codec configuration.
+  if (!/^(seg_\d+\.(ts|m4s)|init\.mp4|stream\.m3u8)$/.test(segName)) {
     return res.status(400).send('Invalid segment name');
   }
   // Validate session ID exists
@@ -2812,7 +2782,7 @@ app.get('/hls/:id/:segment', requireAuth, (req, res) => {
     try {
       const st = fs.statSync(segPath);
       if (st.size > 0) {
-        const ct = segName.endsWith('.m3u8') ? 'application/vnd.apple.mpegurl' : 'video/mp2t';
+        const ct = segmentContentType(segName);
         res.set({ 'Content-Type': ct, 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no' });
         return res.sendFile(segPath);
       }
@@ -2838,7 +2808,7 @@ app.get('/hls/:id/:segment', requireAuth, (req, res) => {
         resolved = true;
         clearTimeout(timeout);
         try { watcher.close(); } catch {}
-        const ct = segName.endsWith('.m3u8') ? 'application/vnd.apple.mpegurl' : 'video/mp2t';
+        const ct = segmentContentType(segName);
         res.set({ 'Content-Type': ct, 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no' });
         return res.sendFile(segPath);
       }

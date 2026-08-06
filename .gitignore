@@ -9,3 +9,6 @@ transcode_tmp_*/
 docs/
 test-results/
 tests/screenshots/
+
+# Nested standalone repo (has its own .git) — never commit it here
+media-organizer/
