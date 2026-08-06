@@ -331,8 +331,20 @@
     // Only passthrough is worth retreating from — a transcode already sends
     // the easiest stream we can produce, so dropping frames there means the
     // machine is simply too slow and switching paths would not help.
-    if (!passthroughActive || !video || paused || error || scrubbing) return;
+    // `paused` is our reactive mirror; video.paused is the truth. Measured on
+    // Firefox, a paused element still fires requestVideoFrameCallback ~6 times
+    // a second while decoding nothing — indistinguishable from a decoder in
+    // trouble — so both are checked rather than trusting the mirror.
+    if (!passthroughActive || !video || paused || video.paused || error || scrubbing) return;
     if (video.playbackRate !== 1) return;          // speed changes skew the count
+    // Buffering starves the screen of frames for reasons that have nothing to
+    // do with decode cost; that is the stall watchdog's job, not this one.
+    if (video.readyState < 3) { qualityWindowAt = Date.now(); badWindows = 0; return; }
+    // Browsers throttle rendering — and with it requestVideoFrameCallback — for
+    // hidden tabs, so a backgrounded player reports a frame rate that looks
+    // exactly like a failing decoder. Judging it then would demote a browser
+    // that is playing perfectly well the moment you look at it again.
+    if (document.visibilityState !== 'visible') { qualityWindowAt = Date.now(); badWindows = 0; return; }
     const now = Date.now();
     if (now - qualityWindowAt < QUALITY_WINDOW_MS) return;
 
