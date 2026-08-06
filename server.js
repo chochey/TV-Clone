@@ -239,7 +239,7 @@ let subtitleIndex = {};  // subId -> { absPath, format }
 // ── Codec probing (lib/probe.js) ────────────────────────────────────────
 const probe = require('./lib/probe')({ DATA_DIR, loadJSON, saveJSON });
 const {
-  probeCache, pixFmtCache, audioProbeCache, audioTracksCache, subProbeCache,
+  probeCache, pixFmtCache, audioProbeCache, audioTracksCache, subProbeCache, heightCache,
   corruptedFiles, durationCache,
   probeFileAsync,
   probeDurationAsync, probeDurationWithReason,
@@ -684,7 +684,9 @@ app.put('/api/me/quality', requireAuth, (req, res) => {
   const session = getSession(req);
   if (!session) return res.status(401).json({ error: 'Not logged in' });
   const { quality } = req.body;
-  if (!QUALITY_PRESETS[quality]) return res.status(400).json({ error: 'Invalid quality preset' });
+  // hasOwn, not truthiness: QUALITY_PRESETS['constructor'] inherits a truthy
+  // value from Object.prototype and would sail through as a valid preset.
+  if (!Object.hasOwn(QUALITY_PRESETS, quality)) return res.status(400).json({ error: 'Invalid quality preset' });
   const data = loadProfileData(session.profileId);
   data.quality = quality;
   saveProfileData(session.profileId, data);
@@ -1348,6 +1350,7 @@ function deleteMediaItem(id) {
   delete audioProbeCache[filePath];
   delete audioTracksCache[filePath];
   delete subProbeCache[filePath];
+  delete heightCache[filePath];
   markDirty();
 
   // 3. Clean up corrupted file registry
@@ -2492,7 +2495,7 @@ function startFfmpeg(id, filePath, sessionDir, seekTime, startSegNum, audioStrea
   }
 
   const mode = getStreamMode(filePath);
-  const preset = QUALITY_PRESETS[quality] || QUALITY_PRESETS.auto;
+  const preset = Object.hasOwn(QUALITY_PRESETS, quality) ? QUALITY_PRESETS[quality] : QUALITY_PRESETS.auto;
   const ffmpegArgs = ['-hide_banner', '-loglevel', 'error', '-threads', String(FFMPEG_TRANSCODE_THREADS)];
   if (seekTime > 0) ffmpegArgs.push('-ss', String(seekTime));
   ffmpegArgs.push('-i', filePath);
@@ -2502,7 +2505,22 @@ function startFfmpeg(id, filePath, sessionDir, seekTime, startSegNum, audioStrea
     ffmpegArgs.push('-map', '0:v:0', '-map', `0:${audioStreamIndex}`);
   }
 
-  if (mode === 'remux' || mode === 'remux-audio') {
+  // A capped preset only means anything if we actually re-encode the video.
+  // `-c:v copy` (remux) and the VAAPI fast path both hand the source through at
+  // its native resolution, so a 4K file could sail past the cap. Promote to a
+  // real encode ONLY when the source genuinely exceeds it: an unknown height
+  // (probed before heights were cached) or a source already inside the cap must
+  // keep the cheap path, or every 1080p remux in the library turns into a
+  // full re-encode.
+  // Only re-encode when the saving is worth it. Plenty of "1080p" masters are
+  // actually 1088 (padded to mod-16), and 1082 vs 1080 is not worth turning a
+  // free copy into a full encode — but 1440 and 2160 are. A 20% margin keeps
+  // near-cap sources on the cheap path while still catching the real offenders.
+  const DOWNSCALE_MARGIN = 1.2;
+  const srcHeight = heightCache[filePath] || 0;
+  const needsDownscale = !!preset.maxH && srcHeight > preset.maxH * DOWNSCALE_MARGIN;
+
+  if ((mode === 'remux' || mode === 'remux-audio') && !needsDownscale) {
     const audioCodec = audioProbeCache[filePath];
     // Channel count of the track we're about to serve. Multichannel (5.1/7.1)
     // AAC must be downmixed to stereo — Firefox can't decode it and shows a
@@ -2527,7 +2545,11 @@ function startFfmpeg(id, filePath, sessionDir, seekTime, startSegNum, audioStrea
     // so the resize is done in software (before the GPU upload) — which is why
     // capping is applied on the software-decode branch below, not the fast one.
     const scaleSw = preset.maxH ? `scale=-2:'min(${preset.maxH},ih)',` : '';
-    if (is10bit || !canVaapiDecode(filePath)) {
+    // needsDownscale sends 8-bit H.264 down the software route too. That path
+    // is slower, but it is the only one that can resize here, and without it an
+    // oversized 8-bit source would take the fast path and come out uncapped —
+    // exactly the hole this is meant to close.
+    if (is10bit || !canVaapiDecode(filePath) || needsDownscale) {
       // Software decode → (optional downscale) → nv12 → GPU upload → H.264 encode.
       // Handles 10-bit sources (this is where ~all 4K lands — 4K is near-always
       // 10-bit HEVC) and legacy AVI/XVID MPEG-4 that VAAPI can't hardware-decode.
@@ -2626,7 +2648,7 @@ app.get('/hls/:id/master.m3u8', requireAuth, ensureLibrary, async (req, res) => 
   const startTime = parseFloat(req.query.start) || 0;
   const audioTrack = req.query.audio !== undefined ? parseInt(req.query.audio, 10) : null;
   const rawQuality = req.query.quality;
-  const quality = QUALITY_PRESETS[rawQuality] ? rawQuality : 'auto';
+  const quality = Object.hasOwn(QUALITY_PRESETS, rawQuality) ? rawQuality : 'auto';
   const sessionDir = path.join(TRANSCODE_DIR, id);
 
   // Ensure session dir stays within transcode directory
@@ -2678,8 +2700,15 @@ app.get('/hls/:id/master.m3u8', requireAuth, ensureLibrary, async (req, res) => 
     return res.status(503).send('Too many active transcode sessions');
   }
 
-  // Probe on-demand if not yet cached (also re-probe if pixFmt unknown for VAAPI 10-bit detection)
-  if (!probeCache[filePath] || (vaapiAvailable() && !pixFmtCache[filePath])) await probeFileAsync(filePath);
+  // Probe on-demand if not yet cached (also re-probe if pixFmt unknown for VAAPI
+  // 10-bit detection, or if the height is missing — entries cached before heights
+  // were recorded have none, and without one the resolution cap can't fire. This
+  // backfills lazily as things are played rather than re-probing 9k files at once.)
+  // `=== undefined`, not falsy: a probed-but-heightless file is stored as 0, and
+  // treating that as "missing" would re-probe it on every request forever.
+  if (!probeCache[filePath] || (vaapiAvailable() && !pixFmtCache[filePath]) || heightCache[filePath] === undefined) {
+    await probeFileAsync(filePath);
+  }
 
   // Clean old segments on every new session start
   try {
