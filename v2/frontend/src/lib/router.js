@@ -22,6 +22,7 @@ function parse(path, search) {
   if (path === '/logs') return { name: 'logs' };
   if (path === '/users') return { name: 'users' };
   if (path === '/duplicates') return { name: 'duplicates' };
+  if (path === '/conversion') return { name: 'conversion' };
   if (path === '/episodes') return { name: 'episodes' };
   return { name: 'home' };
 }

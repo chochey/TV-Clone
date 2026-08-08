@@ -15,6 +15,7 @@
   import Dashboard from './routes/Dashboard.svelte';
   import Downloads from './routes/Downloads.svelte';
   import Organizer from './routes/Organizer.svelte';
+  import Conversion from './routes/Conversion.svelte';
   import Logs from './routes/Logs.svelte';
   import Users from './routes/Users.svelte';
   import Duplicates from './routes/Duplicates.svelte';
@@ -401,6 +402,7 @@
             {#if can('canDashboard')}<button onclick={() => go('/system')}>Dashboard</button>{/if}
             {#if isAdmin}<button onclick={() => go('/users')}>Users</button>{/if}
             {#if isAdmin}<button onclick={() => go('/duplicates')}>Duplicates</button>{/if}
+            {#if isAdmin}<button onclick={() => go('/conversion')}>Conversion</button>{/if}
             {#if can('canDownload')}<button onclick={() => go('/episodes')}>Episodes</button>{/if}
             {#if can('canDownload')}<button onclick={() => go('/downloads')}>Downloads</button>{/if}
             {#if can('canOrganizer')}<button onclick={() => go('/organizer')}>Organizer</button>{/if}
@@ -452,6 +454,8 @@
       <Users />
     {:else if $route.name === 'duplicates' && isAdmin}
       <Duplicates />
+    {:else if $route.name === 'conversion' && isAdmin}
+      <Conversion />
     {:else if $route.name === 'episodes' && can('canDownload')}
       <Episodes />
     {:else}

@@ -135,6 +135,13 @@ export const api = {
   // System actions
   scan: () => fetch('/api/scan', opts('POST')).then(json),
   restart: () => fetch('/api/restart', opts('POST')).then(json),
+
+  // Library conversion — phase 1, read-only (MEDIA_CONVERSION_PLAN.md). No
+  // start/stop/status here on purpose: nothing runs yet.
+  conversionConfig: () => fetch('/api/conversion/config', opts('GET')).then(json),
+  conversionConfigUpdate: (body) => fetch('/api/conversion/config', opts('PUT', body)).then(json),
+  conversionPlan: (includeImageSubs = false) =>
+    fetch(`/api/conversion/plan${includeImageSubs ? '?includeImageSubs=1' : ''}`, opts('GET')).then(json),
 };
 
 // Build a streaming URL the <video> element can use directly (proxied to v1).

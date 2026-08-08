@@ -249,6 +249,11 @@ const {
   TEXT_SUB_CODECS, BROWSER_AUDIO_CODECS,
 } = probe;
 
+// ── Library conversion (MEDIA_CONVERSION_PLAN.md) — phase 1: read-only
+// planner + config only. Nothing here mutates a media file; that is phase 2+.
+const { planConversion } = require('./lib/conversion-plan');
+const conversionConfig = require('./lib/conversion-config')({ DATA_DIR, loadJSON, saveJSON });
+
 // Background probe: runs after scan, probes uncached files without blocking
 let bgProbeRunning = false;
 const PROBE_CONCURRENCY = Math.max(1, Math.min(4, parseInt(process.env.PROBE_CONCURRENCY, 10) || 2));
@@ -2379,6 +2384,62 @@ app.get('/api/duplicates', requireAdminSession, (_req, res) => {
   const groups = findDuplicates(enriched);
   const totalWasted = groups.reduce((s, g) => s + g.wasted, 0);
   res.json({ ok: true, groups: groups.slice(0, 200), groupCount: groups.length, totalWasted });
+});
+
+// Library conversion — phase 1, read-only (MEDIA_CONVERSION_PLAN.md). The
+// plan endpoint reports aggregate counts/bytes per tier only; it never
+// returns individual file paths, matching how /api/library already strips
+// `_filePath` before anything reaches a client.
+app.get('/api/conversion/config', requireAdminSession, (_req, res) => {
+  res.json({ ok: true, config: conversionConfig.get() });
+});
+
+app.put('/api/conversion/config', requireAdminSession, (req, res) => {
+  res.json({ ok: true, config: conversionConfig.update(req.body) });
+});
+
+app.get('/api/conversion/plan', requireAdminSession, (req, res) => {
+  const includeImageSubs = req.query.includeImageSubs === '1' || req.query.includeImageSubs === 'true';
+  const lib = scanLibrary();
+  const files = lib.map((item) => {
+    const filePath = item._filePath;
+    if (!filePath) return null;
+    const tracks = audioTracksCache[filePath] || [];
+    return {
+      filePath,
+      size: item.fileSize || 0,
+      videoCodec: probeCache[filePath] || '',
+      audioCodec: audioProbeCache[filePath] || '',
+      audioChannels: tracks[0]?.channels || 0,
+      subs: subProbeCache[filePath] || [],
+    };
+  }).filter(Boolean);
+
+  const plan = planConversion(files, { includeImageSubs });
+  // Distinct from "out of scope" (HEVC, already direct): these files have not
+  // been probed yet, so the planner cannot say what they need. They will
+  // appear here until something plays them or a rescan backfills probe data.
+  const notYetProbed = files.filter((f) => !f.videoCodec).length;
+
+  storageHealth.snapshot()
+    .then(({ pool }) => {
+      const config = conversionConfig.get();
+      const worst = plan.totals.worstCaseRetainedBytes;
+      const budget = config.retainedBudgetGB * 1e9;
+      res.json({
+        ok: true, plan, config, notYetProbed,
+        disk: pool ? {
+          availBytes: pool.avail,
+          worstCaseRetainedBytes: worst,
+          // Two independent checks: would the worst case alone blow the
+          // budget the user set, and would it blow what the disk actually
+          // has free. Either is worth a loud warning before anything runs.
+          exceedsBudget: worst > budget,
+          exceedsFreeSpace: worst > pool.avail,
+        } : null,
+      });
+    })
+    .catch((err) => res.status(500).json({ ok: false, error: err.message }));
 });
 
 const reliability = require('./lib/reliability');
