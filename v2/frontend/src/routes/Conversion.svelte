@@ -19,6 +19,11 @@
   let pilotResults = $state(null);
   let pilotError = $state('');
 
+  let originals = $state(null);   // { items, totalBytes, expiredCount, keepOriginalsDays }
+  let restoringPath = $state('');
+  let restoreArmed = $state('');
+  let originalsError = $state('');
+
   async function runPilot() {
     if (!pilotArmed) { pilotArmed = true; setTimeout(() => { pilotArmed = false; }, 5000); return; }
     pilotArmed = false;
@@ -28,7 +33,7 @@
     try {
       const res = await api.conversionPilotRun();
       pilotResults = res;
-      await refresh();
+      await Promise.all([refresh(), loadOriginals()]);
     } catch (e) {
       pilotError = e.body?.error || 'Pilot run failed';
     } finally {
@@ -41,7 +46,33 @@
     try { data = await api.conversionPlan(includeImageSubs); }
     catch (e) { error = e.body?.error || 'Failed to load the conversion plan'; }
   }
-  onMount(refresh);
+
+  async function loadOriginals() {
+    originalsError = '';
+    try { originals = await api.conversionOriginals(); }
+    catch (e) { originalsError = e.body?.error || 'Failed to load retained originals'; }
+  }
+
+  async function restore(item) {
+    if (restoreArmed !== item.retainedPath) {
+      restoreArmed = item.retainedPath;
+      setTimeout(() => { if (restoreArmed === item.retainedPath) restoreArmed = ''; }, 5000);
+      return;
+    }
+    restoreArmed = '';
+    restoringPath = item.retainedPath;
+    originalsError = '';
+    try {
+      await api.conversionRestore(item.retainedPath);
+      await Promise.all([loadOriginals(), refresh()]);
+    } catch (e) {
+      originalsError = e.body?.error || 'Restore failed';
+    } finally {
+      restoringPath = '';
+    }
+  }
+
+  onMount(() => { refresh(); loadOriginals(); });
 
   function fmtBytes(b) {
     if (b == null) return '—';
@@ -70,6 +101,23 @@
     if (!data) return;
     const tiers = { ...data.config.tiers, [tier]: !data.config.tiers[tier] };
     saveConfig({ tiers });
+  }
+
+  // Numeric limits are committed on blur/change rather than per-keystroke, so
+  // a half-typed "2" on the way to "20" is never persisted. The server clamps
+  // every value regardless, and echoes back what it stored — that echo is what
+  // the field then shows, so an out-of-range entry visibly snaps to the bound
+  // instead of silently disagreeing with what the worker will actually use.
+  function commitNumber(key, value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) { saveNote = 'Not a number'; setTimeout(() => { saveNote = ''; }, 2000); return; }
+    if (data.config[key] === Math.round(n)) return;      // nothing changed
+    saveConfig({ [key]: n });
+  }
+
+  function commitSchedule(which, value) {
+    const schedule = { ...data.config.schedule, [which]: value };
+    saveConfig({ schedule });
   }
 
   function toggleEnabled() {
@@ -104,8 +152,12 @@
     <section class="card">
       <div class="row spread">
         <div>
-          <h2>Feature switch</h2>
-          <p class="hint">Off by default. Turning this on does nothing yet in phase 1 — it is the switch the real worker will read once built.</p>
+          <h2>Automatic conversion</h2>
+          <p class="hint">
+            Off, and inert — there is no scheduler yet, so nothing runs on its own
+            regardless of this switch. The pilot below is the only thing that
+            converts anything, and it only runs when you click it.
+          </p>
         </div>
         <button class="toggle" class:on={data.config.enabled} onclick={toggleEnabled} disabled={saving}>
           {data.config.enabled ? 'On' : 'Off'}
@@ -196,18 +248,67 @@
 
     <section class="card">
       <h2>Resource limits</h2>
-      <p class="hint">These are the controls the real worker will obey once built — concurrency, priority, and a night window so conversion never competes with playback.</p>
+      <p class="hint">
+        Editable and saved immediately. Values are clamped server-side, so an
+        out-of-range entry snaps to the nearest allowed bound rather than
+        silently disagreeing with what the worker will actually use.
+      </p>
       <div class="grid">
-        <div class="field"><span>Concurrency</span><strong>{data.config.concurrency}</strong></div>
-        <div class="field"><span>CPU niceness</span><strong>{data.config.niceness}</strong></div>
-        <div class="field"><span>FFmpeg threads</span><strong>{data.config.ffmpegThreads}</strong></div>
-        <div class="field"><span>Pause while playing</span><strong>{data.config.pauseWhilePlaying ? 'Yes' : 'No'}</strong></div>
-        <div class="field"><span>Schedule window</span>
-          <strong>{data.config.schedule.start && data.config.schedule.end ? `${data.config.schedule.start}–${data.config.schedule.end}` : 'Anytime'}</strong></div>
-        <div class="field"><span>Min free space</span><strong>{data.config.minFreeSpaceGB} GB</strong></div>
-        <div class="field"><span>Max files per run</span><strong>{data.config.maxFilesPerRun}</strong></div>
-        <div class="field"><span>Keep originals</span><strong>{data.config.keepOriginalsDays} days</strong></div>
+        <label class="field">
+          <span>Concurrency <em>1–4</em></span>
+          <input type="number" min="1" max="4" value={data.config.concurrency} disabled={saving}
+                 onchange={(e) => commitNumber('concurrency', e.currentTarget.value)} />
+        </label>
+        <label class="field">
+          <span>CPU niceness <em>0–19</em></span>
+          <input type="number" min="0" max="19" value={data.config.niceness} disabled={saving}
+                 onchange={(e) => commitNumber('niceness', e.currentTarget.value)} />
+        </label>
+        <label class="field">
+          <span>FFmpeg threads <em>1–6</em></span>
+          <input type="number" min="1" max="6" value={data.config.ffmpegThreads} disabled={saving}
+                 onchange={(e) => commitNumber('ffmpegThreads', e.currentTarget.value)} />
+        </label>
+        <label class="field">
+          <span>Min free space <em>GB</em></span>
+          <input type="number" min="10" max="5000" value={data.config.minFreeSpaceGB} disabled={saving}
+                 onchange={(e) => commitNumber('minFreeSpaceGB', e.currentTarget.value)} />
+        </label>
+        <label class="field">
+          <span>Max files per run</span>
+          <input type="number" min="1" max="2000" value={data.config.maxFilesPerRun} disabled={saving}
+                 onchange={(e) => commitNumber('maxFilesPerRun', e.currentTarget.value)} />
+        </label>
+        <label class="field">
+          <span>Keep originals <em>days</em></span>
+          <input type="number" min="1" max="90" value={data.config.keepOriginalsDays} disabled={saving}
+                 onchange={(e) => commitNumber('keepOriginalsDays', e.currentTarget.value)} />
+        </label>
+        <label class="field">
+          <span>Retention budget <em>GB</em></span>
+          <input type="number" min="10" max="10000" value={data.config.retainedBudgetGB} disabled={saving}
+                 onchange={(e) => commitNumber('retainedBudgetGB', e.currentTarget.value)} />
+        </label>
+        <label class="field">
+          <span>Schedule start</span>
+          <input type="time" value={data.config.schedule.start} disabled={saving}
+                 onchange={(e) => commitSchedule('start', e.currentTarget.value)} />
+        </label>
+        <label class="field">
+          <span>Schedule end</span>
+          <input type="time" value={data.config.schedule.end} disabled={saving}
+                 onchange={(e) => commitSchedule('end', e.currentTarget.value)} />
+        </label>
       </div>
+      <label class="inlinecheck">
+        <input type="checkbox" checked={data.config.pauseWhilePlaying} disabled={saving}
+               onchange={() => saveConfig({ pauseWhilePlaying: !data.config.pauseWhilePlaying })} />
+        Pause conversion whenever anyone is watching
+      </label>
+      <p class="hint">
+        Both schedule fields empty means "anytime". Niceness 19 is the lowest
+        priority — the worker yields to playback and to anything else on the box.
+      </p>
     </section>
 
     <section class="card pilot">
@@ -243,11 +344,60 @@
     </section>
 
     <section class="card">
+      <div class="row spread">
+        <h2>Retained originals — the undo window</h2>
+        {#if originals?.items?.length}
+          <span class="tcount">{originals.items.length} file{originals.items.length === 1 ? '' : 's'} · {fmtBytes(originals.totalBytes)}</span>
+        {/if}
+      </div>
+      <p class="hint">
+        Every converted file's original is kept here for {data.config.keepOriginalsDays} days.
+        Restoring puts the original back and moves watch progress with it.
+        <strong>Nothing deletes these automatically yet</strong> — they stay until
+        removed by hand, so the disk cost is real and visible rather than silent.
+      </p>
+      {#if originalsError}<p class="danger">{originalsError}</p>{/if}
+      {#if !originals}
+        <p class="hint">Loading…</p>
+      {:else if !originals.items.length}
+        <p class="hint">No retained originals — nothing has been converted yet.</p>
+      {:else}
+        <div class="pilotlist">
+          {#each originals.items as o (o.retainedPath)}
+            <div class="pilotrow">
+              <span class="pfile">{o.name}</span>
+              <span class="ometa">
+                {fmtBytes(o.size)} · kept {o.ageDays}d
+                {#if o.expired}<span class="warn">· past {originals.keepOriginalsDays}d</span>{/if}
+              </span>
+              {#if o.restorable}
+                <button class="restorebtn" class:armed={restoreArmed === o.retainedPath}
+                        onclick={() => restore(o)} disabled={restoringPath === o.retainedPath}>
+                  {restoringPath === o.retainedPath ? 'Restoring…'
+                    : restoreArmed === o.retainedPath ? 'Click again to restore' : 'Restore'}
+                </button>
+              {:else}
+                <span class="presult bad" title="The converted file is no longer at its expected path">can't restore</span>
+              {/if}
+            </div>
+          {/each}
+        </div>
+        <p class="hint">
+          Restore leaves any extracted <code>.srt</code> sidecars in place — nothing
+          records which of them this feature created versus which were already
+          on disk, and deleting a file you supplied would be worse than leaving
+          a duplicate subtitle option behind.
+        </p>
+      {/if}
+    </section>
+
+    <section class="card">
       <h2>What this does not do</h2>
       <ul class="dontlist">
         <li>Never re-encodes HEVC — passthrough already handles it for capable clients.</li>
         <li>Never re-encodes video that is already H.264 — only the container or audio changes.</li>
         <li>Never discards an audio track — the original is kept alongside the added one.</li>
+        <li>Never deletes a source until its replacement has been verified and the original safely moved aside.</li>
       </ul>
     </section>
   {/if}
@@ -332,9 +482,31 @@
   .kv em { font-style: normal; color: var(--ink-faint); font-size: 0.78rem; }
 
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: var(--s3); }
-  .field { display: flex; flex-direction: column; gap: 2px; }
+  .field { display: flex; flex-direction: column; gap: 4px; }
   .field span { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-faint); }
-  .field strong { font-size: 0.95rem; }
+  .field span em { font-style: normal; text-transform: none; letter-spacing: 0; opacity: 0.7; }
+  .field input {
+    background: rgba(242, 242, 244, 0.06); border: 1px solid var(--line);
+    border-radius: var(--r-sm); padding: 7px 10px; color: var(--ink);
+    font-size: 0.92rem; font-variant-numeric: tabular-nums; width: 100%;
+  }
+  .field input:focus { outline: none; border-color: var(--ink-soft); }
+  .field input:disabled { opacity: 0.5; }
+  .inlinecheck {
+    display: flex; align-items: center; gap: 8px; cursor: pointer;
+    margin-top: var(--s3); font-size: 0.86rem; color: var(--ink-soft);
+  }
+  .inlinecheck input { width: 16px; height: 16px; accent-color: #7ed491; }
+
+  .ometa { font-size: 0.76rem; color: var(--ink-faint); margin-left: auto; }
+  .ometa .warn { color: #ffb46b; }
+  .restorebtn {
+    flex: 0 0 auto; font-size: 0.78rem; font-weight: 600; color: var(--ink-soft);
+    padding: 5px 12px; border-radius: var(--r-sm);
+    box-shadow: inset 0 0 0 1px var(--line-strong);
+  }
+  .restorebtn.armed { background: #ffb46b; color: #1a1a1a; box-shadow: none; }
+  .restorebtn:disabled { opacity: 0.5; }
 
   .dontlist { list-style: none; display: flex; flex-direction: column; gap: 6px; }
   .dontlist li { font-size: 0.85rem; color: var(--ink-soft); padding-left: 18px; position: relative; }

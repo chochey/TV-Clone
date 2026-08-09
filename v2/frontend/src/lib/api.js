@@ -146,6 +146,9 @@ export const api = {
   // PILOT_TIER1_FILES. Not a general "convert N files" call — see the
   // comment above that constant for why the scope is fixed for now.
   conversionPilotRun: () => fetch('/api/conversion/pilot-run', opts('POST')).then(json),
+  conversionOriginals: () => fetch('/api/conversion/originals', opts('GET')).then(json),
+  conversionRestore: (retainedPath) =>
+    fetch('/api/conversion/restore', opts('POST', { retainedPath })).then(json),
 };
 
 // Build a streaming URL the <video> element can use directly (proxied to v1).

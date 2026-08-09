@@ -245,7 +245,7 @@ const {
   probeFileAsync,
   probeDurationAsync, probeDurationWithReason,
   probeSubtitlesAsync, getStreamMode,
-  saveMediaInfo, markDirty, markFileCorrupted, persistCorrupted,
+  saveMediaInfo, scheduleSaveMediaInfo, markDirty, markFileCorrupted, persistCorrupted,
   TEXT_SUB_CODECS, BROWSER_AUDIO_CODECS,
 } = probe;
 
@@ -2480,7 +2480,7 @@ const PILOT_TIER1_FILES = [
 const conversionWorker = require('./lib/conversion-worker')({
   hashId,
   probeCache, pixFmtCache, audioProbeCache, audioTracksCache, subProbeCache, heightCache, levelCache,
-  markDirty, saveMediaInfo,
+  markDirty, scheduleSaveMediaInfo,
   getActiveTranscodeFilePaths: () => new Set(
     Object.values(transcodeSessions).map((s) => s.filePath).filter(Boolean),
   ),
@@ -2514,6 +2514,41 @@ app.post('/api/conversion/pilot-run', requireAdminSession, async (_req, res) => 
   // setupOrganizerWatch below), so nothing else will notice these renames.
   if (succeeded > 0) invalidateLibrary('conversion-pilot');
   res.json({ ok: true, results, succeeded, total: results.length });
+});
+
+// Retained originals — the undo window for anything already converted.
+// Listing is admin-only because it exposes real filesystem paths.
+app.get('/api/conversion/originals', requireAdminSession, (_req, res) => {
+  try {
+    const cfg = conversionConfig.get();
+    const roots = config.folders.map((f) => f.path).filter(Boolean);
+    const items = conversionWorker.listRetainedOriginals(roots, cfg.keepOriginalsDays);
+    res.json({
+      ok: true,
+      items,
+      totalBytes: items.reduce((s, i) => s + i.size, 0),
+      expiredCount: items.filter((i) => i.expired).length,
+      keepOriginalsDays: cfg.keepOriginalsDays,
+    });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.post('/api/conversion/restore', requireAdminSession, (req, res) => {
+  const retainedPath = String(req.body?.retainedPath || '');
+  // Must sit inside a configured library folder AND inside a retention dir —
+  // this endpoint moves files, so a path from the request body is not trusted
+  // to be anywhere the admin happens to name.
+  const roots = config.folders.map((f) => f.path).filter(Boolean);
+  const resolved = path.resolve(retainedPath);
+  const inLibrary = roots.some((r) => resolved.startsWith(path.resolve(r) + path.sep));
+  if (!inLibrary || !resolved.includes(`${path.sep}.converted-originals${path.sep}`)) {
+    return res.status(400).json({ ok: false, error: 'Path is not a retained original inside a library folder' });
+  }
+  const result = conversionWorker.restoreOriginal(resolved);
+  if (!result.ok) return res.status(409).json({ ok: false, error: result.reason });
+  console.log(`[conversion] Restored ${path.basename(resolved)}`);
+  invalidateLibrary('conversion-restore');
+  res.json({ ok: true, ...result });
 });
 
 const reliability = require('./lib/reliability');
