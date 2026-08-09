@@ -1,7 +1,10 @@
 <script>
-  // Phase 1 of MEDIA_CONVERSION_PLAN.md: read-only. This page reports what a
-  // conversion run WOULD do — nothing here mutates a file. There is no
-  // Start button because there is nothing to start yet.
+  // Phase 1 of MEDIA_CONVERSION_PLAN.md is read-only: everything above the
+  // pilot section reports what a full conversion run WOULD do, without
+  // touching a file. The pilot section below is phase 2 — it runs the real
+  // pipeline (remux, verify, atomic swap, retained original, watch-progress
+  // migration) against ten specific hand-picked files, hardcoded in
+  // server.js. It is not a general "convert N files" control.
   import { onMount } from 'svelte';
   import { api } from '../lib/api.js';
 
@@ -10,6 +13,28 @@
   let includeImageSubs = $state(false);
   let saving = $state(false);
   let saveNote = $state('');
+
+  let pilotBusy = $state(false);
+  let pilotArmed = $state(false);
+  let pilotResults = $state(null);
+  let pilotError = $state('');
+
+  async function runPilot() {
+    if (!pilotArmed) { pilotArmed = true; setTimeout(() => { pilotArmed = false; }, 5000); return; }
+    pilotArmed = false;
+    pilotBusy = true;
+    pilotError = '';
+    pilotResults = null;
+    try {
+      const res = await api.conversionPilotRun();
+      pilotResults = res;
+      await refresh();
+    } catch (e) {
+      pilotError = e.body?.error || 'Pilot run failed';
+    } finally {
+      pilotBusy = false;
+    }
+  }
 
   async function refresh() {
     error = '';
@@ -66,10 +91,13 @@
   {:else}
     <section class="card notice">
       <p>
-        This page shows what a future conversion run would do, computed live from
-        your library right now. <strong>No file is touched by anything on this
-        page.</strong> The actual conversion worker — with verification, atomic
-        swaps, and an undo window — is a later phase.
+        Everything above the pilot section is read-only — it reports what a
+        full conversion run would do, computed live from your library, without
+        touching a file. <strong>The pilot section further down is different:
+        it is real</strong> — a one-time run against ten specific hand-picked
+        files, with verification, atomic swaps, and a retained original. The
+        general "convert everything" queue this page projects for is still a
+        later phase.
       </p>
     </section>
 
@@ -182,6 +210,38 @@
       </div>
     </section>
 
+    <section class="card pilot">
+      <h2>Phase 2 pilot — ten hand-picked files</h2>
+      <p class="hint">
+        Runs the real Tier 1 pipeline against ten specific TV episodes chosen for
+        this test: a mix with and without embedded subtitles, none currently
+        playing, and two that already carry real watch history on the Admin
+        profile (both already marked watched) specifically to prove progress
+        migration on genuine data. Each file is skipped — not touched — if it is
+        streaming or corrupted when its turn comes. Originals are kept in a
+        <code>.converted-originals</code> folder next to where they were, not deleted.
+      </p>
+      <button class="pilotbtn" class:armed={pilotArmed} onclick={runPilot} disabled={pilotBusy}>
+        {pilotBusy ? 'Running…' : pilotArmed ? 'Click again to run for real' : 'Run Tier 1 pilot (10 files)'}
+      </button>
+      {#if pilotError}<p class="danger">{pilotError}</p>{/if}
+      {#if pilotResults}
+        <div class="pilotsummary">{pilotResults.succeeded} of {pilotResults.total} converted</div>
+        <div class="pilotlist">
+          {#each pilotResults.results as r}
+            <div class="pilotrow" class:ok={r.ok} class:bad={!r.ok}>
+              <span class="pfile">{r.filePath.split('/').pop()}</span>
+              {#if r.ok}
+                <span class="presult ok">converted{r.extractedSubs?.length ? ` · ${r.extractedSubs.length} sub file(s) extracted` : ''}{r.profilesMigrated?.length ? ' · progress migrated' : ''}</span>
+              {:else}
+                <span class="presult bad">{r.reason}</span>
+              {/if}
+            </div>
+          {/each}
+        </div>
+      {/if}
+    </section>
+
     <section class="card">
       <h2>What this does not do</h2>
       <ul class="dontlist">
@@ -207,6 +267,33 @@
   .card.notice { background: rgba(126, 212, 145, 0.06); border-color: rgba(126, 212, 145, 0.25); }
   .card.notice p { font-size: 0.88rem; line-height: 1.5; color: var(--ink-soft); }
   .card.notice strong { color: var(--ink); }
+
+  .card.pilot { background: rgba(255, 180, 107, 0.05); border-color: rgba(255, 180, 107, 0.25); }
+  .card.pilot code {
+    font-family: ui-monospace, Menlo, monospace; font-size: 0.82em;
+    background: rgba(242, 242, 244, 0.08); padding: 1px 5px; border-radius: 4px;
+  }
+  .pilotbtn {
+    margin-top: var(--s3); font-size: 0.88rem; font-weight: 700; padding: 10px 20px;
+    border-radius: var(--r-sm); background: rgba(255, 180, 107, 0.15); color: #ffb46b;
+    box-shadow: inset 0 0 0 1px rgba(255, 180, 107, 0.4);
+  }
+  .pilotbtn.armed { background: #ffb46b; color: #1a1a1a; }
+  .pilotbtn:disabled { opacity: 0.6; }
+  .pilotsummary { margin-top: var(--s3); font-weight: 700; font-size: 0.9rem; }
+  .pilotlist { display: flex; flex-direction: column; gap: 6px; margin-top: var(--s2); }
+  .pilotrow {
+    display: flex; align-items: baseline; justify-content: space-between; gap: var(--s3);
+    padding: 8px 10px; border-radius: var(--r-sm); flex-wrap: wrap;
+    background: rgba(242, 242, 244, 0.04);
+    border-left: 3px solid transparent;
+  }
+  .pilotrow.ok { border-left-color: rgba(126, 212, 145, 0.5); }
+  .pilotrow.bad { border-left-color: rgba(255, 107, 107, 0.5); }
+  .pfile { font-family: ui-monospace, Menlo, monospace; font-size: 0.76rem; color: var(--ink-soft); }
+  .presult { font-size: 0.78rem; font-weight: 600; }
+  .presult.ok { color: #7ed491; }
+  .presult.bad { color: #ff6b6b; }
   .card h2 { font-size: 1rem; font-weight: 700; margin-bottom: var(--s2); }
 
   .row { display: flex; align-items: center; }

@@ -2442,6 +2442,80 @@ app.get('/api/conversion/plan', requireAdminSession, (req, res) => {
     .catch((err) => res.status(500).json({ ok: false, error: err.message }));
 });
 
+// Phase 2 pilot — Tier 1 (container remux) on ten hand-picked files, per
+// MEDIA_CONVERSION_PLAN.md. This is deliberately NOT a general "convert
+// everything" mechanism: that needs a scheduler, concurrency control, and a
+// UI file-picker, none of which exist yet (phase 3+). This is the narrow,
+// supervised first run that proves the pipeline — remux, verification,
+// atomic swap, retained-original, and profile id migration — is sound
+// before anything automated is built on top of it.
+//
+// Wired here (not a standalone script) because lib/profile-data.js caches
+// each profile's JSON in memory for the process lifetime — an external
+// script editing data/profile_*.json directly would race the live server's
+// copy, and the server's next unrelated write would silently overwrite the
+// edit with its stale cache. Requiring the worker into this process gives it
+// the exact same loadProfileData/saveProfileData/probe-cache instances the
+// server already uses, so there is nothing to race.
+//
+// Picked deliberately: none currently streaming, none corrupted, a mix of
+// files with and without embedded subtitles, and two (King of Queens S06E05,
+// Mr Inbetween S02E11) that carry real watch history on the Admin profile —
+// included on purpose to prove the id migration on genuine user data, not
+// just synthetic test fixtures. Both are already marked watched, so a
+// mistake here costs nothing more than a completed episode's row.
+const PILOT_TIER1_FILES = [
+  '/mnt/media/TV/The King of Queens (1998)/Season 06/The King of Queens - S06E05 - Nocturnal Omission.mkv',
+  '/mnt/media/TV/Mr Inbetween (2018)/Season 02/Mr Inbetween - S02E11 - There Rust, and Let Me Die.mkv',
+  '/mnt/media/TV/Rick and Morty (2013)/Season 06/Rick and Morty - S06E03 - Bethic Twinstinct.mkv',
+  "/mnt/media/TV/Rick and Morty (2013)/Season 06/Rick and Morty - S06E10 - Ricktional Mortpoon's Rickmas Mortcation.mkv",
+  '/mnt/media/TV/Rick and Morty (2013)/Season 06/Rick and Morty - S06E02 - Rick A Mort Well Lived.mkv',
+  '/mnt/media/TV/Seinfeld (1989)/Season 04/Seinfeld - S04E14 - The Movie.mkv',
+  '/mnt/media/TV/The Blacklist (2013)/Season 03/The Blacklist - S03E19 - Cape May.mkv',
+  '/mnt/media/TV/The Blacklist (2013)/Season 02/The Blacklist - S02E04 - Dr. Linus Creel (No. 82).mkv',
+  '/mnt/media/TV/The Blacklist (2013)/Season 02/The Blacklist - S02E02 - Monarch Douglas Bank (No. 112).mkv',
+  '/mnt/media/TV/The Blacklist (2013)/Season 02/The Blacklist - S02E03 - Dr. James Covington (No. 89).mkv',
+];
+
+const conversionWorker = require('./lib/conversion-worker')({
+  hashId,
+  probeCache, pixFmtCache, audioProbeCache, audioTracksCache, subProbeCache, heightCache, levelCache,
+  markDirty, saveMediaInfo,
+  getActiveTranscodeFilePaths: () => new Set(
+    Object.values(transcodeSessions).map((s) => s.filePath).filter(Boolean),
+  ),
+  loadProfileData, saveProfileData,
+  profileIds: () => config.profiles.map((p) => p.id),
+  TEXT_SUB_CODECS,
+  log: (msg) => console.log(`[conversion] ${msg}`),
+});
+
+let conversionPilotRunning = false;
+app.post('/api/conversion/pilot-run', requireAdminSession, async (_req, res) => {
+  if (conversionPilotRunning) return res.status(409).json({ ok: false, error: 'Pilot run already in progress' });
+  conversionPilotRunning = true;
+  console.log(`[conversion] Starting Tier 1 pilot — ${PILOT_TIER1_FILES.length} hand-picked files`);
+  const results = [];
+  try {
+    for (const filePath of PILOT_TIER1_FILES) {
+      // Re-checked per file, not just once at the top of the batch — a
+      // stream could start mid-run, and the ten-file batch has no reason to
+      // race a real viewer that begins watching one of them.
+      const result = await conversionWorker.convertContainerOnly(filePath);
+      console.log(`[conversion] ${result.ok ? 'OK' : 'SKIP'} ${path.basename(filePath)}${result.ok ? '' : ` — ${result.reason}`}`);
+      results.push(result);
+    }
+  } finally {
+    conversionPilotRunning = false;
+  }
+  const succeeded = results.filter((r) => r.ok).length;
+  console.log(`[conversion] Pilot run complete: ${succeeded}/${results.length} converted`);
+  // fs.watch is blind on this box's fuse.mergerfs media mount (see
+  // setupOrganizerWatch below), so nothing else will notice these renames.
+  if (succeeded > 0) invalidateLibrary('conversion-pilot');
+  res.json({ ok: true, results, succeeded, total: results.length });
+});
+
 const reliability = require('./lib/reliability');
 app.get('/api/reliability/status', requirePermission('canDashboard'), async (_req, res) => {
   try {

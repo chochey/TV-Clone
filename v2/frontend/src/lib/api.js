@@ -142,6 +142,10 @@ export const api = {
   conversionConfigUpdate: (body) => fetch('/api/conversion/config', opts('PUT', body)).then(json),
   conversionPlan: (includeImageSubs = false) =>
     fetch(`/api/conversion/plan${includeImageSubs ? '?includeImageSubs=1' : ''}`, opts('GET')).then(json),
+  // Phase 2 pilot: converts the ten hand-picked files server.js hardcodes as
+  // PILOT_TIER1_FILES. Not a general "convert N files" call — see the
+  // comment above that constant for why the scope is fixed for now.
+  conversionPilotRun: () => fetch('/api/conversion/pilot-run', opts('POST')).then(json),
 };
 
 // Build a streaming URL the <video> element can use directly (proxied to v1).
