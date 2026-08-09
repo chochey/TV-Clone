@@ -145,7 +145,14 @@ export const api = {
   // Phase 2 pilot: converts the ten hand-picked files server.js hardcodes as
   // PILOT_TIER1_FILES. Not a general "convert N files" call — see the
   // comment above that constant for why the scope is fixed for now.
-  conversionPilotRun: () => fetch('/api/conversion/pilot-run', opts('POST')).then(json),
+  conversionStatus: () => fetch('/api/conversion/status', opts('GET')).then(json),
+  conversionStart: () => fetch('/api/conversion/start', opts('POST')).then(json),
+  conversionPause: () => fetch('/api/conversion/pause', opts('POST')).then(json),
+  conversionResume: () => fetch('/api/conversion/resume', opts('POST')).then(json),
+  conversionStop: () => fetch('/api/conversion/stop', opts('POST')).then(json),
+  // dryRun defaults true server-side; the UI always previews before deleting.
+  conversionCleanup: (dryRun = true) =>
+    fetch('/api/conversion/cleanup', opts('POST', { dryRun })).then(json),
   conversionOriginals: () => fetch('/api/conversion/originals', opts('GET')).then(json),
   conversionRestore: (retainedPath) =>
     fetch('/api/conversion/restore', opts('POST', { retainedPath })).then(json),

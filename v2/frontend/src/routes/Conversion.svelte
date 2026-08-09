@@ -5,7 +5,7 @@
   // pipeline (remux, verify, atomic swap, retained original, watch-progress
   // migration) against ten specific hand-picked files, hardcoded in
   // server.js. It is not a general "convert N files" control.
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import { api } from '../lib/api.js';
 
   let data = $state(null);        // { plan, config, disk, notYetProbed }
@@ -14,32 +14,75 @@
   let saving = $state(false);
   let saveNote = $state('');
 
-  let pilotBusy = $state(false);
-  let pilotArmed = $state(false);
-  let pilotResults = $state(null);
-  let pilotError = $state('');
+  let queue = $state(null);       // live snapshot from /api/conversion/status
+  let queueBusy = $state(false);
+  let startArmed = $state(false);
+  let queueError = $state('');
+  let poll = null;
+
+  let cleanupPreview = $state(null);
+  let cleanupBusy = $state(false);
+  let cleanupArmed = $state(false);
+  let cleanupError = $state('');
+  let cleanupDone = $state('');
+
+  const isActive = $derived(queue?.status === 'running' || queue?.status === 'paused' || queue?.status === 'stopping');
+  const pct = $derived(queue?.total ? Math.round((queue.done / queue.total) * 100) : 0);
+
+  async function loadStatus() {
+    try { queue = await api.conversionStatus(); }
+    catch (e) { queueError = e.body?.error || 'Failed to read queue status'; }
+  }
+
+  // Poll only while something is happening. A finished queue does not need a
+  // request every two seconds for the rest of the session.
+  function syncPolling() {
+    const shouldPoll = isActive;
+    if (shouldPoll && !poll) poll = setInterval(loadStatus, 2000);
+    if (!shouldPoll && poll) { clearInterval(poll); poll = null; }
+  }
+  $effect(syncPolling);
+
+  async function queueAction(fn, { arm = false } = {}) {
+    if (arm && !startArmed) { startArmed = true; setTimeout(() => { startArmed = false; }, 5000); return; }
+    startArmed = false;
+    queueBusy = true; queueError = '';
+    try {
+      queue = await fn();
+      await Promise.all([refresh(), loadOriginals()]);
+    } catch (e) {
+      queueError = e.body?.error || 'Action failed';
+    } finally {
+      queueBusy = false;
+      loadStatus();
+    }
+  }
+
+  async function previewCleanup() {
+    cleanupBusy = true; cleanupError = ''; cleanupDone = '';
+    try { cleanupPreview = await api.conversionCleanup(true); }
+    catch (e) { cleanupError = e.body?.error || 'Cleanup preview failed'; }
+    finally { cleanupBusy = false; }
+  }
+
+  async function runCleanup() {
+    if (!cleanupArmed) { cleanupArmed = true; setTimeout(() => { cleanupArmed = false; }, 5000); return; }
+    cleanupArmed = false;
+    cleanupBusy = true; cleanupError = '';
+    try {
+      const r = await api.conversionCleanup(false);
+      cleanupDone = `Deleted ${r.deleted.length} file(s), freed ${fmtBytes(r.bytes)}`;
+      cleanupPreview = null;
+      await loadOriginals();
+    } catch (e) {
+      cleanupError = e.body?.error || 'Cleanup failed';
+    } finally { cleanupBusy = false; }
+  }
 
   let originals = $state(null);   // { items, totalBytes, expiredCount, keepOriginalsDays }
   let restoringPath = $state('');
   let restoreArmed = $state('');
   let originalsError = $state('');
-
-  async function runPilot() {
-    if (!pilotArmed) { pilotArmed = true; setTimeout(() => { pilotArmed = false; }, 5000); return; }
-    pilotArmed = false;
-    pilotBusy = true;
-    pilotError = '';
-    pilotResults = null;
-    try {
-      const res = await api.conversionPilotRun();
-      pilotResults = res;
-      await Promise.all([refresh(), loadOriginals()]);
-    } catch (e) {
-      pilotError = e.body?.error || 'Pilot run failed';
-    } finally {
-      pilotBusy = false;
-    }
-  }
 
   async function refresh() {
     error = '';
@@ -72,7 +115,8 @@
     }
   }
 
-  onMount(() => { refresh(); loadOriginals(); });
+  onMount(() => { refresh(); loadOriginals(); loadStatus(); });
+  onDestroy(() => { if (poll) clearInterval(poll); });
 
   function fmtBytes(b) {
     if (b == null) return '—';
@@ -312,31 +356,71 @@
     </section>
 
     <section class="card pilot">
-      <h2>Phase 2 pilot — ten hand-picked files</h2>
+      <div class="row spread">
+        <h2>Conversion queue</h2>
+        {#if queue}
+          <span class="qstatus {queue.status}">{queue.status}</span>
+        {/if}
+      </div>
       <p class="hint">
-        Runs the real Tier 1 pipeline against ten specific TV episodes chosen for
-        this test: a mix with and without embedded subtitles, none currently
-        playing, and two that already carry real watch history on the Admin
-        profile (both already marked watched) specifically to prove progress
-        migration on genuine data. Each file is skipped — not touched — if it is
-        streaming or corrupted when its turn comes. Originals are kept in a
-        <code>.converted-originals</code> folder next to where they were, not deleted.
+        Converts the container tier — H.264 already in the wrong container.
+        Every stream is copied, nothing is re-encoded, and each original is kept
+        for {data.config.keepOriginalsDays} days. Runs in the background at
+        niceness {data.config.niceness} with idle IO priority, honours the limits
+        above, and parks itself whenever someone starts watching.
+        Smallest files first, so a run stopped early has converted the most it could.
       </p>
-      <button class="pilotbtn" class:armed={pilotArmed} onclick={runPilot} disabled={pilotBusy}>
-        {pilotBusy ? 'Running…' : pilotArmed ? 'Click again to run for real' : 'Run Tier 1 pilot (10 files)'}
-      </button>
-      {#if pilotError}<p class="danger">{pilotError}</p>{/if}
-      {#if pilotResults}
-        <div class="pilotsummary">{pilotResults.succeeded} of {pilotResults.total} converted</div>
+
+      {#if queueError}<p class="danger">{queueError}</p>{/if}
+
+      {#if queue && queue.total > 0}
+        <div class="progwrap">
+          <div class="progbar"><span style="width:{pct}%"></span></div>
+          <div class="progmeta">
+            <strong>{queue.done} / {queue.total}</strong>
+            <span>{queue.converted} converted · {queue.failed} skipped</span>
+            {#if queue.bytesBefore > 0}
+              <span>{fmtBytes(queue.bytesBefore)} → {fmtBytes(queue.bytesAfter)}</span>
+            {/if}
+          </div>
+          {#if queue.current}
+            <div class="curfile">Converting <code>{queue.current}</code></div>
+          {/if}
+          {#if queue.waitingReason}
+            <div class="waiting">Paused automatically — {queue.waitingReason}. Resumes on its own.</div>
+          {/if}
+        </div>
+      {/if}
+
+      <div class="qcontrols">
+        {#if queue?.status === 'running'}
+          <button class="qbtn" onclick={() => queueAction(api.conversionPause)} disabled={queueBusy}>Pause</button>
+          <button class="qbtn stop" onclick={() => queueAction(api.conversionStop)} disabled={queueBusy}>Stop</button>
+        {:else if queue?.status === 'paused'}
+          <button class="qbtn go" onclick={() => queueAction(api.conversionResume)} disabled={queueBusy}>Resume</button>
+          <button class="qbtn stop" onclick={() => queueAction(api.conversionStop)} disabled={queueBusy}>Stop</button>
+        {:else if queue?.status === 'stopping'}
+          <button class="qbtn" disabled>Stopping…</button>
+        {:else}
+          <button class="qbtn go" class:armed={startArmed}
+                  onclick={() => queueAction(api.conversionStart, { arm: true })} disabled={queueBusy}>
+            {startArmed ? 'Click again to start converting' : `Start (${data.plan.tiers.container.count} files eligible)`}
+          </button>
+        {/if}
+      </div>
+      <p class="hint">
+        Pause lets the file in flight finish. Stop kills it immediately — safe,
+        because nothing is written over the original until a conversion has fully
+        verified. A run is capped at {data.config.maxFilesPerRun} files
+        (<em>Max files per run</em> above); start it again for the next batch.
+      </p>
+
+      {#if queue?.results?.length}
         <div class="pilotlist">
-          {#each pilotResults.results as r}
+          {#each queue.results as r (r.name + r.at)}
             <div class="pilotrow" class:ok={r.ok} class:bad={!r.ok}>
-              <span class="pfile">{r.filePath.split('/').pop()}</span>
-              {#if r.ok}
-                <span class="presult ok">converted{r.extractedSubs?.length ? ` · ${r.extractedSubs.length} sub file(s) extracted` : ''}{r.profilesMigrated?.length ? ' · progress migrated' : ''}</span>
-              {:else}
-                <span class="presult bad">{r.reason}</span>
-              {/if}
+              <span class="pfile">{r.name}</span>
+              <span class="presult {r.ok ? 'ok' : 'bad'}">{r.ok ? 'converted' : r.reason}</span>
             </div>
           {/each}
         </div>
@@ -353,10 +437,36 @@
       <p class="hint">
         Every converted file's original is kept here for {data.config.keepOriginalsDays} days.
         Restoring puts the original back and moves watch progress with it.
-        <strong>Nothing deletes these automatically yet</strong> — they stay until
-        removed by hand, so the disk cost is real and visible rather than silent.
+        <strong>Nothing is ever deleted on a timer</strong> — cleanup only runs
+        when you click it below, and it previews first.
       </p>
       {#if originalsError}<p class="danger">{originalsError}</p>{/if}
+
+      <div class="cleanupbar">
+        <button class="qbtn" onclick={previewCleanup} disabled={cleanupBusy}>
+          {cleanupBusy && !cleanupPreview ? 'Checking…' : 'Check for expired originals'}
+        </button>
+        {#if cleanupPreview}
+          {#if cleanupPreview.candidates > 0}
+            <button class="qbtn danger" class:armed={cleanupArmed} onclick={runCleanup} disabled={cleanupBusy}>
+              {cleanupArmed
+                ? `Click again to delete ${cleanupPreview.candidates} file(s)`
+                : `Delete ${cleanupPreview.candidates} expired · free ${fmtBytes(cleanupPreview.bytes)}`}
+            </button>
+          {:else}
+            <span class="hint">Nothing is past {originals?.keepOriginalsDays ?? data.config.keepOriginalsDays} days yet.</span>
+          {/if}
+        {/if}
+      </div>
+      {#if cleanupError}<p class="danger">{cleanupError}</p>{/if}
+      {#if cleanupDone}<p class="ok">{cleanupDone}</p>{/if}
+      {#if cleanupPreview?.skippedOnlyCopy?.length}
+        <p class="warn">
+          {cleanupPreview.skippedOnlyCopy.length} expired original(s) will NOT be
+          deleted — their converted replacement is missing, so the retained copy
+          is the only one left. Restore or investigate those instead.
+        </p>
+      {/if}
       {#if !originals}
         <p class="hint">Loading…</p>
       {:else if !originals.items.length}
@@ -423,14 +533,45 @@
     font-family: ui-monospace, Menlo, monospace; font-size: 0.82em;
     background: rgba(242, 242, 244, 0.08); padding: 1px 5px; border-radius: 4px;
   }
-  .pilotbtn {
-    margin-top: var(--s3); font-size: 0.88rem; font-weight: 700; padding: 10px 20px;
-    border-radius: var(--r-sm); background: rgba(255, 180, 107, 0.15); color: #ffb46b;
-    box-shadow: inset 0 0 0 1px rgba(255, 180, 107, 0.4);
+  .qstatus {
+    font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
+    padding: 3px 10px; border-radius: 99px; border: 1px solid currentColor; color: var(--ink-faint);
   }
-  .pilotbtn.armed { background: #ffb46b; color: #1a1a1a; }
-  .pilotbtn:disabled { opacity: 0.6; }
-  .pilotsummary { margin-top: var(--s3); font-weight: 700; font-size: 0.9rem; }
+  .qstatus.running { color: #7ed491; }
+  .qstatus.paused { color: #ffb46b; }
+  .qstatus.stopping { color: #ff6b6b; }
+
+  .qcontrols { display: flex; gap: var(--s2); flex-wrap: wrap; margin-top: var(--s3); }
+  .qbtn {
+    font-size: 0.86rem; font-weight: 700; padding: 9px 18px; border-radius: var(--r-sm);
+    color: var(--ink-soft); box-shadow: inset 0 0 0 1px var(--line-strong);
+  }
+  .qbtn.go { color: #7ed491; box-shadow: inset 0 0 0 1px rgba(126, 212, 145, 0.45); }
+  .qbtn.go.armed { background: #7ed491; color: #10231a; box-shadow: none; }
+  .qbtn.stop { color: #ff6b6b; box-shadow: inset 0 0 0 1px rgba(255, 107, 107, 0.45); }
+  .qbtn.danger { color: #ff6b6b; box-shadow: inset 0 0 0 1px rgba(255, 107, 107, 0.45); }
+  .qbtn.danger.armed { background: #e5484d; color: #fff; box-shadow: none; }
+  .qbtn:disabled { opacity: 0.5; }
+
+  .progwrap { margin-top: var(--s3); }
+  .progbar {
+    height: 6px; background: rgba(242, 242, 244, 0.1); border-radius: 99px; overflow: hidden;
+  }
+  .progbar span {
+    display: block; height: 100%; background: #7ed491;
+    transition: width var(--t-med, 0.3s) ease;
+  }
+  .progmeta {
+    display: flex; gap: var(--s3); flex-wrap: wrap; align-items: baseline;
+    margin-top: 6px; font-size: 0.8rem; color: var(--ink-faint);
+  }
+  .progmeta strong { color: var(--ink); font-size: 0.9rem; font-variant-numeric: tabular-nums; }
+  .curfile { margin-top: 6px; font-size: 0.8rem; color: var(--ink-soft); }
+  .curfile code { font-family: ui-monospace, Menlo, monospace; font-size: 0.95em; }
+  .waiting {
+    margin-top: 6px; font-size: 0.8rem; color: #ffb46b;
+  }
+  .cleanupbar { display: flex; gap: var(--s2); align-items: center; flex-wrap: wrap; margin: var(--s3) 0; }
   .pilotlist { display: flex; flex-direction: column; gap: 6px; margin-top: var(--s2); }
   .pilotrow {
     display: flex; align-items: baseline; justify-content: space-between; gap: var(--s3);

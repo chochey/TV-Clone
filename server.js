@@ -251,7 +251,7 @@ const {
 
 // ── Library conversion (MEDIA_CONVERSION_PLAN.md) — phase 1: read-only
 // planner + config only. Nothing here mutates a media file; that is phase 2+.
-const { planConversion } = require('./lib/conversion-plan');
+const { planConversion, classifyFile } = require('./lib/conversion-plan');
 const conversionConfig = require('./lib/conversion-config')({ DATA_DIR, loadJSON, saveJSON });
 
 // Background probe: runs after scan, probes uncached files without blocking
@@ -2442,41 +2442,13 @@ app.get('/api/conversion/plan', requireAdminSession, (req, res) => {
     .catch((err) => res.status(500).json({ ok: false, error: err.message }));
 });
 
-// Phase 2 pilot — Tier 1 (container remux) on ten hand-picked files, per
-// MEDIA_CONVERSION_PLAN.md. This is deliberately NOT a general "convert
-// everything" mechanism: that needs a scheduler, concurrency control, and a
-// UI file-picker, none of which exist yet (phase 3+). This is the narrow,
-// supervised first run that proves the pipeline — remux, verification,
-// atomic swap, retained-original, and profile id migration — is sound
-// before anything automated is built on top of it.
+// ── Library conversion, phase 3 (MEDIA_CONVERSION_PLAN.md) ─────────────
 //
-// Wired here (not a standalone script) because lib/profile-data.js caches
-// each profile's JSON in memory for the process lifetime — an external
-// script editing data/profile_*.json directly would race the live server's
-// copy, and the server's next unrelated write would silently overwrite the
-// edit with its stale cache. Requiring the worker into this process gives it
-// the exact same loadProfileData/saveProfileData/probe-cache instances the
-// server already uses, so there is nothing to race.
-//
-// Picked deliberately: none currently streaming, none corrupted, a mix of
-// files with and without embedded subtitles, and two (King of Queens S06E05,
-// Mr Inbetween S02E11) that carry real watch history on the Admin profile —
-// included on purpose to prove the id migration on genuine user data, not
-// just synthetic test fixtures. Both are already marked watched, so a
-// mistake here costs nothing more than a completed episode's row.
-const PILOT_TIER1_FILES = [
-  '/mnt/media/TV/The King of Queens (1998)/Season 06/The King of Queens - S06E05 - Nocturnal Omission.mkv',
-  '/mnt/media/TV/Mr Inbetween (2018)/Season 02/Mr Inbetween - S02E11 - There Rust, and Let Me Die.mkv',
-  '/mnt/media/TV/Rick and Morty (2013)/Season 06/Rick and Morty - S06E03 - Bethic Twinstinct.mkv',
-  "/mnt/media/TV/Rick and Morty (2013)/Season 06/Rick and Morty - S06E10 - Ricktional Mortpoon's Rickmas Mortcation.mkv",
-  '/mnt/media/TV/Rick and Morty (2013)/Season 06/Rick and Morty - S06E02 - Rick A Mort Well Lived.mkv',
-  '/mnt/media/TV/Seinfeld (1989)/Season 04/Seinfeld - S04E14 - The Movie.mkv',
-  '/mnt/media/TV/The Blacklist (2013)/Season 03/The Blacklist - S03E19 - Cape May.mkv',
-  '/mnt/media/TV/The Blacklist (2013)/Season 02/The Blacklist - S02E04 - Dr. Linus Creel (No. 82).mkv',
-  '/mnt/media/TV/The Blacklist (2013)/Season 02/The Blacklist - S02E02 - Monarch Douglas Bank (No. 112).mkv',
-  '/mnt/media/TV/The Blacklist (2013)/Season 02/The Blacklist - S02E03 - Dr. James Covington (No. 89).mkv',
-];
-
+// Wired into this process, not a standalone script: lib/profile-data.js
+// caches each profile's JSON in memory for the process lifetime, so an
+// external script editing data/profile_*.json would race the live server's
+// copy and lose to its next unrelated write. Sharing the running instances
+// means there is nothing to race.
 const conversionWorker = require('./lib/conversion-worker')({
   hashId,
   probeCache, pixFmtCache, audioProbeCache, audioTracksCache, subProbeCache, heightCache, levelCache,
@@ -2487,33 +2459,112 @@ const conversionWorker = require('./lib/conversion-worker')({
   loadProfileData, saveProfileData,
   profileIds: () => config.profiles.map((p) => p.id),
   TEXT_SUB_CODECS,
+  // Read per file rather than captured once, so a limit changed mid-run takes
+  // effect on the next file instead of needing a restart.
+  getLimits: () => {
+    const c = conversionConfig.get();
+    return { niceness: c.niceness, ffmpegThreads: c.ffmpegThreads };
+  },
   log: (msg) => console.log(`[conversion] ${msg}`),
 });
 
-let conversionPilotRunning = false;
-app.post('/api/conversion/pilot-run', requireAdminSession, async (_req, res) => {
-  if (conversionPilotRunning) return res.status(409).json({ ok: false, error: 'Pilot run already in progress' });
-  conversionPilotRunning = true;
-  console.log(`[conversion] Starting Tier 1 pilot — ${PILOT_TIER1_FILES.length} hand-picked files`);
-  const results = [];
-  try {
-    for (const filePath of PILOT_TIER1_FILES) {
-      // Re-checked per file, not just once at the top of the batch — a
-      // stream could start mid-run, and the ten-file batch has no reason to
-      // race a real viewer that begins watching one of them.
-      const result = await conversionWorker.convertContainerOnly(filePath);
-      console.log(`[conversion] ${result.ok ? 'OK' : 'SKIP'} ${path.basename(filePath)}${result.ok ? '' : ` — ${result.reason}`}`);
-      results.push(result);
-    }
-  } finally {
-    conversionPilotRunning = false;
+// Files the queue is allowed to touch. Only the container tier: it is the
+// lossless one (every stream copied, nothing re-encoded), and the only tier
+// whose behaviour has been proven end to end on real library files.
+// Image-subtitle files are excluded for the same reason the planner excludes
+// them — a container change cannot carry PGS/VOBSUB across without OCR.
+function eligibleContainerFiles(cfg) {
+  if (!cfg.tiers.container) return [];
+  const out = [];
+  for (const item of scanLibrary()) {
+    const filePath = item._filePath;
+    if (!filePath) continue;
+    const tracks = audioTracksCache[filePath] || [];
+    const c = classifyFile({
+      filePath,
+      size: item.fileSize || 0,
+      videoCodec: probeCache[filePath] || '',
+      audioCodec: audioProbeCache[filePath] || '',
+      audioChannels: tracks[0]?.channels || 0,
+      subs: subProbeCache[filePath] || [],
+    });
+    if (c.tier === 'container' && !c.hasImageSubs) out.push(filePath);
   }
-  const succeeded = results.filter((r) => r.ok).length;
-  console.log(`[conversion] Pilot run complete: ${succeeded}/${results.length} converted`);
+  // Smallest first: a run that is stopped early has then converted the most
+  // files it could have, and any problem shows up on a cheap file rather than
+  // after twenty minutes on a large one.
+  out.sort((a, b) => {
+    let sa = 0, sb = 0;
+    try { sa = fs.statSync(a).size; } catch {}
+    try { sb = fs.statSync(b).size; } catch {}
+    return sa - sb;
+  });
+  return out;
+}
+
+const conversionQueue = require('./lib/conversion-queue')({
+  worker: conversionWorker,
+  getConfig: () => conversionConfig.get(),
+  getEligibleFiles: eligibleContainerFiles,
+  // Both playback paths, same signal the sprite generator already backs off
+  // on: a segment request or a direct-play byte range within the last minute.
+  isPlaybackActive: () => Object.keys(transcodeSessions).length > 0
+    || (Date.now() - lastPlaybackAt) < 60_000,
+  getRetainedBytes: () => {
+    try {
+      const roots = config.folders.map((f) => f.path).filter(Boolean);
+      return conversionWorker
+        .listRetainedOriginals(roots, conversionConfig.get().keepOriginalsDays)
+        .reduce((s, o) => s + o.size, 0);
+    } catch { return 0; }
+  },
   // fs.watch is blind on this box's fuse.mergerfs media mount (see
-  // setupOrganizerWatch below), so nothing else will notice these renames.
-  if (succeeded > 0) invalidateLibrary('conversion-pilot');
-  res.json({ ok: true, results, succeeded, total: results.length });
+  // setupOrganizerWatch below), so nothing else would notice these renames.
+  onBatchComplete: () => invalidateLibrary('conversion-queue'),
+  log: (msg) => console.log(`[conversion] ${msg}`),
+});
+
+app.get('/api/conversion/status', requireAdminSession, (_req, res) => {
+  res.json({ ok: true, ...conversionQueue.snapshot() });
+});
+
+app.post('/api/conversion/start', requireAdminSession, (_req, res) => {
+  const r = conversionQueue.start();
+  if (!r.ok) return res.status(409).json({ ok: false, error: r.error });
+  res.json({ ok: true, ...r, ...conversionQueue.snapshot() });
+});
+
+app.post('/api/conversion/pause', requireAdminSession, (_req, res) => {
+  const r = conversionQueue.pause();
+  if (!r.ok) return res.status(409).json({ ok: false, error: r.error });
+  res.json({ ok: true, ...conversionQueue.snapshot() });
+});
+
+app.post('/api/conversion/resume', requireAdminSession, (_req, res) => {
+  const r = conversionQueue.resume();
+  if (!r.ok) return res.status(409).json({ ok: false, error: r.error });
+  res.json({ ok: true, ...conversionQueue.snapshot() });
+});
+
+app.post('/api/conversion/stop', requireAdminSession, (_req, res) => {
+  const r = conversionQueue.stop();
+  if (!r.ok) return res.status(409).json({ ok: false, error: r.error });
+  res.json({ ok: true, ...r, ...conversionQueue.snapshot() });
+});
+
+// Cleanup — delete retained originals past their keep-days. dryRun first from
+// the UI so the admin sees exactly what would go before anything is deleted.
+app.post('/api/conversion/cleanup', requireAdminSession, (req, res) => {
+  const dryRun = req.body?.dryRun !== false;
+  try {
+    const cfg = conversionConfig.get();
+    const roots = config.folders.map((f) => f.path).filter(Boolean);
+    const result = conversionWorker.cleanupExpiredOriginals(roots, cfg.keepOriginalsDays, { dryRun });
+    if (!dryRun && result.deleted.length) {
+      console.log(`[conversion] Cleanup deleted ${result.deleted.length} expired original(s), freed ${(result.bytes / 1e9).toFixed(2)} GB`);
+    }
+    res.json({ ok: true, dryRun, ...result });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
 // Retained originals — the undo window for anything already converted.
