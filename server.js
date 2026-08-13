@@ -3240,12 +3240,23 @@ app.get('/api/notifications', requireAuth, (req, res) => {
 });
 
 // Add torrent
+const { classifyTorrentUrl } = require('./lib/torrent-url');
 app.post('/api/qbt/torrents/add', requirePermission('canDownload'), requireQbt, async (req, res) => {
   try {
     const { urls, savepath } = req.body;
     if (!urls || typeof urls !== 'string') return res.status(400).json({ ok: false, error: 'Missing torrent URL' });
     const cleanUrls = urls.trim();
-    if (!/^magnet:\?/i.test(cleanUrls) && !/^https?:\/\//i.test(cleanUrls)) {
+    // Classify every line (qBittorrent accepts newline-separated adds; the app
+    // only ever sends one, but validate them all rather than trust that).
+    // 'page' is the important reject: qBittorrent would accept a details-page
+    // URL, reply "Ok.", then silently fail to bdecode it, leaving the torrent
+    // stuck at "Fetching metadata" while the UI reported success. See
+    // lib/torrent-url.js for the torrentproject case that motivated this.
+    const kinds = cleanUrls.split(/\r?\n/).map((u) => u.trim()).filter(Boolean).map(classifyTorrentUrl);
+    if (kinds.some((k) => k === 'page')) {
+      return res.status(400).json({ ok: false, error: 'That result links to a web page, not a downloadable torrent. Pick a different result or paste a magnet link.' });
+    }
+    if (kinds.some((k) => k === 'invalid') || kinds.length === 0) {
       return res.status(400).json({ ok: false, error: 'Use a magnet link or torrent URL' });
     }
     let body = `urls=${encodeURIComponent(cleanUrls)}`;
