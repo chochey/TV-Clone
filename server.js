@@ -1262,6 +1262,13 @@ async function backgroundDetectIntros(library) {
     let detected = 0;
     for (const name of candidates) {
       try {
+        // Chromaprint fingerprinting spawns fpcalc across ~5 episodes per show
+        // and hammers the same USB disk read bandwidth a live transcode needs.
+        // Gate before each show the same way sprite generation does, so a
+        // viewer who presses play pauses the sweep within one show's work
+        // instead of contending with it (the "everything froze right after I
+        // clicked Scan" storm). Reuses the sprite backoff helper verbatim.
+        await waitForTranscodeIdle();
         const intro = await detectIntroForShow(name);
         if (intro) {
           skipSegments['show:' + name] = { intro };
