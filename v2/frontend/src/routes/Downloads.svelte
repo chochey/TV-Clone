@@ -44,6 +44,7 @@
   let minSeeders = $state(0);
   let quality = $state('');        // '' = any; else one of QUALITIES
   let hideDead = $state(true);     // hide 0-seeder results
+  let videosOnly = $state(true);   // hide .exe / disk images / archives
   let refine = $state('');         // narrow within results by keyword
   const SHOW_CAP = 200;
 
@@ -56,11 +57,16 @@
     return '';
   }
 
+  function isJunkName(name) {
+    return /\.(exe|zip|rar|7z|iso|img|msi|scr|apk|dmg|bat|cmd|com|dll)\s*$/i.test(name || '');
+  }
+
   const shown = $derived.by(() => {
     if (!results) return null;
     let out = results.filter((r) => {
       const seeders = r.nbSeeders ?? 0;
       if (hideDead && seeders <= 0) return false;
+      if (videosOnly && isJunkName(r.fileName)) return false;
       if (seeders < minSeeders) return false;
       if (quality && qualityOf(r.fileName) !== quality) return false;
       if (refine.trim()) {
@@ -236,6 +242,7 @@
           <input type="number" min="0" step="1" bind:value={minSeeders} />
         </label>
         <label class="deadtoggle"><input type="checkbox" bind:checked={hideDead} /> Hide dead</label>
+        <label class="deadtoggle"><input type="checkbox" bind:checked={videosOnly} /> Videos only</label>
         <select class="sortsel" bind:value={sortKey} aria-label="Sort results">
           {#each SORTS as s (s.key)}<option value={s.key}>{s.label}</option>{/each}
         </select>
@@ -275,7 +282,7 @@
       {#if !results.length && !searching}
         <p class="empty">No results{plugin !== 'enabled' ? ' on that site' : ''}.</p>
       {:else if !shown.length && results.length}
-        <p class="empty">No results match the filters. <button class="linkbtn" onclick={() => { refine = ''; quality = ''; minSeeders = 0; hideDead = false; }}>Reset filters</button></p>
+        <p class="empty">No results match the filters. <button class="linkbtn" onclick={() => { refine = ''; quality = ''; minSeeders = 0; hideDead = false; videosOnly = false; }}>Reset filters</button></p>
       {/if}
     </div>
   {/if}

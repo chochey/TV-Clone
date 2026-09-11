@@ -3086,6 +3086,7 @@ app.get('/api/events', requireAuth, sse.handler);
 // ── qBittorrent Proxy (lib/qbt.js) ───────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════
 const { qbt, qbtAuth, qbtJson, requireQbt } = require('./lib/qbt')({ QBT_BASE, QBT_USERNAME, QBT_PASSWORD });
+const { filterSearchResults, torrentHasVideoFile } = require('./lib/video-torrent');
 
 // qBittorrent status
 app.get('/api/qbt/status', requirePermission('canDownload'), requireQbt, async (_req, res) => {
@@ -3189,7 +3190,7 @@ app.get('/api/qbt/search/results', requirePermission('canDownload'), requireQbt,
   try {
     const { id, offset, limit } = req.query;
     const r = await qbt('GET', `/api/v2/search/results?id=${id}&offset=${offset || 0}&limit=${limit || 50}`);
-    res.json(qbtJson(r));
+    res.json(filterSearchResults(qbtJson(r)));
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -3217,12 +3218,41 @@ app.get('/api/qbt/torrents', requirePermission('canDownload'), requireQbt, async
 // organizer-watch usually beats it, and the rescan no-ops when so.
 if (QBT_USERNAME && QBT_PASSWORD) {
   let prevTorrents = null; // hash -> {done, name}; null = baseline poll
+  const videoChecked = new Set(); // hashes whose file list we already inspected
   setInterval(async () => {
     let torrents;
     try { torrents = qbtJson(await qbt('GET', '/api/v2/torrents/info')); }
     catch { return; } // qbt momentarily unreachable — skip this tick
     if (!Array.isArray(torrents)) return;
-    const now = notifyLogLib.torrentStates(torrents);
+
+    const dropped = new Set();
+    for (const t of torrents) {
+      if (!t.hash || videoChecked.has(t.hash)) continue;
+      if (t.state === 'metaDL' || t.state === 'checkingResumeData') continue;
+      let files;
+      try { files = qbtJson(await qbt('GET', `/api/v2/torrents/files?hash=${t.hash}`)); }
+      catch { continue; }
+      const hasVideo = torrentHasVideoFile(files);
+      if (hasVideo === null) continue;
+      videoChecked.add(t.hash);
+      if (hasVideo === false) {
+        try {
+          await qbt('POST', '/api/v2/torrents/delete', `hashes=${t.hash}&deleteFiles=true`);
+        } catch { continue; }
+        dropped.add(t.hash);
+        notifyLog.push({
+          type: 'error',
+          title: 'Not a video — removed',
+          body: t.name,
+          audience: 'download',
+        });
+      }
+    }
+    const live = new Set(torrents.map((t) => t.hash));
+    for (const h of videoChecked) if (!live.has(h)) videoChecked.delete(h);
+    if (dropped.size) notifyClients('notifications-updated');
+
+    const now = notifyLogLib.torrentStates(torrents.filter((t) => !dropped.has(t.hash)));
     const events = notifyLogLib.diffDownloads(prevTorrents, now);
     prevTorrents = now;
     if (!events.length) return;
