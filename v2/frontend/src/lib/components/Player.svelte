@@ -4,7 +4,7 @@
   import { library, session, dismissed, AUTO_WATCHED_PERCENT } from '../stores.js';
   import { loadHls, parseVtt, cueAt, fmtTime } from '../player-core.js';
   import { episodeCode, episodeTitle } from '../format.js';
-  import { hevcMaxLevel, demoteHevc } from '../hevc-probe.js';
+  import { hevcMaxLevel, demoteHevc, isFirefoxDesktopLinux } from '../hevc-probe.js';
 
   // Remounted per item via {#key} in App — `item` is static for this mount.
   let { item, next = null, prev = null, onclose, onnext, onprev } = $props();
@@ -19,6 +19,10 @@
   // Whether the session currently loading/playing is a passthrough attempt —
   // the fallback must only fire for those, never for an ordinary transcode.
   let passthroughActive = false;
+  // Firefox/Linux VAAPI puts <video> on an independent overlay plane that
+  // flashes garbage even while paused (same Ranch episode is clean in Brave
+  // and in Firefox on Windows). A 1px radius takes it off that plane.
+  const forceCompositorLayer = isFirefoxDesktopLinux();
   const title = $derived(item.showName || item.title || '');
   const subline = $derived(item.showName ? `${episodeCode(item)} — ${episodeTitle(item)}` : (item.year || ''));
 
@@ -224,7 +228,10 @@
     hls = new H({
       maxBufferLength: 30, maxMaxBufferLength: 120, startFragPrefetch: true,
       startPosition: 0,
-      highBufferWatchdogPeriod: 2, nudgeOffset: 0.2, nudgeMaxRetry: 5, enableWorker: true,
+      highBufferWatchdogPeriod: 2, nudgeOffset: 0.2, nudgeMaxRetry: 5,
+      // Firefox/Linux MSE has flashed garbage on worker transmux appends.
+      // Main-thread mux + fMP4 from the server avoids that path.
+      enableWorker: !forceCompositorLayer,
       fragLoadingTimeOut: 30000, fragLoadingMaxRetry: 4, fragLoadingRetryDelay: 1000,
       autoStartLoad: false,
     });
@@ -874,12 +881,21 @@
   <!-- svelte-ignore a11y_media_has_caption -->
   <video
     bind:this={video}
+    class:sw-layer={forceCompositorLayer}
     playsinline
     onclick={onVideoClick}
     ondblclick={onVideoDblClick}
     onpointerup={onVideoPointerUp}
-    onplay={() => { paused = false; poke(); resumeCheck(); }}
-    onpause={() => { paused = true; pausedAt = Date.now(); saveProgress(); poke(); }}
+    onplay={() => {
+      paused = false; poke(); resumeCheck();
+      try { hls?.startLoad(-1); } catch {}
+    }}
+    onpause={() => {
+      paused = true; pausedAt = Date.now(); saveProgress(); poke();
+      // Stop MSE appends while paused — Firefox/Linux was flashing on each
+      // fragment even with the clock frozen and hardware decode off.
+      try { hls?.stopLoad(); } catch {}
+    }}
     onwaiting={() => { buffering = true; }}
     onstalled={() => { buffering = true; }}
     onplaying={() => { buffering = false; applySpeed(); }}
@@ -1105,6 +1121,14 @@
   }
   .player.idle { cursor: none; }
   video { width: 100%; height: 100%; object-fit: contain; background: #000; }
+  /* 1px radius is enough for Firefox/Linux to stop using a hardware video
+     overlay (zero-copy VAAPI surfaces that flash garbage even when paused)
+     without a visible rounded corner. transform keeps it on a compositor
+     texture. Only applied via .sw-layer on that UA. */
+  video.sw-layer {
+    border-radius: 1px;
+    transform: translateZ(0);
+  }
 
   .cue {
     position: absolute; left: 50%; bottom: 6%;
@@ -1317,7 +1341,7 @@
     position: absolute; left: 50%; top: 62%;
     transform: translateX(-50%);
     font-size: 0.9rem; color: var(--ink-soft);
-    background: rgba(11, 11, 14, 0.7); backdrop-filter: blur(8px);
+    background: rgba(11, 11, 14, 0.92);
     padding: 8px 18px; border-radius: 99px;
     pointer-events: none;
   }
@@ -1345,7 +1369,7 @@
   .menu {
     position: absolute; bottom: 52px; right: 0; z-index: 5;
     min-width: 180px; max-height: 40vh; overflow-y: auto;
-    background: rgba(17, 17, 22, 0.96); backdrop-filter: blur(14px);
+    background: rgba(17, 17, 22, 0.98);
     border-radius: var(--r-md); padding: var(--s2);
     box-shadow: 0 18px 50px rgba(0, 0, 0, 0.6), 0 0 0 1px var(--line-strong);
     display: flex; flex-direction: column; gap: 2px;

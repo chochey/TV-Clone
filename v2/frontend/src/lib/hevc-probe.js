@@ -41,6 +41,26 @@ const PROBE_VERSION = 2;
 // is cheap insurance; the clips are small and this runs once per browser build.
 const probeIdentity = () => `v${PROBE_VERSION}|${navigator.userAgent}`;
 
+// Firefox desktop on Linux is the stack that uses VAAPI hardware overlays.
+// Windows/Android Firefox and Chromium do not. Used both to skip HEVC
+// passthrough and to force the <video> onto a composited texture.
+export function isFirefoxDesktopLinux(ua = typeof navigator !== 'undefined' ? navigator.userAgent : '') {
+  const firefox = /Firefox\//.test(ua) && !/Seamonkey/i.test(ua);
+  if (!firefox) return false;
+  return /Linux/.test(ua) && !/Android/i.test(ua);
+}
+
+// Firefox 137+ on Linux can decode a progressive HEVC MP4 (so the clip probe
+// below reports a high ceiling), but playback is MSE + fragmented MP4. That
+// path on Firefox/Linux produces single-frame decode artifacts — flashing
+// "weird images" that vanish immediately. Measured on this box: Firefox 154
+// requested hevcMaxLevel=153 for The Ranch and flashed; Brave (no HEVC claim)
+// got the H.264 transcode of the same file and did not. Don't ask for
+// passthrough on that stack. Windows/Android Firefox use different decoders.
+export function hevcPassthroughEligible(ua = typeof navigator !== 'undefined' ? navigator.userAgent : '') {
+  return !isFirefoxDesktopLinux(ua);
+}
+
 function readCached() {
   try {
     const raw = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
@@ -80,6 +100,9 @@ let inflight = null;
  * HEVC through". Result is cached per browser build; never throws.
  */
 export function hevcMaxLevel() {
+  // Ignore a cached "yes" from a Firefox/Linux build that already probed.
+  // The cache key is UA-scoped, but this machine's Firefox already stored 153.
+  if (!hevcPassthroughEligible()) return Promise.resolve(0);
   const cached = readCached();
   if (cached) return Promise.resolve(cached.level);
   if (inflight) return inflight;
