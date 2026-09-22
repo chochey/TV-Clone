@@ -1,10 +1,12 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
   import { api } from '../lib/api.js';
+  import { splitDownloads } from '../lib/download-list.js';
   import { createDownloadSearch } from '../lib/download-search.js';
   import { route } from '../lib/router.js';
 
   let torrents = $state(null);
+  const groups = $derived(splitDownloads(torrents));
   let magnet = $state('');
   let busy = $state(false);
   let err = $state('');
@@ -304,8 +306,24 @@
   {:else if !torrents.length}
     <p class="empty">No torrents.</p>
   {:else}
+    {#if groups.active.length}
+      {@render downloadRows(groups.active)}
+    {:else}
+      <p class="empty">No active downloads.</p>
+    {/if}
+    {#if groups.completed.length}
+      <details class="completed">
+        <summary>Completed ({groups.completed.length})</summary>
+        <p class="meta">Finished downloads move here automatically. Files are kept, and seeding can continue.</p>
+        {@render downloadRows(groups.completed)}
+      </details>
+    {/if}
+  {/if}
+</div>
+
+{#snippet downloadRows(rows)}
     <div class="list">
-      {#each torrents as t (t.hash)}
+      {#each rows as t (t.hash)}
         <div class="row">
           <div class="text">
             <span class="t">{t.name}</span>
@@ -340,8 +358,7 @@
         </div>
       {/each}
     </div>
-  {/if}
-</div>
+{/snippet}
 
 <style>
   .page { padding: calc(64px + var(--s5)) var(--gutter) var(--s7); max-width: 1000px; margin: 0 auto; }
@@ -428,6 +445,8 @@
   }
   @keyframes spin { to { transform: rotate(360deg); } }
 
+  .completed { margin-top: var(--s3); border-top: 1px solid var(--line); padding-top: var(--s3); }
+  .completed summary { cursor: pointer; color: var(--ink-soft); font-weight: 600; margin-bottom: var(--s3); }
   .list { display: flex; flex-direction: column; margin-top: var(--s4); }
   .row {
     display: flex; gap: var(--s4); align-items: center;
