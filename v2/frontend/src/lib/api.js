@@ -92,8 +92,8 @@ export const api = {
   searchPlugins: () => fetch('/api/qbt/search/plugins', opts('GET')).then(json),
   searchStart: (pattern, category, plugins) =>
     fetch('/api/qbt/search/start', opts('POST', { pattern, category, plugins })).then(json),
-  searchResults: (id, limit = 100) =>
-    fetch(`/api/qbt/search/results?id=${encodeURIComponent(id)}&limit=${limit}`, opts('GET')).then(json),
+  searchResults: (id, limit = 200, offset = 0) =>
+    fetch(`/api/qbt/search/results?id=${encodeURIComponent(id)}&limit=${limit}&offset=${offset}`, opts('GET')).then(json),
   searchStop: (id) => fetch('/api/qbt/search/stop', opts('POST', { id })).then(json).catch(() => ({})),
   torrents: () => fetch('/api/qbt/torrents', opts('GET')).then(json),
   vpnStatus: () => fetch('/api/vpn/status', opts('GET')).then(json),

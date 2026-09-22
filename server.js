@@ -3030,7 +3030,17 @@ app.get('/api/events', requireAuth, sse.handler);
 // ── qBittorrent Proxy (lib/qbt.js) ───────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════
 const { qbt, qbtAuth, qbtJson, requireQbt } = require('./lib/qbt')({ QBT_BASE, QBT_USERNAME, QBT_PASSWORD });
-const { filterSearchResults, torrentHasVideoFile } = require('./lib/video-torrent');
+const { torrentHasVideoFile } = require('./lib/video-torrent');
+const { createDownloadStatus } = require('./lib/download-status');
+let downloadStatusCache = { at: 0, version: null, statusFor: null };
+function currentDownloadStatus() {
+  if (!downloadStatusCache.statusFor || Date.now() - downloadStatusCache.at > 5000
+      || downloadStatusCache.version !== libraryVersion) {
+    downloadStatusCache = { at: Date.now(), version: libraryVersion,
+      statusFor: createDownloadStatus(readOrganizerLogLines(), libraryCache || []) };
+  }
+  return downloadStatusCache.statusFor;
+}
 
 // qBittorrent status
 app.get('/api/qbt/status', requirePermission('canDownload'), requireQbt, async (_req, res) => {
@@ -3123,6 +3133,7 @@ app.get('/api/qbt/search/plugins', requirePermission('canDownload'), requireQbt,
 app.post('/api/qbt/search/start', requirePermission('canDownload'), requireQbt, async (req, res) => {
   try {
     const { pattern, category, plugins } = req.body;
+    if (typeof pattern !== 'string' || !pattern.trim() || pattern.length > 300) return res.status(400).json({ error: 'Enter a search of 1–300 characters.' });
     const body = `pattern=${encodeURIComponent(pattern)}&category=${encodeURIComponent(category || 'all')}&plugins=${encodeURIComponent(plugins || 'all')}`;
     const r = await qbt('POST', '/api/v2/search/start', body);
     res.json(qbtJson(r));
@@ -3132,16 +3143,20 @@ app.post('/api/qbt/search/start', requirePermission('canDownload'), requireQbt, 
 // Get search results
 app.get('/api/qbt/search/results', requirePermission('canDownload'), requireQbt, async (req, res) => {
   try {
-    const { id, offset, limit } = req.query;
-    const r = await qbt('GET', `/api/v2/search/results?id=${id}&offset=${offset || 0}&limit=${limit || 50}`);
-    res.json(filterSearchResults(qbtJson(r)));
+    const { id } = req.query;
+    if (!/^\d+$/.test(String(id))) return res.status(400).json({ error: 'Invalid search ID' });
+    const offset = Math.max(0, parseInt(req.query.offset, 10) || 0);
+    const limit = Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 100));
+    const r = await qbt('GET', `/api/v2/search/results?id=${id}&offset=${offset}&limit=${limit}`);
+    res.json(qbtJson(r));
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // Stop search
 app.post('/api/qbt/search/stop', requirePermission('canDownload'), requireQbt, async (req, res) => {
   try {
-    await qbt('POST', '/api/v2/search/stop', `id=${req.body.id}`);
+    if (!/^\d+$/.test(String(req.body.id))) return res.status(400).json({ error: 'Invalid search ID' });
+    await qbt('POST', '/api/v2/search/stop', `id=${encodeURIComponent(req.body.id)}`);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -3150,7 +3165,11 @@ app.post('/api/qbt/search/stop', requirePermission('canDownload'), requireQbt, a
 app.get('/api/qbt/torrents', requirePermission('canDownload'), requireQbt, async (_req, res) => {
   try {
     const r = await qbt('GET', '/api/v2/torrents/info');
-    res.json(qbtJson(r));
+    const torrents = qbtJson(r);
+    if (!Array.isArray(torrents)) throw new Error('Downloader returned an invalid torrent list.');
+    const statusFor = currentDownloadStatus();
+    res.json(torrents.map(t => ({ ...t, reviewReason: downloadReviews.get(t.hash) || '',
+      importStatus: statusFor(t) })));
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -3160,16 +3179,21 @@ app.get('/api/qbt/torrents', requirePermission('canDownload'), requireQbt, async
 // land in the notification history; a completed download also schedules a
 // rescan for after the organizer has had time to move the file — the
 // organizer-watch usually beats it, and the rescan no-ops when so.
+const downloadReviews = new Map();
 if (QBT_USERNAME && QBT_PASSWORD) {
+  let watcherBusy = false;
   let prevTorrents = null; // hash -> {done, name}; null = baseline poll
   const videoChecked = new Set(); // hashes whose file list we already inspected
   setInterval(async () => {
+    if (watcherBusy) return;
+    watcherBusy = true;
+    try {
     let torrents;
     try { torrents = qbtJson(await qbt('GET', '/api/v2/torrents/info')); }
     catch { return; } // qbt momentarily unreachable — skip this tick
     if (!Array.isArray(torrents)) return;
 
-    const dropped = new Set();
+    let reviewChanged = false;
     for (const t of torrents) {
       if (!t.hash || videoChecked.has(t.hash)) continue;
       if (t.state === 'metaDL' || t.state === 'checkingResumeData') continue;
@@ -3180,23 +3204,17 @@ if (QBT_USERNAME && QBT_PASSWORD) {
       if (hasVideo === null) continue;
       videoChecked.add(t.hash);
       if (hasVideo === false) {
-        try {
-          await qbt('POST', '/api/v2/torrents/delete', `hashes=${t.hash}&deleteFiles=true`);
-        } catch { continue; }
-        dropped.add(t.hash);
-        notifyLog.push({
-          type: 'error',
-          title: 'Not a video — removed',
-          body: t.name,
-          audience: 'download',
-        });
+        // Classification is advisory only. Never pause or delete someone else's
+        // downloads (or intentional music/software) based on an extension list.
+        downloadReviews.set(t.hash, 'No recognized video files. Kept in downloads; automatic media import may not apply.');
+        reviewChanged = true;
       }
     }
     const live = new Set(torrents.map((t) => t.hash));
-    for (const h of videoChecked) if (!live.has(h)) videoChecked.delete(h);
-    if (dropped.size) notifyClients('notifications-updated');
+    for (const h of videoChecked) if (!live.has(h)) { videoChecked.delete(h); downloadReviews.delete(h); }
+    if (reviewChanged) notifyClients('downloads-updated');
 
-    const now = notifyLogLib.torrentStates(torrents.filter((t) => !dropped.has(t.hash)));
+    const now = notifyLogLib.torrentStates(torrents);
     const events = notifyLogLib.diffDownloads(prevTorrents, now);
     prevTorrents = now;
     if (!events.length) return;
@@ -3205,6 +3223,7 @@ if (QBT_USERNAME && QBT_PASSWORD) {
     if (events.some((e) => e.type === 'complete')) {
       setTimeout(() => { rescanLibraryAsync('post-download').catch(() => {}); }, 90_000);
     }
+    } finally { watcherBusy = false; }
   }, 10_000).unref();
 }
 
@@ -3244,7 +3263,10 @@ app.post('/api/qbt/torrents/add', requirePermission('canDownload'), requireQbt, 
 // Pause torrent
 app.post('/api/qbt/torrents/pause', requirePermission('canDownload'), requireQbt, async (req, res) => {
   try {
-    await qbt('POST', '/api/v2/torrents/stop', `hashes=${req.body.hashes}`);
+    if (typeof req.body.hashes !== 'string' || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?(?:\|[a-f0-9]{40}(?:[a-f0-9]{24})?)*$/i.test(req.body.hashes)) {
+      return res.status(400).json({ error: 'Select a valid download.' });
+    }
+    await qbt('POST', '/api/v2/torrents/stop', `hashes=${encodeURIComponent(req.body.hashes)}`);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -3252,7 +3274,10 @@ app.post('/api/qbt/torrents/pause', requirePermission('canDownload'), requireQbt
 // Resume torrent
 app.post('/api/qbt/torrents/resume', requirePermission('canDownload'), requireQbt, async (req, res) => {
   try {
-    await qbt('POST', '/api/v2/torrents/start', `hashes=${req.body.hashes}`);
+    if (typeof req.body.hashes !== 'string' || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?(?:\|[a-f0-9]{40}(?:[a-f0-9]{24})?)*$/i.test(req.body.hashes)) {
+      return res.status(400).json({ error: 'Select a valid download.' });
+    }
+    await qbt('POST', '/api/v2/torrents/start', `hashes=${encodeURIComponent(req.body.hashes)}`);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -3260,8 +3285,11 @@ app.post('/api/qbt/torrents/resume', requirePermission('canDownload'), requireQb
 // Delete torrent
 app.post('/api/qbt/torrents/delete', requirePermission('canDownload'), requireQbt, async (req, res) => {
   try {
+    if (typeof req.body.hashes !== 'string' || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?(?:\|[a-f0-9]{40}(?:[a-f0-9]{24})?)*$/i.test(req.body.hashes)) {
+      return res.status(400).json({ error: 'Select a valid download.' });
+    }
     const { hashes, deleteFiles } = req.body;
-    await qbt('POST', '/api/v2/torrents/delete', `hashes=${hashes}&deleteFiles=${deleteFiles ? 'true' : 'false'}`);
+    await qbt('POST', '/api/v2/torrents/delete', `hashes=${encodeURIComponent(hashes)}&deleteFiles=${deleteFiles === true ? 'true' : 'false'}`);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });

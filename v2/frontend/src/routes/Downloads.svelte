@@ -1,6 +1,7 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
   import { api } from '../lib/api.js';
+  import { createDownloadSearch } from '../lib/download-search.js';
   import { route } from '../lib/router.js';
 
   let torrents = $state(null);
@@ -8,7 +9,20 @@
   let busy = $state(false);
   let err = $state('');
   let confirmDel = $state(null); // hash pending delete confirmation
-  let timer;
+  let timer, destroyed = false, refreshing = false, refreshFailures = 0;
+  let connectionErr = $state('');
+  let pending = $state(new Set());
+  let actionErrors = $state({});
+  let adding = $state(new Set());
+  let searchTotal = $state(0), searchNote = $state('');
+  const search = createDownloadSearch(api, patch => {
+    if (destroyed) return;
+    if ('searching' in patch) searching = patch.searching;
+    if ('results' in patch) results = patch.results;
+    if ('error' in patch) searchErr = patch.error;
+    if ('total' in patch) searchTotal = patch.total;
+    if ('note' in patch) searchNote = patch.note;
+  });
 
   // ── Torrent search (qBittorrent search plugins via v1) ──────────────
   const CATEGORIES = [
@@ -23,13 +37,12 @@
   let q = $state('');
   let cat = $state('all');
   let plugin = $state('enabled');
-  let searchId = null;
+
   let searching = $state(false);
   let results = $state(null);   // raw, unfiltered results from qbt
   let searchErr = $state('');
   let added = $state(new Set()); // fileUrls already sent to qbt
-  let pollTimer = null;
-  let pollDeadline = 0;
+
 
   // ── Result sort + filter controls ───────────────────────────────────
   const SORTS = [
@@ -90,8 +103,33 @@
   });
 
   async function refresh() {
-    try { torrents = await api.torrents(); err = ''; }
-    catch (e) { err = e.body?.error || 'qBittorrent unreachable.'; if (!torrents) torrents = []; }
+    if (refreshing || destroyed) return;
+    refreshing = true;
+    clearTimeout(timer);
+    try {
+      const rows = await api.torrents();
+      if (!Array.isArray(rows)) throw new Error('Invalid download list');
+      if (!destroyed) { torrents = rows; connectionErr = ''; refreshFailures = 0; }
+    } catch (e) {
+      if (!destroyed) { connectionErr = e.body?.error || 'Downloader unavailable. Showing the last known state.'; refreshFailures++; }
+    } finally {
+      refreshing = false;
+      if (!destroyed) timer = setTimeout(refresh, Math.min(30000, 5000 * (refreshFailures + 1)));
+    }
+  }
+  async function act(t, action, deleteFiles = false) {
+    if (pending.has(t.hash)) return;
+    pending = new Set([...pending, t.hash]);
+    actionErrors = { ...actionErrors, [t.hash]: '' };
+    try {
+      if (action === 'delete') await api.torrentDelete(t.hash, deleteFiles);
+      else if (action === 'pause') await api.torrentPause(t.hash);
+      else await api.torrentResume(t.hash);
+      confirmDel = null;
+      await refresh();
+    } catch (e) {
+      actionErrors = { ...actionErrors, [t.hash]: e.body?.error || 'The action failed. Please try again.' };
+    } finally { pending = new Set([...pending].filter(hash => hash !== t.hash)); }
   }
 
   // Mullvad is prepaid — show how much tunnel time is left before
@@ -104,67 +142,35 @@
   }
   onMount(() => {
     refresh();
-    timer = setInterval(refresh, 5000);
+
     api.vpnStatus().then((v) => { vpn = v; }).catch(() => {});
     api.searchPlugins()
-      .then((p) => { plugins = (p || []).filter((x) => x.enabled); })
-      .catch(() => {});
+      .then((p) => { plugins = (p || []).filter((x) => x.enabled); if (!plugins.length) searchErr = 'No search sites are enabled. Install or enable search plugins in qBittorrent.'; })
+      .catch(() => { searchErr = 'Could not load search sites. Check the downloader connection and installed plugins.'; });
     // Deep link from the Episodes page: /downloads?q=Show S03E07
     if ($route.q) {
       q = $route.q;
       startSearch();
     }
   });
-  onDestroy(() => { clearInterval(timer); stopSearch(); });
+  onDestroy(() => { destroyed = true; clearTimeout(timer); search.stop(); });
 
-  async function stopSearch() {
-    clearTimeout(pollTimer);
-    if (searchId != null) api.searchStop(searchId);
-    searchId = null;
-    searching = false;
-  }
-
-  async function startSearch(e) {
+  function stopSearch() { search.stop(); }
+  function startSearch(e) {
     e?.preventDefault();
-    if (!q.trim()) return;
-    await stopSearch();
-    searching = true;
-    results = null;
-    searchErr = '';
-    try {
-      const r = await api.searchStart(q.trim(), cat, plugin);
-      searchId = r.id;
-      pollDeadline = Date.now() + 60000;
-      poll();
-    } catch (e2) {
-      searchErr = e2.body?.error || 'Search failed — are search plugins installed in qBittorrent?';
-      searching = false;
-    }
-  }
-
-  async function poll() {
-    if (searchId == null) return;
-    try {
-      const r = await api.searchResults(searchId);
-      results = r.results || []; // sort/filter happens in the `shown` derived
-      if (r.status === 'Running' && Date.now() < pollDeadline) {
-        pollTimer = setTimeout(poll, 2000);
-      } else {
-        stopSearch();
-      }
-    } catch {
-      stopSearch();
-    }
+    if (q.trim()) search.start(q.trim(), cat, plugin);
   }
 
   async function grab(r) {
+    if (adding.has(r.fileUrl)) return;
+    adding = new Set([...adding, r.fileUrl]);
     try {
       await api.torrentAdd(r.fileUrl);
       added = new Set([...added, r.fileUrl]);
       refresh();
     } catch (e2) {
       searchErr = e2.body?.error || 'Could not add that torrent.';
-    }
+    } finally { adding = new Set([...adding].filter(url => url !== r.fileUrl)); }
   }
 
   async function add(e) {
@@ -178,6 +184,7 @@
 
   const PAUSED = new Set(['pausedDL', 'pausedUP', 'stoppedDL', 'stoppedUP']);
   const label = (s) => ({
+    forcedDL: 'Downloading', forcedUP: 'Seeding', checkingResumeData: 'Checking saved progress', moving: 'Moving downloaded files',
     downloading: 'Downloading', stalledDL: 'Stalled', metaDL: 'Fetching metadata',
     uploading: 'Seeding', stalledUP: 'Seeding', queuedDL: 'Queued', queuedUP: 'Queued',
     pausedDL: 'Paused', stoppedDL: 'Paused', pausedUP: 'Done', stoppedUP: 'Done',
@@ -203,7 +210,7 @@
     <h1 class="display">Downloads</h1>
     {#if vpn?.configured && vpn.daysLeft != null}
       <span class="vpnchip {vpnCls(vpn.daysLeft)}" title={`Mullvad paid time runs out ${new Date(vpn.expires).toLocaleDateString()}`}>
-        ● Mullvad · {vpn.daysLeft === 0 ? 'expires today' : `${vpn.daysLeft} day${vpn.daysLeft === 1 ? '' : 's'} left`}
+        ● VPN account time · {vpn.daysLeft === 0 ? 'expires today' : `${vpn.daysLeft} day${vpn.daysLeft === 1 ? '' : 's'} left`}
       </span>
     {/if}
   </header>
@@ -212,7 +219,9 @@
     <input type="text" placeholder="Paste a magnet link or torrent URL" bind:value={magnet} spellcheck="false" />
     <button class="cta" type="submit" disabled={busy || !magnet.trim()}>{busy ? 'Adding…' : 'Add'}</button>
   </form>
-  {#if err}<p class="err">{err}</p>{/if}
+  {#if err}<p class="err" role="alert">{err}</p>{/if}
+  {#if connectionErr}<p class="err" role="alert">{connectionErr}</p>{/if}
+  {#if vpn?.error}<p class="meta">VPN account time could not be checked. This page does not verify the tunnel connection.</p>{/if}
 
   <form class="searchbar" onsubmit={startSearch}>
     <input type="search" placeholder="Search torrents…" bind:value={q} spellcheck="false" />
@@ -249,9 +258,10 @@
       </div>
 
       <p class="meta rescount">
-        {shown.length} of {results.length} result{results.length === 1 ? '' : 's'}{searching ? ' — still searching…' : ''}
+        {shown.length} shown · {results.length} loaded of {searchTotal} result{results.length === 1 ? '' : 's'}{searching ? ' — still searching…' : ''}
       </p>
 
+      {#if searchNote}<p class="meta">{searchNote}</p>{/if}
       {#each shown.slice(0, SHOW_CAP) as r (r.fileUrl)}
         {@const s = r.nbSeeders ?? 0}
         {@const ql = qualityOf(r.fileName)}
@@ -268,9 +278,9 @@
           </div>
           <div class="actions">
             {#if added.has(r.fileUrl)}
-              <span class="addedtag">✓ Added</span>
+              <span class="addedtag">✓ Sent to downloader</span>
             {:else}
-              <button onclick={() => grab(r)}>Download</button>
+              <button disabled={adding.has(r.fileUrl)} onclick={() => grab(r)}>{adding.has(r.fileUrl) ? 'Adding…' : 'Download'}</button>
             {/if}
           </div>
         </div>
@@ -287,8 +297,10 @@
     </div>
   {/if}
 
-  {#if !torrents}
+  {#if !torrents && !connectionErr}
     <div class="spinner"></div>
+  {:else if !torrents}
+    <p class="empty">Download list unavailable. Retrying automatically.</p>
   {:else if !torrents.length}
     <p class="empty">No torrents.</p>
   {:else}
@@ -303,18 +315,23 @@
               {#if t.upspeed}· ↑ {fmtSpeed(t.upspeed)}{/if}
               {#if fmtEta(t.eta)}· {fmtEta(t.eta)} left{/if}
             </span>
+            {#if t.reviewReason}<span class="err">{t.reviewReason}</span>{/if}
+            {#if t.importStatus}<span class="sub" title={t.importStatus.detail}>{t.importStatus.label}</span>{/if}
+            {#if t.state === 'stalledDL'}<span class="sub">Waiting for peers. If this persists, try a better-seeded source.</span>{/if}
+            {#if actionErrors[t.hash]}<span class="err" role="alert">{actionErrors[t.hash]}</span>{/if}
             <span class="bar" class:done={t.progress >= 1}><span style={`width:${(t.progress * 100).toFixed(1)}%`}></span></span>
           </div>
           <span class="pct">{(t.progress * 100).toFixed(0)}%</span>
           <div class="actions">
             {#if PAUSED.has(t.state)}
-              <button onclick={() => api.torrentResume(t.hash).then(refresh)}>Resume</button>
+              <button disabled={pending.has(t.hash)} onclick={() => act(t, 'resume')}>Resume</button>
             {:else}
-              <button onclick={() => api.torrentPause(t.hash).then(refresh)}>Pause</button>
+              <button disabled={pending.has(t.hash)} onclick={() => act(t, 'pause')}>Pause</button>
             {/if}
             {#if confirmDel === t.hash}
-              <button class="danger" onclick={() => { confirmDel = null; api.torrentDelete(t.hash, false).then(refresh); }}>Remove torrent</button>
-              <button class="danger" onclick={() => { confirmDel = null; api.torrentDelete(t.hash, true).then(refresh); }}>+ files</button>
+              <span class="sub">Remove this download? Deleting files permanently removes its downloaded contents.</span>
+              <button class="danger" disabled={pending.has(t.hash)} onclick={() => act(t, 'delete', false)}>Remove from list, keep files</button>
+              <button class="danger" disabled={pending.has(t.hash)} onclick={() => act(t, 'delete', true)}>Delete downloaded files</button>
               <button onclick={() => { confirmDel = null; }}>Keep</button>
             {:else}
               <button class="danger" onclick={() => { confirmDel = t.hash; }}>Delete</button>
@@ -431,6 +448,7 @@
     box-shadow: inset 0 0 0 1px var(--line-strong);
     transition: color var(--t-fast), background var(--t-fast);
   }
+  .actions button:disabled { opacity: .5; cursor: wait; }
   .actions button:hover { color: var(--ink); background: rgba(242, 242, 244, 0.08); }
   .actions .danger:hover { color: #ff6b6b; }
 </style>
