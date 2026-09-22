@@ -1,7 +1,8 @@
 <script>
   import { posterUrl, backdropUrl } from '../api.js';
-  import { enrichItem, dismissFromContinue, AUTO_WATCHED_PERCENT } from '../stores.js';
+  import { library, enrichItem, dismissFromContinue, AUTO_WATCHED_PERCENT } from '../stores.js';
   import { episodeCode } from '../format.js';
+  import { seriesPlayTarget } from '../series-playback.js';
   // resume: rendered in the Continue Watching row — show which episode and how
   // much is left, and offer a way to drop it from the row.
   let { item, onopen, onplay, resume = false } = $props();
@@ -9,6 +10,7 @@
   // No poster? Ask OMDb once — the store patch re-renders this card.
   $effect(() => { if (!posterUrl(item)) enrichItem(item.id); });
 
+  const playTarget = $derived(resume ? item : seriesPlayTarget(item, $library));
   const poster = $derived(posterUrl(item));
   const backdrop = $derived(backdropUrl(item));
   const title = $derived(item.showName || item.title || item.omdbTitle || 'Untitled');
@@ -57,7 +59,7 @@
 
     <!-- Hover: play button -->
     <div class="hover-overlay">
-      <button class="play" onclick={(e) => { e.stopPropagation(); onplay?.(item); }} aria-label={`Play ${title}`}>
+      <button class="play" onclick={(e) => { e.stopPropagation(); onplay?.(playTarget); }} aria-label={`Play ${title}`}>
         <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
       </button>
     </div>

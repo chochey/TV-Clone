@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { api, streamUrl, posterUrl, backdropUrl } from '../api.js';
   import { library, session, dismissed, AUTO_WATCHED_PERCENT } from '../stores.js';
+  import { startPlayback, STARTUP_ERROR } from '../playback-startup.js';
   import { loadHls, parseVtt, cueAt, fmtTime } from '../player-core.js';
   import { episodeCode, episodeTitle } from '../format.js';
   import { hevcMaxLevel, demoteHevc, isFirefoxDesktopLinux } from '../hevc-probe.js';
@@ -140,6 +141,10 @@
 
   let hls = null;
   let loadSeq = 0;
+  let playbackId = null;
+  let destroyed = false;
+  let startupPending = false;
+  let cancelStartup = () => {};
   let hlsRetries = 0;
   let pausedAt = 0;        // when the user paused — long pauses outlive the server session
   let recoverAttempts = 0; // consecutive dead-session restarts without playback progress
@@ -172,10 +177,22 @@
   let retryTimer = null;
   async function loadHlsSession(start) {
     const seq = ++loadSeq;
+    cancelStartup();
+    startupPending = true;
     clearTimeout(retryTimer);
     buffering = true;
     let H;
     try { H = await loadHls(); } catch { error = 'Failed to load the video engine.'; return; }
+    if (seq !== loadSeq || destroyed) return;
+    destroyHls(); // stop old fragment requests before retiring their session
+    const previousPlayback = playbackId;
+    playbackId = null;
+    if (previousPlayback) {
+      try { await fetch(`/api/hls/${previousPlayback}/stop`, { method: 'POST', credentials: 'same-origin' }); } catch {}
+    }
+    if (seq !== loadSeq || destroyed) return;
+    const currentPlayback = Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, '0')).join('');
+    playbackId = currentPlayback;
     const params = new URLSearchParams({ start: String(start), quality });
     if (audioTrack != null) params.set('audio', String(audioTrack));
     // Ask for passthrough only after this browser has actually decoded a real
@@ -188,7 +205,7 @@
       if (seq !== loadSeq) return;  // a seek landed while probing
       if (lvl > 0) { params.set('hevcMaxLevel', String(lvl)); passthroughActive = true; }
     }
-    const url = `/hls/${encodeURIComponent(item.id)}/master.m3u8?${params}`;
+    const url = `/hls/${encodeURIComponent(item.id)}/${currentPlayback}/master.m3u8?${params}`;
 
     // Warm the ffmpeg session and read the duration/offset headers; hls.js
     // then re-fetches the same URL and hits the session-reuse fast path.
@@ -222,12 +239,12 @@
     bufferedEnd = seekOffset;
     hlsRetries = 0;
 
-    // Config mirrors v1's battle-tested setup (public/app.js): treat the
-    // EVENT playlist as VOD from segment 0, start loading only after the
-    // manifest parses, play once canplaythrough fires.
+    // Start at segment zero. Wait for two published segments in a growing
+    // EVENT playlist so the next segment is ready when playback begins.
+    // Completed short streams bypass this live-playlist minimum in hls.js.
     hls = new H({
       maxBufferLength: 30, maxMaxBufferLength: 120, startFragPrefetch: true,
-      startPosition: 0,
+      startPosition: 0, initialLiveManifestSize: 2,
       highBufferWatchdogPeriod: 2, nudgeOffset: 0.2, nudgeMaxRetry: 5,
       // Firefox/Linux MSE has flashed garbage on worker transmux appends.
       // Main-thread mux + fMP4 from the server avoids that path.
@@ -242,11 +259,21 @@
     if (passthroughActive) startFrameCounter(); else stopFrameCounter();
     hls.on(H.Events.MANIFEST_PARSED, () => {
       if (seq !== loadSeq) return;
-      video.addEventListener('canplaythrough', () => { video.play().catch(() => {}); }, { once: true });
       hls.startLoad();
+      cancelStartup();
+      cancelStartup = startPlayback(video, {
+        isCurrent: () => seq === loadSeq && !destroyed,
+        onBlocked: () => { startupPending = false; buffering = false; notice = 'Press Play to begin.'; },
+        onTimeout: () => {
+          startupPending = false;
+          if (fallbackFromPassthrough('startup timed out', false)) return;
+          buffering = false;
+          error = STARTUP_ERROR;
+        },
+      });
     });
     hls.on(H.Events.ERROR, async (_e, data) => {
-      if (!data.fatal) return;
+      if (seq !== loadSeq || destroyed || !data.fatal) return;
       // A passthrough session that dies on a media error is a capability
       // misjudgement, not a transient fault — hls.recoverMediaError() would
       // just fail the same way. Give up the claim and rebuild as a transcode.
@@ -271,7 +298,8 @@
   // have to notice that we need it. ──
   async function sessionDead() {
     try {
-      const r = await fetch(`/api/hls/${encodeURIComponent(item.id)}/alive`, { credentials: 'same-origin' });
+      const r = await fetch(`/api/hls/${playbackId}/alive`, { credentials: 'same-origin' });
+      if (r.status === 404 || r.status === 410) return true;
       if (!r.ok) return false;
       return !(await r.json()).alive;
     } catch { return false; }
@@ -591,7 +619,7 @@
   function togglePlay() {
     if (!video) return;
     if (video.paused) video.play().catch(() => {});
-    else video.pause();
+    else { startupPending = false; cancelStartup(); video.pause(); }
   }
 
   // ── Volume: 0–100 native, 101–150 through a WebAudio gain stage ──────
@@ -804,6 +832,7 @@
 
     // Full record: fresh resume point, subtitles, sync offset, audio tracks.
     try { full = await api.item(item.id); } catch { full = null; }
+    if (destroyed) return;
     const prog = full?.progress || item.progress || {};
     const start = (prog.percent || 0) >= AUTO_WATCHED_PERCENT ? 0 : (prog.currentTime > 5 ? prog.currentTime : 0);
     cur = start;
@@ -835,6 +864,8 @@
   }
 
   onDestroy(() => {
+    destroyed = true;
+    cancelStartup();
     clearInterval(progressTimer);
     clearInterval(stallTimer);
     clearTimeout(idleTimer);
@@ -852,16 +883,24 @@
     destroyHls();
     // Free the transcode slot immediately instead of waiting out the
     // server's 2-minute idle timeout (the main source of 503s).
-    if (!isDirect) {
-      try { navigator.sendBeacon(`/api/hls/${encodeURIComponent(item.id)}/stop`); } catch {}
+    if (playbackId) {
+      try { navigator.sendBeacon(`/api/hls/${playbackId}/stop`); } catch {}
     }
     if (audioCtx) { try { audioCtx.close(); } catch {} }
     document.body.style.overflow = '';
   });
 
+  function clearStartupError() {
+    // A slow start may recover after the watchdog fired. Preserve unrelated errors.
+    if (error === STARTUP_ERROR) error = '';
+  }
   function onTimeUpdate() {
     if (!video) return;
-    cur = seekOffset + video.currentTime;
+    const nextTime = seekOffset + video.currentTime;
+    if (nextTime > cur && !video.paused && !video.seeking && video.readyState >= 3) {
+      clearStartupError();
+    }
+    cur = nextTime;
     // Real forward progress clears the dead-session recovery budget.
     if (recoverAttempts && cur > recoverFromT + 3) recoverAttempts = 0;
     if (cues.length) cueText = cueAt(cues, cur - (full?.subtitleOffset || 0));
@@ -888,18 +927,21 @@
     onpointerup={onVideoPointerUp}
     onplay={() => {
       paused = false; poke(); resumeCheck();
-      try { hls?.startLoad(-1); } catch {}
+      try { if (!startupPending) hls?.startLoad(-1); } catch {}
     }}
     onpause={() => {
-      paused = true; pausedAt = Date.now(); saveProgress(); poke();
+      paused = true;
+      // load()/detach can deliver a late pause while the next stream starts.
+      if (startupPending) return;
+      pausedAt = Date.now(); saveProgress(); poke();
       // Stop MSE appends while paused — Firefox/Linux was flashing on each
       // fragment even with the clock frozen and hardware decode off.
       try { hls?.stopLoad(); } catch {}
     }}
     onwaiting={() => { buffering = true; }}
     onstalled={() => { buffering = true; }}
-    onplaying={() => { buffering = false; applySpeed(); }}
-    oncanplay={() => { buffering = false; applySpeed(); }}
+    onplaying={() => { clearStartupError(); startupPending = false; cancelStartup(); buffering = false; notice = ''; applySpeed(); }}
+    oncanplay={() => { if (!startupPending) buffering = false; applySpeed(); }}
     ontimeupdate={onTimeUpdate}
     onprogress={onProgress}
     ondurationchange={() => { videoDur = video?.duration || 0; }}
@@ -921,6 +963,7 @@
   {#if error}
     <div class="error">
       <p>{error}</p>
+      <button class="ghost" onclick={() => { error = ''; recoverAttempts = 0; if (isDirect) loadDirect(cur); else loadHlsSession(cur); }}>Retry</button>
       <button class="ghost" onclick={close}>Close</button>
     </div>
   {/if}

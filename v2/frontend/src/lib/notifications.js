@@ -16,15 +16,20 @@ export const unreadCount = derived(notifications, ($n) => $n.filter((x) => !x.re
 
 // Master gate, driven by the canNotify permission.
 let enabled = true;
+let generation = 0;
+export function resetNotifications() { generation++; notifications.set([]); }
 export function setNotificationsEnabled(v) {
+  if (enabled !== !!v) generation++;
   enabled = !!v;
   if (!enabled) notifications.set([]);
 }
 
 export async function loadNotifications() {
   if (!enabled) return;
+  const requestedGeneration = generation;
   let list;
   try { list = (await api.notifications()).notifications || []; } catch { return; }
+  if (!enabled || generation !== requestedGeneration) return;
   const read = cursor(READ_KEY);
   const cleared = cursor(CLEAR_KEY);
   notifications.set(

@@ -202,7 +202,7 @@ async function ensureLibrary(req, res, next) {
 }
 
 // Per-profile data (lib/profile-data.js)
-const { loadProfileData, saveProfileData, cache: profileDataCache, sanitizeProfileId, profileDataPath } =
+const { revision: profileRevision, loadProfileData, saveProfileData, cache: profileDataCache, sanitizeProfileId, profileDataPath } =
   require('./lib/profile-data')({ DATA_DIR, loadJSON, saveJSON });
 
 // Content requests (lib/requests.js) — users ask, admin fulfills via Downloads
@@ -905,31 +905,21 @@ app.delete('/api/requests/:id', requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
+const libraryEtag = require('./lib/library-etag')();
+
 app.get('/api/library', requireAuth, (req, res) => {
   const profileId = getRequestProfile(req);
   if (!profileId) return res.status(403).json({ error: 'Cannot access other profiles' });
   const lib = scanLibrary();
   const profileData = loadProfileData(profileId);
 
-  // ETag first: clients refetch on every SSE ping and navigation, and most
-  // of the time nothing changed. Answer 304 before paying for the full
-  // 8000+ item mapping below. (Conditional requests are keyed by URL, so
-  // one tag works for filtered/paginated variants too.)
-  // Include max progress.updatedAt so re-watching an item that's already in
-  // the progress map busts the cache — needed for Continue Watching reorder.
-  let maxProgressAt = 0;
-  for (const v of Object.values(profileData.progress)) {
-    if (v && v.updatedAt > maxProgressAt) maxProgressAt = v.updatedAt;
-  }
-  const profileVersion = Object.keys(profileData.progress).length + '-' + Object.keys(profileData.watched).length + '-' + maxProgressAt;
-  const omdbVersion = omdb.cacheVersion || omdb.cacheSize;
-  const overrideVersion = Object.keys(metadataOverrides.all()).length;
-  // libraryVersion bumps on every scan that changed content — count alone
-  // missed same-size swaps (one file replaced by another).
-  const cacheTag = libraryVersion + '-' + (libraryCache ? libraryCache.length : 0) + '-' + profileVersion + '-' + omdbVersion + '-' + overrideVersion;
-  const etag = '"lib-' + crypto.createHash('md5').update(cacheTag).digest('hex').slice(0, 12) + '"';
-  res.set('ETag', etag);
-  if (req.headers['if-none-match'] === etag) return res.status(304).end();
+  // Revisions cover edits to existing values, not just collection sizes.
+  // A boot nonce invalidates tags restored by browsers across a restart.
+  const etag = libraryEtag({ profileId, profileRevision: profileRevision(profileId),
+    libraryVersion, omdbVersion: omdb.cacheVersion || omdb.cacheSize,
+    overrideVersion: metadataOverrides.revision, query: req.query });
+  res.set({ ETag: etag, 'Cache-Control': 'private, no-cache', Vary: 'Cookie, X-Session-Token' });
+  if (req.fresh) return res.status(304).end();
 
   // Slim response: exclude heavy fields not needed for browsing
   let result = lib.map(item => {
@@ -2309,7 +2299,7 @@ app.get('/api/now-watching', requirePermission('canLogs'), (_req, res) => {
     // taken, including a passthrough that fell back to transcoding mid-play,
     // which the item's static streamMode would not show. Direct play never
     // creates a session, so fall back to the computed mode for those.
-    const sess = transcodeSessions[w.id];
+    const sess = Object.values(transcodeSessions).find(s => s.mediaId === w.id && s.profileName === w.profileName);
     const fp = fileIndex[w.id];
     const delivery = sess?.delivery
       || (fp && getStreamMode(fp) === 'direct' ? 'direct' : null);
@@ -2689,21 +2679,24 @@ app.get('/subtitle/embedded/:fileId/:streamIndex', requireAuth, ensureLibrary, (
 // ── HLS Transcode / Remux ────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════
 
-const transcodeSessions = {}; // id -> { process, dir, timeout, startSeg, lastRestartAt }
+const retiredPlaybacks = new Map();
+const transcodeSessions = Object.create(null); // random playback ID -> session (including pending starts)
 const MAX_TRANSCODE_SESSIONS = Math.max(1, Math.min(5, parseInt(process.env.MAX_TRANSCODE_SESSIONS, 10) || 2));
 const HLS_SEG_DURATION = 4;
 
 function cleanupSession(id, keepFiles) {
   const session = transcodeSessions[id];
   if (!session) return;
-  try { session.process.kill('SIGTERM'); } catch {}
+  try { session.process?.kill('SIGTERM'); } catch {}
   clearTimeout(session.timeout);
   delete transcodeSessions[id];
+  retiredPlaybacks.set(id, Date.now());
   if (keepFiles) return;
 
   // Rename before removing so a new session that reuses this id can create
   // the directory fresh without racing our async delete. fs.rm handles the
   // recursive walk with its own retry policy — no hand-rolled 5s timeout.
+  if (!session.dir) return;
   const deadDir = session.dir + '_dead_' + Date.now();
   try { fs.renameSync(session.dir, deadDir); } catch { return; }
   fs.rm(deadDir, { recursive: true, force: true, maxRetries: 3 }, () => {});
@@ -2726,13 +2719,6 @@ function canVaapiDecode(filePath) {
 }
 
 function startFfmpeg(id, filePath, sessionDir, seekTime, startSegNum, audioStreamIndex, quality, hevcPassthrough = false) {
-  // Kill existing process but keep files (segments already produced are still valid)
-  if (transcodeSessions[id]) {
-    try { transcodeSessions[id].process.kill('SIGTERM'); } catch {}
-    clearTimeout(transcodeSessions[id].timeout);
-    delete transcodeSessions[id];
-  }
-
   const mode = getStreamMode(filePath);
   const preset = Object.hasOwn(QUALITY_PRESETS, quality) ? QUALITY_PRESETS[quality] : QUALITY_PRESETS.auto;
 
@@ -2773,7 +2759,7 @@ function startFfmpeg(id, filePath, sessionDir, seekTime, startSegNum, audioStrea
   proc.on('error', err => {
     console.error(`[transcode ${id.slice(0,8)}] failed to start ffmpeg: ${err.message}`);
     recordError(`transcode:${id.slice(0,8)}`, `Failed to start FFmpeg: ${err.message}`);
-    cleanupSession(id);
+    if (transcodeSessions[id]?.process === proc) cleanupSession(id);
   });
   proc.on('close', code => {
     if (code !== 0 && code !== 255 && code !== null) {
@@ -2782,201 +2768,158 @@ function startFfmpeg(id, filePath, sessionDir, seekTime, startSegNum, audioStrea
     }
   });
 
-  transcodeSessions[id] = {
+  clearTimeout(transcodeSessions[id].timeout);
+  Object.assign(transcodeSessions[id], {
     process: proc, dir: sessionDir,
     timeout: setTimeout(() => cleanupSession(id), TRANSCODE_TIMEOUT_MS),
     startSeg: startSegNum,
     lastRestartAt: Date.now(),
     startedAt: Date.now(),
     delivery,
-  };
+  });
 }
 
-// Release a transcode session the moment the player closes, instead of
-// holding one of the MAX_TRANSCODE_SESSIONS slots for the 2-minute idle
-// timeout. Only the profile that started the session (or an admin) may
-// stop it.
-app.post('/api/hls/:id/stop', requireAuth, (req, res) => {
-  const sess = transcodeSessions[req.params.id];
-  if (!sess) return res.json({ ok: true, stopped: false });
-  const s = getSession(req);
-  if (sess.profileId && s?.profileId !== sess.profileId && s?.role !== 'admin') {
-    return res.status(403).json({ ok: false, error: 'Not your session' });
+// A session ID belongs to one player attempt, not one media file. Restarting
+// after a seek uses a new ID, so late requests cannot read another generation.
+const validPlaybackId = id => /^[a-f0-9]{32}$/.test(id || '');
+function ownedPlayback(req, res) {
+  const id = req.params.playbackId;
+  if (!validPlaybackId(id)) { res.status(400).json({ error: 'Invalid playback session' }); return null; }
+  const session = transcodeSessions[id];
+  if (!session) { res.status(404).json({ error: 'No active session' }); return null; }
+  if (session.profileId !== req.session.profileId) {
+    res.status(403).json({ error: 'Not your session' }); return null;
   }
-  cleanupSession(req.params.id);
+  if (req.params.id && session.mediaId !== req.params.id) {
+    res.status(404).json({ error: 'No active session' }); return null;
+  }
+  return session;
+}
+
+app.post('/api/hls/:playbackId/stop', requireAuth, (req, res) => {
+  const session = ownedPlayback(req, res);
+  if (!session) return;
+  cleanupSession(req.params.playbackId);
   res.json({ ok: true, stopped: true });
 });
-
-// Cheap liveness probe so a resuming player can tell whether its transcode
-// session survived a long pause (sessions reap after 2min idle) before
-// deciding to restart at the current position.
-app.get('/api/hls/:id/alive', requireAuth, (req, res) => {
-  res.json({ alive: !!transcodeSessions[req.params.id] });
+app.get('/api/hls/:playbackId/alive', requireAuth, (req, res) => {
+  const session = ownedPlayback(req, res);
+  if (session) res.json({ alive: true });
 });
 
-app.get('/hls/:id/master.m3u8', requireAuth, ensureLibrary, async (req, res) => {
-  const id = req.params.id;
-  const filePath = fileIndex[id];
+// Old clients get a separate session as well. Relative segment URLs then
+// resolve beneath the new playback ID. New clients use the canonical route.
+app.get('/hls/:id/master.m3u8', requireAuth, (req, res) => {
+  const query = new URLSearchParams(req.query).toString();
+  res.redirect(307, `/hls/${encodeURIComponent(req.params.id)}/${crypto.randomBytes(16).toString('hex')}/master.m3u8${query ? '?' + query : ''}`);
+});
+
+app.get('/hls/:id/:playbackId/master.m3u8', requireAuth, ensureLibrary, async (req, res) => {
+  const mediaId = req.params.id;
+  const id = req.params.playbackId;
+  if (!validPlaybackId(id)) return res.status(400).send('Invalid playback session');
+  const filePath = fileIndex[mediaId];
   if (!filePath || !fs.existsSync(filePath)) return res.status(404).send('File not found');
-
-  const startTime = parseFloat(req.query.start) || 0;
-  const audioTrack = req.query.audio !== undefined ? parseInt(req.query.audio, 10) : null;
-  const rawQuality = req.query.quality;
-  const quality = Object.hasOwn(QUALITY_PRESETS, rawQuality) ? rawQuality : 'auto';
-  // Highest HEVC level this client actually decoded in a real clip test
-  // (ffprobe units — 120 is L4.0). Absent or 0 means no passthrough. The
-  // client owns this claim, but the blast radius is one failed session that
-  // it then retries without the flag, so it needs no more trust than that.
+  const startTime = Number(req.query.start || 0);
+  const audioTrack = req.query.audio !== undefined ? Number(req.query.audio) : null;
+  if (!Number.isFinite(startTime) || startTime < 0 ||
+      (audioTrack !== null && (!Number.isInteger(audioTrack) || audioTrack < 0))) {
+    return res.status(400).send('Invalid playback options');
+  }
+  const quality = Object.hasOwn(QUALITY_PRESETS, req.query.quality) ? req.query.quality : 'auto';
   const clientHevcLevel = Math.max(0, parseInt(req.query.hevcMaxLevel, 10) || 0);
-  const sessionDir = path.join(TRANSCODE_DIR, id);
-
-  // Ensure session dir stays within transcode directory
-  if (!path.resolve(sessionDir).startsWith(path.resolve(TRANSCODE_DIR) + path.sep)) {
-    return res.status(400).send('Invalid session');
+  const signature = JSON.stringify([mediaId, startTime, audioTrack, quality, clientHevcLevel]);
+  // Retired URLs must not resurrect a stopped generation via a late retry.
+  for (const [key, at] of retiredPlaybacks) {
+    if (Date.now() - at > TRANSCODE_TIMEOUT_MS) retiredPlaybacks.delete(key);
   }
-
-  const m3u8Path = path.join(sessionDir, 'stream.m3u8');
-  const duration = await probeDurationAsync(filePath);
-
-  // Reuse existing session if same seek offset, same audio track, and same quality
-  if (transcodeSessions[id]) {
-    const sameSeek = (transcodeSessions[id].seekOffset || 0) === startTime;
-    const sameAudio = (transcodeSessions[id].audioTrack || null) === audioTrack;
-    const sameQuality = (transcodeSessions[id].quality || 'auto') === quality;
-    // Sessions are keyed by item id, so two clients watching the same title
-    // share one. A passthrough session serves fMP4/HEVC that an incapable
-    // client cannot decode, so capability is part of session identity — without
-    // this, the second viewer inherits a stream their browser will not play.
-    const samePassthrough = (transcodeSessions[id].hevcMaxLevel || 0) === clientHevcLevel;
-    if (sameSeek && sameAudio && sameQuality && samePassthrough
-        && fs.existsSync(m3u8Path) && fs.statSync(m3u8Path).size > 0) {
-      // Verify m3u8 actually has segment data (not just a header from a killed session)
-      try {
-        const content = fs.readFileSync(m3u8Path, 'utf-8');
-        if (content.includes('#EXTINF:')) {
-          clearTimeout(transcodeSessions[id].timeout);
-          transcodeSessions[id].timeout = setTimeout(() => cleanupSession(id), TRANSCODE_TIMEOUT_MS);
-          res.set({
-            'Content-Type': 'application/vnd.apple.mpegurl', 'Cache-Control': 'no-cache',
-            'X-Accel-Buffering': 'no',
-            'X-Total-Duration': String(duration), 'X-Seek-Offset': String(transcodeSessions[id].seekOffset || 0),
-          });
-          return res.sendFile(m3u8Path);
-        }
-      } catch {}
+  if (retiredPlaybacks.has(id)) return res.status(410).send('Playback session ended');
+  let session = transcodeSessions[id];
+  if (session) {
+    if (!ownedPlayback(req, res)) return;
+    if (session.signature !== signature) return res.status(409).send('Use a new playback session for changed options');
+  } else {
+    // Reserve synchronously before any probing yields. Pending starts count
+    // toward capacity, and a duplicate request waits on the same promise.
+    if (Object.keys(transcodeSessions).length >= MAX_TRANSCODE_SESSIONS) {
+      return res.status(503).send('Too many active transcode sessions');
     }
-  }
-
-  // Kill existing session for this ID — wait for process to actually exit
-  if (transcodeSessions[id]) {
-    const proc = transcodeSessions[id].process;
-    clearTimeout(transcodeSessions[id].timeout);
-    delete transcodeSessions[id];
-    await new Promise(resolve => {
-      if (proc.exitCode !== null) return resolve(); // already dead
-      proc.once('close', resolve);
-      try { proc.kill('SIGKILL'); } catch {}
-      setTimeout(resolve, 2000); // safety net — don't hang forever
-    });
-  }
-
-  // Limit concurrent transcode sessions
-  if (Object.keys(transcodeSessions).length >= MAX_TRANSCODE_SESSIONS) {
-    return res.status(503).send('Too many active transcode sessions');
-  }
-
-  // Probe on-demand if not yet cached (also re-probe if pixFmt unknown for VAAPI
-  // 10-bit detection, or if the height is missing — entries cached before heights
-  // were recorded have none, and without one the resolution cap can't fire. This
-  // backfills lazily as things are played rather than re-probing 9k files at once.)
-  // `=== undefined`, not falsy: a probed-but-heightless file is stored as 0, and
-  // treating that as "missing" would re-probe it on every request forever.
-  if (!probeCache[filePath] || (vaapiAvailable() && !pixFmtCache[filePath])
-      || heightCache[filePath] === undefined || levelCache[filePath] === undefined) {
-    await probeFileAsync(filePath);
-  }
-
-  // Clean old segments on every new session start
-  try {
-    if (fs.existsSync(sessionDir)) {
-      fs.readdirSync(sessionDir).forEach(f => {
-        // .m4s/init.mp4 belong to fMP4 passthrough sessions. Leaving them
-        // behind would let a stale init segment — with the wrong codec
-        // configuration — get served to the next session for this item.
-        if (f.endsWith('.ts') || f.endsWith('.m4s') || f === 'init.mp4'
-            || f === 'stream.m3u8' || f === 'manifest.m3u8')
-          fs.unlinkSync(path.join(sessionDir, f));
-      });
-    }
-  } catch {}
-  if (!fs.existsSync(sessionDir)) fs.mkdirSync(sessionDir, { recursive: true });
-
-  const mode = getStreamMode(filePath);
-  // Pass HEVC through untouched only when the client proved it can decode AND
-  // the file's level is known to be within what it demonstrated. An unknown
-  // level (0) keeps transcoding rather than gambling on a decoder that may
-  // reject it — a wrong guess costs the viewer a black screen.
-  const srcLevel = levelCache[filePath] || 0;
-  const hevcPassthrough = clientHevcLevel > 0
-    && (probeCache[filePath] || '').toLowerCase() === 'hevc'
-    && srcLevel > 0 && srcLevel <= clientHevcLevel;
-  console.log(`[HLS] Starting ${mode} for ${id.slice(0,8)} at ${startTime.toFixed(1)}s${audioTrack !== null ? ` audio:${audioTrack}` : ''} quality:${quality}`);
-  startFfmpeg(id, filePath, sessionDir, startTime, 0, audioTrack, quality, hevcPassthrough);
-
-  // Store the seek offset, audio track, quality, and viewer info on the session
-  if (transcodeSessions[id]) {
-    transcodeSessions[id].seekOffset = startTime;
-    transcodeSessions[id].audioTrack = audioTrack;
-    transcodeSessions[id].quality = quality;
-    transcodeSessions[id].filePath = filePath;
-    transcodeSessions[id].hevcMaxLevel = clientHevcLevel;
-    const sess = getSession(req);
-    let profileName = null;
-    if (sess) {
-      transcodeSessions[id].profileId = sess.profileId;
-      const prof = config.profiles.find(p => p.id === sess.profileId);
-      profileName = prof?.name || sess.profileId;
-      transcodeSessions[id].profileName = profileName;
-    }
-    // Record stream session for logs
-    const libItem = libraryCache ? libraryCache.find(i => i.id === id) : null;
-    recordStream({
-      id,
-      title: libItem?.title || path.basename(filePath),
-      profileName,
-      mode,
-      codec: probeCache[filePath] || null,
-      quality,
-      seekTime: startTime,
-    });
-  }
-
-  // Wait for ffmpeg to produce its m3u8 with real segment durations
-  let waited = 0;
-  const poll = setInterval(() => {
-    waited += 100;
-    try {
-      if (fs.existsSync(m3u8Path) && fs.statSync(m3u8Path).size > 0) {
-        const content = fs.readFileSync(m3u8Path, 'utf-8');
-        // Wait until at least 2 segments exist so the player has a buffer on startup
-        const segCount = (content.match(/#EXTINF:/g) || []).length;
-        if (segCount >= 2) {
-          clearInterval(poll);
-          res.set({
-            'Content-Type': 'application/vnd.apple.mpegurl', 'Cache-Control': 'no-cache',
-            'X-Accel-Buffering': 'no',
-            'X-Total-Duration': String(duration), 'X-Seek-Offset': String(startTime),
-          });
-          return res.sendFile(m3u8Path);
-        }
+    session = transcodeSessions[id] = {
+      mediaId, profileId: req.session.profileId, signature, filePath,
+      dir: path.join(TRANSCODE_DIR, id), seekOffset: startTime,
+      audioTrack, quality, hevcMaxLevel: clientHevcLevel,
+      profileName: config.profiles.find(p => p.id === req.session.profileId)?.name || req.session.profileId,
+      timeout: setTimeout(() => cleanupSession(id), TRANSCODE_TIMEOUT_MS),
+    };
+    session.ready = (async () => {
+      const current = () => transcodeSessions[id] === session;
+      const assertCurrent = () => { if (!current()) throw new Error('Playback session stopped'); };
+      session.duration = await probeDurationAsync(filePath);
+      assertCurrent();
+      if (!probeCache[filePath] || (vaapiAvailable() && !pixFmtCache[filePath])
+          || heightCache[filePath] === undefined || levelCache[filePath] === undefined) {
+        await probeFileAsync(filePath);
       }
-    } catch {}
-    if (waited > 60000) {
-      clearInterval(poll);
-      res.status(504).send('Transcode startup timeout');
-    }
-  }, 100);
+      assertCurrent();
+      // Never reuse a directory left by an earlier generation or restart.
+      await fs.promises.rm(session.dir, { recursive: true, force: true });
+      assertCurrent();
+      await fs.promises.mkdir(session.dir, { recursive: true });
+      assertCurrent();
+      const srcLevel = levelCache[filePath] || 0;
+      const hevcPassthrough = clientHevcLevel > 0
+        && (probeCache[filePath] || '').toLowerCase() === 'hevc'
+        && srcLevel > 0 && srcLevel <= clientHevcLevel;
+      startFfmpeg(id, filePath, session.dir, startTime, 0, audioTrack, quality, hevcPassthrough);
+      const libItem = libraryCache?.find(i => i.id === mediaId);
+      recordStream({ id: mediaId, title: libItem?.title || path.basename(filePath),
+        profileName: session.profileName, mode: getStreamMode(filePath),
+        codec: probeCache[filePath] || null, quality, seekTime: startTime });
+      const playlist = path.join(session.dir, 'stream.m3u8');
+      const deadline = Date.now() + 60000;
+      while (Date.now() < deadline) {
+        assertCurrent();
+        let content = '';
+        try { content = await fs.promises.readFile(playlist, 'utf8'); } catch {}
+        const count = (content.match(/#EXTINF:/g) || []).length;
+        // FFmpeg publishes complete segments atomically (temp_file). Let the
+        // player buffer the first one instead of delaying it for a second
+        // encode; the EVENT playlist continues growing during playback.
+        if (count >= 1) return;
+        if (session.process?.exitCode != null) throw new Error('Transcode stopped before producing video');
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      throw new Error('Transcode startup timeout');
+    })();
+  }
+  try {
+    await session.ready;
+    if (transcodeSessions[id] !== session) return res.status(409).send('Playback session stopped');
+    clearTimeout(session.timeout);
+    session.timeout = setTimeout(() => cleanupSession(id), TRANSCODE_TIMEOUT_MS);
+    res.set({ 'Content-Type': 'application/vnd.apple.mpegurl', 'Cache-Control': 'no-cache',
+      'X-Accel-Buffering': 'no', 'X-Total-Duration': String(session.duration),
+      'X-Seek-Offset': String(startTime) });
+    return sendPlaybackFile(req, res, path.join(session.dir, 'stream.m3u8'));
+  } catch (err) {
+    if (transcodeSessions[id] === session) cleanupSession(id);
+    if (!res.headersSent) res.status(503).send(err.message);
+  }
 });
+
+// Cast receivers lack cookies: preserve their scoped token on relative media
+// and initialization URLs. Browser players keep their normal session cookies.
+function sendPlaybackFile(req, res, file) {
+  if (!req.query.cast_token || !file.endsWith('.m3u8')) return res.sendFile(file);
+  fs.readFile(file, 'utf8', (err, content) => {
+    if (err) return res.status(404).send('Playlist not found');
+    const token = '?cast_token=' + encodeURIComponent(req.query.cast_token);
+    res.send(content.split('\n').map(line => {
+      if (line && !line.startsWith('#')) return line + token;
+      return line.replace(/URI="([^"]+)"/g, (_, uri) => `URI="${uri}${token}"`);
+    }).join('\n'));
+  });
+}
 
 // TS segments are MPEG transport streams; fMP4 segments and the init segment
 // are ISO-BMFF. Serving an .m4s as video/mp2t makes some browsers refuse it.
@@ -2986,8 +2929,9 @@ function segmentContentType(segName) {
   return 'video/mp2t';
 }
 
-app.get('/hls/:id/:segment', requireAuth, (req, res) => {
-  const id = req.params.id;
+app.get('/hls/:id/:playbackId/:segment', requireAuth, (req, res) => {
+  const id = req.params.playbackId;
+  if (!ownedPlayback(req, res)) return;
   const segName = req.params.segment;
 
   // Validate segment name — only allow expected HLS patterns. fMP4 sessions
@@ -3023,7 +2967,7 @@ app.get('/hls/:id/:segment', requireAuth, (req, res) => {
       if (st.size > 0) {
         const ct = segmentContentType(segName);
         res.set({ 'Content-Type': ct, 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no' });
-        return res.sendFile(segPath);
+        return sendPlaybackFile(req, res, segPath);
       }
     } catch {}
   }
@@ -3049,7 +2993,7 @@ app.get('/hls/:id/:segment', requireAuth, (req, res) => {
         try { watcher.close(); } catch {}
         const ct = segmentContentType(segName);
         res.set({ 'Content-Type': ct, 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no' });
-        return res.sendFile(segPath);
+        return sendPlaybackFile(req, res, segPath);
       }
     } catch {}
   };
@@ -3835,7 +3779,7 @@ app.post('/api/reliability/repair', requireAdminSession, async (req, res) => {
     if (req.body?.restartApp === true) {
       result.appRestartQueued = true;
       setTimeout(() => {
-        Object.keys(transcodeSessions).forEach(cleanupSession);
+        Object.keys(transcodeSessions).forEach(id => cleanupSession(id));
         process.exit(process.env.INVOCATION_ID ? 1 : 0);
       }, 1200);
     }
@@ -3849,7 +3793,7 @@ app.post('/api/reliability/repair', requireAdminSession, async (req, res) => {
 app.post('/api/restart', requirePermission('canRestart'), (_req, res) => {
   res.json({ ok: true });
   setTimeout(() => {
-    Object.keys(transcodeSessions).forEach(cleanupSession);
+    Object.keys(transcodeSessions).forEach(id => cleanupSession(id));
     // Exit with code 1 so systemd Restart=on-failure will restart the service.
     // When not running under systemd, spawn a replacement process first.
     if (process.env.INVOCATION_ID) {
@@ -3869,7 +3813,7 @@ app.post('/api/restart', requirePermission('canRestart'), (_req, res) => {
 
 // ── Graceful shutdown ───────────────────────────────────────────────────
 function shutdown() {
-  Object.keys(transcodeSessions).forEach(cleanupSession);
+  Object.keys(transcodeSessions).forEach(id => cleanupSession(id));
   process.exit(0);
 }
 process.on('SIGTERM', shutdown);

@@ -1,6 +1,8 @@
 import { writable, derived, get } from 'svelte/store';
 import { api } from './api.js';
-import { loadNotifications } from './notifications.js';
+import { loadNotifications, resetNotifications } from './notifications.js';
+
+import { startLiveUpdates } from './live-updates.js';
 
 export const session = writable(null);     // { loggedIn, profileId, name, role }
 export const library = writable([]);       // full library array
@@ -12,7 +14,8 @@ export const searchQuery = writable('');   // shared: header search box <-> Sear
 export const dismissed = writable({ continueWatching: {}, recentlyAdded: {} });
 
 export async function loadDismissed() {
-  try { dismissed.set(await api.dismissed()); } catch {}
+  const generation = sessionGeneration;
+  try { const data = await api.dismissed(); if (generation === sessionGeneration) dismissed.set(data); } catch {}
 }
 
 // Hiding is optimistic — the row should disappear on click, not on round-trip.
@@ -38,7 +41,8 @@ export function dismissFromContinue(item) {
 // already recorded. The old client value of 95 sat above the server's, so
 // finished titles piled up in Continue Watching forever (112 of them were
 // stranded at 75-94%, stopped during the credits).
-export const AUTO_WATCHED_PERCENT = 92;
+import { AUTO_WATCHED_PERCENT } from './series-playback.js';
+export { AUTO_WATCHED_PERCENT };
 const FINISHED_PERCENT = AUTO_WATCHED_PERCENT;
 
 // Continue Watching: in-progress items, most-recent first, de-duped per show.
@@ -135,13 +139,14 @@ const enrichAttempted = new Set();
 export async function enrichItem(id) {
   if (!id || enrichAttempted.has(id)) return;
   enrichAttempted.add(id);
+  const generation = sessionGeneration;
   let meta;
   try {
     const r = await fetch(`/api/metadata/${encodeURIComponent(id)}`, { credentials: 'same-origin' });
     if (!r.ok) return;
     meta = await r.json();
   } catch { return; }
-  if (!meta?.found) return;
+  if (generation !== sessionGeneration || !meta?.found) return;
   library.update((list) => list.map((i) => {
     if (i.id !== id) return i;
     const patched = { ...i };
@@ -152,59 +157,45 @@ export async function enrichItem(id) {
   }));
 }
 
-// Live refresh: v1 broadcasts named SSE events when the organizer files new
-// content (library-updated) — without this, v2 only sees new arrivals after
-// a full page reload. /api/library answers 304 when nothing changed, so the
-// refetch is cheap. EventSource auto-reconnects across server restarts.
-let sseStarted = false;
-function startLiveUpdates(profileId) {
-  if (sseStarted || typeof EventSource === 'undefined') return;
-  sseStarted = true;
-  const es = new EventSource('/api/events');
-  let refreshTimer = null;
-  let firstOpen = true;
-  const refetch = (delay) => {
-    clearTimeout(refreshTimer);
-    refreshTimer = setTimeout(() => { loadLibrary(profileId).catch(() => {}); }, delay);
-  };
-  es.addEventListener('library-updated', () => refetch(2000)); // coalesce bursts
-  // The server appended to the notification history (new content filed, a
-  // download started/finished, an organizer failure). Refetch the list —
-  // the server already filtered it to what this user may see.
-  let notifTimer = null;
-  const refetchNotifs = (delay) => {
-    clearTimeout(notifTimer);
-    notifTimer = setTimeout(() => { loadNotifications(); }, delay);
-  };
-  es.addEventListener('notifications-updated', () => refetchNotifs(500));
-  es.addEventListener('open', () => {
-    // SSE has no replay: anything that happened while we were disconnected
-    // (server restart, network blip, laptop asleep) never reached us. On
-    // reconnect, catch up on both the library and the notification history.
-    // The first open is redundant with the initial loads, so skip it.
-    if (firstOpen) { firstOpen = false; return; }
-    refetch(500);
-    refetchNotifs(500);
-  });
-  // Heartbeat: refetch every 5 min as a catchall for missed SSE events.
-  setInterval(() => { loadLibrary(profileId).catch(() => {}); loadNotifications(); }, 5 * 60 * 1000);
-  // Tab wake: a backgrounded tab may have missed everything (browsers
-  // throttle timers and can drop SSE). Refetch the moment it's visible
-  // again — cheap thanks to the ETag 304 when nothing changed.
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') {
-      loadLibrary(profileId).catch(() => {});
-      loadNotifications();
-    }
-  });
+// Guard all user-scoped work, including responses already in flight.
+let sessionGeneration = 0;
+let libraryRequest = 0;
+let stopLiveUpdates = null;
+let activeProfile = null;
+
+export function resetSessionState() {
+  sessionGeneration++;
+  libraryRequest++;
+  stopLiveUpdates?.();
+  stopLiveUpdates = null;
+  library.set([]);
+  libraryLoaded.set(false);
+  dismissed.set({ continueWatching: {}, recentlyAdded: {} });
+  searchQuery.set('');
+  enrichAttempted.clear();
+  resetNotifications();
 }
 
+session.subscribe(value => {
+  const profile = value?.profileId || null;
+  if (profile === activeProfile) return;
+  resetSessionState();
+  activeProfile = profile;
+});
+
 export async function loadLibrary(profileId) {
-  const data = await api.library({ profile: profileId || 'default' });
+  const profile = profileId || activeProfile;
+  if (!profile || profile !== activeProfile) return [];
+  const generation = sessionGeneration;
+  const request = ++libraryRequest;
+  const data = await api.library({ profile });
+  if (generation !== sessionGeneration || request !== libraryRequest) return [];
   const items = Array.isArray(data) ? data : data.items || [];
   library.set(items);
   libraryLoaded.set(true);
-  loadDismissed(); // rows the user hid, per profile — don't block the library on it
-  startLiveUpdates(profileId);
+  loadDismissed();
+  if (!stopLiveUpdates) stopLiveUpdates = startLiveUpdates({
+    refreshLibrary: () => loadLibrary(profile), refreshNotifications: loadNotifications,
+  });
   return items;
 }

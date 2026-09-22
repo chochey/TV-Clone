@@ -135,6 +135,8 @@
           </div>
           {#if fixDone[e.id]}
             <p class="rdone">{fixDone[e.id]}</p>
+          {:else if e.manualReview}
+            <p class="rmeta">Files have been kept in Share. Check the file names and any existing copy, then use Restart organizer to retry after correcting them.</p>
           {:else}
             <div class="rfix">
               <input

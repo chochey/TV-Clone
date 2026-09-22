@@ -2,6 +2,7 @@
   import { api, posterUrl, backdropUrl } from '../lib/api.js';
   import { library, libraryLoaded, session, enrichItem, AUTO_WATCHED_PERCENT } from '../lib/stores.js';
   import { navigate } from '../lib/router.js';
+  import { seriesEpisodes, seriesPlayTarget } from '../lib/series-playback.js';
   import { episodeTitle, episodeCode } from '../lib/format.js';
 
   let { id, onplay } = $props();
@@ -38,29 +39,7 @@
   const plot = $derived(m.plot && m.plot !== 'N/A' ? m.plot : '');
 
   // ── Episodes (shows only) ──────────────────────────────────────────
-  // The library is one entry per FILE; duplicate copies of an episode
-  // ("...Pilot.mkv" + "...Pilot-2.mkv") must collapse to one row. Keep the
-  // copy that carries state (progress, watched), else the original file.
-  function betterCopy(a, b) {
-    const ap = a.progress?.percent > 0, bp = b.progress?.percent > 0;
-    if (ap !== bp) return ap ? a : b;
-    if (!!a.watched !== !!b.watched) return a.watched ? a : b;
-    return (a.filename || '').length <= (b.filename || '').length ? a : b;
-  }
-  const episodes = $derived.by(() => {
-    if (!isShow) return [];
-    const byEp = new Map();
-    for (const i of $library) {
-      if (i.type !== 'show' || i.showName !== m.showName) continue;
-      const key = i.epInfo?.season != null && i.epInfo?.episode != null
-        ? `${i.epInfo.season}x${i.epInfo.episode}` : i.id;
-      const prev = byEp.get(key);
-      byEp.set(key, prev ? betterCopy(prev, i) : i);
-    }
-    return [...byEp.values()].sort((a, b) =>
-      (a.epInfo?.season ?? 999) - (b.epInfo?.season ?? 999) ||
-      (a.epInfo?.episode ?? 999) - (b.epInfo?.episode ?? 999));
-  });
+  const episodes = $derived(isShow ? seriesEpisodes(m, $library) : []);
   // Episodes whose season never parsed (specials, movies, oddly-named files)
   // used to have no tab they could appear under, so they were in the library
   // but unreachable from the show. Give them a home.
@@ -70,13 +49,7 @@
     ...[...new Set(episodes.map((e) => e.epInfo?.season).filter((s) => s != null))].sort((a, b) => a - b),
     ...(hasExtras ? [EXTRAS] : []),
   ]);
-  const inProgressEp = $derived(
-    episodes
-      .filter((e) => e.progress?.percent > 0 && e.progress?.percent < AUTO_WATCHED_PERCENT)
-      .sort((a, b) => (b.progress?.updatedAt || 0) - (a.progress?.updatedAt || 0))[0] || null,
-  );
-  // What the big Play button should start: mid-episode > first unwatched > pilot.
-  const nextUp = $derived(inProgressEp || episodes.find((e) => !e.watched) || episodes[0] || null);
+  const nextUp = $derived(isShow ? seriesPlayTarget(m, $library) : null);
 
   let season = $state(null);
   $effect(() => { id; season = null; });

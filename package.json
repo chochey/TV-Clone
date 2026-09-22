@@ -5,7 +5,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test:unit": "node --test lib/*.test.js",
+    "test:unit": "node --test lib/*.test.js lib/*.test.mjs v2/frontend/src/lib/*.test.mjs",
     "test:e2e": "npx playwright test",
     "test": "npm run test:unit && npm run test:e2e",
     "test:auth": "npx playwright test tests/auth.spec.js",

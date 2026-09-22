@@ -1,7 +1,7 @@
 <script>
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { api } from './lib/api.js';
-  import { library, session, loadLibrary, searchQuery, collapseShows } from './lib/stores.js';
+  import { library, session, loadLibrary, resetSessionState, searchQuery, collapseShows } from './lib/stores.js';
   import { searchLibrary } from './lib/search.js';
   import { posterUrl } from './lib/api.js';
   import { route, navigate } from './lib/router.js';
@@ -255,9 +255,11 @@
     menuOpen = false;
     notifReady = false;
     lastSeenNotifId = null;
+    playing = null;
+    await tick(); // let the outgoing player save/stop while its cookie still exists
+    resetSessionState();
     await api.logout();
     session.set(null);
-    playing = null;
     username = ''; password = '';
     searchQuery.set('');   // don't leak the last user's search to the next
     navigate('/');

@@ -80,6 +80,21 @@ bug). The hourly safety rescan no longer dodges active streams — it doesn't ne
 
 ## Architecture Notes
 
+### Playback and profile isolation (September 2026)
+HLS sessions are keyed by a random 32-character playback ID, not media ID.
+The canonical URL is `/hls/:mediaId/:playbackId/master.m3u8`; relative playlist
+and segment requests retain that playback ID. Every seek/quality/audio restart
+uses a fresh ID. Stop/alive endpoints take playback IDs. Pending starts reserve
+capacity before probing; duplicate warm-up/manifest requests share one promise.
+Do not restore media-ID session sharing. The frontend and backend must deploy
+together. Open players should be closed and their browser reloaded after deploy.
+
+Library ETags use per-profile/metadata mutation revisions plus a boot nonce.
+Do not replace revisions with counts: editing existing entries changes content.
+The Svelte session store tears down live updates and rejects old in-flight
+responses on account changes. Series cards and details share series-playback.js;
+explicit episode selection must continue to play the selected episode.
+
 ### Stream modes (getStreamMode)
 - `direct`: h264 + aac/mp3/opus in .mp4 -- served as-is via byte-range
 - `remux`: h264 in .mkv or with non-browser audio -- copy video, transcode/copy audio

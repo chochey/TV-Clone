@@ -1,6 +1,7 @@
 <script>
   import { posterUrl, backdropUrl } from '../api.js';
-  import { enrichItem, AUTO_WATCHED_PERCENT } from '../stores.js';
+  import { library, enrichItem, AUTO_WATCHED_PERCENT } from '../stores.js';
+  import { seriesPlayTarget } from '../series-playback.js';
   let { item, onopen, onplay } = $props();
 
   $effect(() => { if (!posterUrl(item)) enrichItem(item.id); });
@@ -12,7 +13,8 @@
   const runtime = $derived(item.runtime && item.runtime !== 'N/A' ? item.runtime : '');
   const genres = $derived((item.genre || (item.genres || []).join(', ') || '').split(',').slice(0, 3).map((g) => g.trim()).filter(Boolean));
   const plot = $derived(item.plot && item.plot !== 'N/A' ? item.plot : '');
-  const resuming = $derived(item.progress?.percent > 0 && item.progress?.percent < AUTO_WATCHED_PERCENT);
+  const playTarget = $derived(seriesPlayTarget(item, $library));
+  const resuming = $derived(playTarget?.progress?.percent > 0 && playTarget?.progress?.percent < AUTO_WATCHED_PERCENT);
 
   // The real star of the hero: a landscape still from the actual file.
   // Preload it off-DOM; until it lands (or if it 404s) the blurred poster
@@ -51,14 +53,14 @@
     </div>
     {#if plot}<p class="plot">{plot}</p>{/if}
     <div class="actions">
-      <button class="play" onclick={() => onplay?.(item)}>
+      <button class="play" onclick={() => onplay?.(playTarget)}>
         <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
         {resuming ? 'Resume' : 'Play'}
       </button>
       <button class="ghost" onclick={() => onopen?.(item)}>More Info</button>
     </div>
     {#if resuming}
-      <div class="resumebar"><span style={`width:${item.progress.percent}%`}></span></div>
+      <div class="resumebar"><span style={`width:${playTarget.progress.percent}%`}></span></div>
     {/if}
   </div>
 </section>
