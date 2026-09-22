@@ -61,3 +61,19 @@ test('an unpaused element still waiting for data does report a startup failure',
  const f = fixture(); f.video.paused = false; f.video.readyState = 2;
  [...f.jobs.values()][0](); assert.equal(f.failed, 1);
 });
+
+test('slow startup gives a nonfatal notice and keeps waiting for autoplay', () => {
+ let slow=0;const f=fixture(undefined,{onSlow:()=>slow++});
+ const [deadline,warning]=[...f.jobs.values()];
+ warning();assert.equal(slow,1);assert.equal(f.failed,0);assert.equal(f.played,1);
+ f.events.get('playing')();deadline();assert.equal(f.failed,0);assert.equal(f.jobs.size,0);
+});
+test('a stuck startup remains bounded after the slow notice', () => {
+ let slow=0;const f=fixture(undefined,{onSlow:()=>slow++});
+ const [deadline,warning]=[...f.jobs.values()];warning();deadline();
+ assert.equal(slow,1);assert.equal(f.failed,1);assert.equal(f.jobs.size,0);
+});
+test('closing the player suppresses a queued slow-start notice', () => {
+ let slow=0;const f=fixture(undefined,{onSlow:()=>slow++});
+ const warning=[...f.jobs.values()][1];f.cancel();warning();assert.equal(slow,0);
+});

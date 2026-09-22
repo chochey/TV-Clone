@@ -2,7 +2,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { api, streamUrl, posterUrl, backdropUrl } from '../api.js';
   import { library, session, dismissed, AUTO_WATCHED_PERCENT } from '../stores.js';
-  import { startPlayback, STARTUP_ERROR } from '../playback-startup.js';
+  import { startPlayback, STARTUP_ERROR, startupFragmentCount, startHlsFromPosition } from '../playback-startup.js';
   import { loadHls, parseVtt, cueAt, fmtTime } from '../player-core.js';
   import { episodeCode, episodeTitle } from '../format.js';
   import { hevcMaxLevel, demoteHevc, isFirefoxDesktopLinux } from '../hevc-probe.js';
@@ -227,6 +227,8 @@
         : `Stream failed to start (${r.status}).`;
       return;
     }
+    const startupFragments = startupFragmentCount(await r.text());
+    if (seq !== loadSeq || destroyed) return;
     busyRetries = 0;
     notice = '';
     totalDur = parseFloat(r.headers.get('X-Total-Duration')) || totalDur;
@@ -239,12 +241,11 @@
     bufferedEnd = seekOffset;
     hlsRetries = 0;
 
-    // Start at segment zero. Wait for two published segments in a growing
-    // EVENT playlist so the next segment is ready when playback begins.
-    // Completed short streams bypass this live-playlist minimum in hls.js.
+    // Start at segment zero with a reserve suited to the actual segment length.
+    // Completed short streams bypass the live-playlist minimum in hls.js.
     hls = new H({
       maxBufferLength: 30, maxMaxBufferLength: 120, startFragPrefetch: true,
-      startPosition: 0, initialLiveManifestSize: 2,
+      startPosition: 0, initialLiveManifestSize: startupFragments,
       highBufferWatchdogPeriod: 2, nudgeOffset: 0.2, nudgeMaxRetry: 5,
       // Firefox/Linux MSE has flashed garbage on worker transmux appends.
       // Main-thread mux + fMP4 from the server avoids that path.
@@ -259,10 +260,11 @@
     if (passthroughActive) startFrameCounter(); else stopFrameCounter();
     hls.on(H.Events.MANIFEST_PARSED, () => {
       if (seq !== loadSeq) return;
-      hls.startLoad();
+      startHlsFromPosition(hls);
       cancelStartup();
       cancelStartup = startPlayback(video, {
         isCurrent: () => seq === loadSeq && !destroyed,
+        onSlow: () => { notice = 'Still preparing video… playback will start automatically.'; },
         onBlocked: () => { startupPending = false; buffering = false; notice = 'Press Play to begin.'; },
         onTimeout: () => {
           startupPending = false;
@@ -285,7 +287,7 @@
         // Segments 404 forever once the server reaped the session — only a
         // fresh session at the current position can revive playback.
         if (await sessionDead()) { if (seq === loadSeq) recoverSession(); return; }
-        if (seq === loadSeq) hls.startLoad();
+        if (seq === loadSeq) startHlsFromPosition(hls, video.currentTime);
       } else if (data.type === H.ErrorTypes.MEDIA_ERROR) hls.recoverMediaError();
     });
   }
@@ -927,7 +929,7 @@
     onpointerup={onVideoPointerUp}
     onplay={() => {
       paused = false; poke(); resumeCheck();
-      try { if (!startupPending) hls?.startLoad(-1); } catch {}
+      try { if (!startupPending && hls) startHlsFromPosition(hls, video.currentTime); } catch {}
     }}
     onpause={() => {
       paused = true;
