@@ -2406,13 +2406,14 @@ app.get('/api/conversion/plan', requireAdminSession, (req, res) => {
       filePath,
       size: item.fileSize || 0,
       videoCodec: probeCache[filePath] || '',
+      pixFmt: pixFmtCache[filePath] || '',
       audioCodec: audioProbeCache[filePath] || '',
       audioChannels: tracks[0]?.channels || 0,
       subs: subProbeCache[filePath] || [],
     };
   }).filter(Boolean);
 
-  const plan = planConversion(files, { includeImageSubs });
+  const plan = planConversion(files, { includeImageSubs, includeModernVideo: true });
   // Distinct from "out of scope" (HEVC, already direct): these files have not
   // been probed yet, so the planner cannot say what they need. They will
   // appear here until something plays them or a rescan backfills probe data.
@@ -2425,6 +2426,8 @@ app.get('/api/conversion/plan', requireAdminSession, (req, res) => {
       const budget = config.retainedBudgetGB * 1e9;
       res.json({
         ok: true, plan, config, notYetProbed,
+        hardware: { cpuCores: require('os').availableParallelism(), model: require('os').cpus()[0]?.model || '' },
+        eligibleSelected: eligibleContainerFiles(config).length,
         disk: pool ? {
           availBytes: pool.avail,
           worstCaseRetainedBytes: worst,
@@ -2458,10 +2461,7 @@ const conversionWorker = require('./lib/conversion-worker')({
   TEXT_SUB_CODECS,
   // Read per file rather than captured once, so a limit changed mid-run takes
   // effect on the next file instead of needing a restart.
-  getLimits: () => {
-    const c = conversionConfig.get();
-    return { niceness: c.niceness, ffmpegThreads: c.ffmpegThreads };
-  },
+  getLimits: () => conversionConfig.get(),
   log: (msg) => console.log(`[conversion] ${msg}`),
 });
 
@@ -2471,7 +2471,7 @@ const conversionWorker = require('./lib/conversion-worker')({
 // Image-subtitle files are excluded for the same reason the planner excludes
 // them — a container change cannot carry PGS/VOBSUB across without OCR.
 function eligibleContainerFiles(cfg) {
-  if (!cfg.tiers.container) return [];
+
   const out = [];
   for (const item of scanLibrary()) {
     const filePath = item._filePath;
@@ -2481,11 +2481,13 @@ function eligibleContainerFiles(cfg) {
       filePath,
       size: item.fileSize || 0,
       videoCodec: probeCache[filePath] || '',
+      pixFmt: pixFmtCache[filePath] || '',
       audioCodec: audioProbeCache[filePath] || '',
       audioChannels: tracks[0]?.channels || 0,
       subs: subProbeCache[filePath] || [],
-    });
-    if (c.tier === 'container' && !c.hasImageSubs) out.push(filePath);
+    }, {includeModernVideo: true});
+    const tier = ['audioOnly','both'].includes(c.tier) ? 'audio' : c.tier;
+    if (tier && cfg.tiers[tier] && !c.hasImageSubs) out.push(filePath);
   }
   // Smallest first: a run that is stopped early has then converted the most
   // files it could have, and any problem shows up on a cheap file rather than
@@ -2503,6 +2505,7 @@ const conversionQueue = require('./lib/conversion-queue')({
   worker: conversionWorker,
   getConfig: () => conversionConfig.get(),
   getEligibleFiles: eligibleContainerFiles,
+  getFileSize: file => { try { return fs.statSync(file).size; } catch { return 0; } },
   // Both playback paths, same signal the sprite generator already backs off
   // on: a segment request or a direct-play byte range within the last minute.
   isPlaybackActive: () => Object.keys(transcodeSessions).length > 0
@@ -2517,6 +2520,7 @@ const conversionQueue = require('./lib/conversion-queue')({
   },
   // fs.watch is blind on this box's fuse.mergerfs media mount (see
   // setupOrganizerWatch below), so nothing else would notice these renames.
+  onFileComplete: () => invalidateLibrary('conversion-file'),
   onBatchComplete: () => invalidateLibrary('conversion-queue'),
   log: (msg) => console.log(`[conversion] ${msg}`),
 });
@@ -2552,6 +2556,7 @@ app.post('/api/conversion/stop', requireAdminSession, (_req, res) => {
 // Cleanup — delete retained originals past their keep-days. dryRun first from
 // the UI so the admin sees exactly what would go before anything is deleted.
 app.post('/api/conversion/cleanup', requireAdminSession, (req, res) => {
+  if (conversionQueue.status !== 'idle') return res.status(409).json({ok:false,error:'Stop conversion before cleaning up originals'});
   const dryRun = req.body?.dryRun !== false;
   try {
     const cfg = conversionConfig.get();
@@ -2582,6 +2587,7 @@ app.get('/api/conversion/originals', requireAdminSession, (_req, res) => {
 });
 
 app.post('/api/conversion/restore', requireAdminSession, (req, res) => {
+  if (conversionQueue.status !== 'idle') return res.status(409).json({ok:false,error:'Stop conversion before restoring originals'});
   const retainedPath = String(req.body?.retainedPath || '');
   // Must sit inside a configured library folder AND inside a retention dir —
   // this endpoint moves files, so a path from the request body is not trusted

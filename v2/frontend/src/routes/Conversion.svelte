@@ -1,10 +1,4 @@
 <script>
-  // Phase 1 of MEDIA_CONVERSION_PLAN.md is read-only: everything above the
-  // pilot section reports what a full conversion run WOULD do, without
-  // touching a file. The pilot section below is phase 2 — it runs the real
-  // pipeline (remux, verify, atomic swap, retained original, watch-progress
-  // migration) against ten specific hand-picked files, hardcoded in
-  // server.js. It is not a general "convert N files" control.
   import { onMount, onDestroy } from 'svelte';
   import { api } from '../lib/api.js';
 
@@ -18,7 +12,7 @@
   let queueBusy = $state(false);
   let startArmed = $state(false);
   let queueError = $state('');
-  let poll = null;
+  let poll = null, statusLoading = false, closed = false;
 
   let cleanupPreview = $state(null);
   let cleanupBusy = $state(false);
@@ -30,8 +24,16 @@
   const pct = $derived(queue?.total ? Math.round((queue.done / queue.total) * 100) : 0);
 
   async function loadStatus() {
-    try { queue = await api.conversionStatus(); }
-    catch (e) { queueError = e.body?.error || 'Failed to read queue status'; }
+    if (statusLoading || closed) return;
+    statusLoading = true;
+    try {
+      const next = await api.conversionStatus();
+      if (closed) return;
+      const finished = queue?.status !== 'idle' && next.status === 'idle';
+      queue = next;
+      if (finished) { refresh(); loadOriginals(); }
+    } catch (e) { queueError = e.body?.error || 'Failed to read queue status'; }
+    finally { statusLoading = false; }
   }
 
   // Poll only while something is happening. A finished queue does not need a
@@ -116,7 +118,7 @@
   }
 
   onMount(() => { refresh(); loadOriginals(); loadStatus(); });
-  onDestroy(() => { if (poll) clearInterval(poll); });
+  onDestroy(() => { closed = true; if (poll) clearInterval(poll); });
 
   function fmtBytes(b) {
     if (b == null) return '—';
@@ -133,6 +135,7 @@
       const res = await api.conversionConfigUpdate(patch);
       data = { ...data, config: res.config };
       saveNote = 'Saved';
+      await refresh();
     } catch (e) {
       saveNote = e.body?.error || 'Failed to save';
     } finally {
@@ -173,7 +176,7 @@
 <div class="page">
   <header>
     <h1 class="display">Conversion</h1>
-    <span class="sub">Phase 1 — read-only planner. Nothing on disk changes yet.</span>
+    <span class="sub">Make your library easier to play in Firefox and Chrome.</span>
   </header>
 
   {#if error}<p class="err">{error}</p>{/if}
@@ -182,25 +185,22 @@
     <div class="spinner"></div>
   {:else}
     <section class="card notice">
-      <p>
-        Everything above the pilot section is read-only — it reports what a
-        full conversion run would do, computed live from your library, without
-        touching a file. <strong>The pilot section further down is different:
-        it is real</strong> — a one-time run against ten specific hand-picked
-        files, with verification, atomic swaps, and a retained original. The
-        general "convert everything" queue this page projects for is still a
-        later phase.
-      </p>
+      <h2>Browser compatibility preset</h2>
+      <p>MP4 · H.264 video · AAC stereo (192 kbps). Compatible video is copied without quality loss.
+        Other selected SDR video is re-encoded at its original resolution. Re-encoding can increase file size and changes picture quality.</p>
+      <p>Extra audio languages and surround tracks are retained where MP4 supports them; otherwise they are converted to AAC.
+        Text subtitles become separate subtitle files. HDR, Dolby Vision and image subtitles are left for review.</p>
+      <button class="qbtn" disabled={saving || isActive} onclick={() => saveConfig({tiers:{container:true,audio:true,legacy:true,video:true},cpuCores:2,videoCrf:20,niceness:19,pauseWhilePlaying:true})}>Use recommended settings</button>
+      <p class="hint">This saves settings only. Enable conversion and press Start when you are ready.</p>
     </section>
 
     <section class="card">
       <div class="row spread">
         <div>
-          <h2>Automatic conversion</h2>
+          <h2>Enable conversion</h2>
           <p class="hint">
-            Off, and inert — there is no scheduler yet, so nothing runs on its own
-            regardless of this switch. The pilot below is the only thing that
-            converts anything, and it only runs when you click it.
+            Enables the Start button. Conversion never starts just because this is switched on,
+            and it stays stopped after a server restart. Turning it off pauses an active job.
           </p>
         </div>
         <button class="toggle" class:on={data.config.enabled} onclick={toggleEnabled} disabled={saving}>
@@ -220,7 +220,7 @@
           </label>
           <span class="tcount">{data.plan.tiers.container.count} files · {fmtBytes(data.plan.tiers.container.bytes)}</span>
         </div>
-        <p class="hint">H.264 video in the wrong container (usually .mkv). Copies every stream — no re-encoding, no quality change, no size change.</p>
+        <p class="hint">H.264 video in the wrong container (usually .mkv). Copies compatible video unchanged and places browser-friendly stereo audio first.</p>
         {#if data.plan.tiers.container.imageSubsCount}
           <p class="warn">
             {data.plan.tiers.container.imageSubsCount} file{data.plan.tiers.container.imageSubsCount === 1 ? '' : 's'}
@@ -240,7 +240,7 @@
         </div>
         <p class="hint">
           H.264 video with non-browser or surround-only audio. Adds a stereo AAC
-          track alongside the original — the original is kept, never replaced.
+          track first, while keeping additional audio tracks and retaining the original file.
           {data.plan.tiers.audio.breakdown.both.count} of these also need a container fix,
           done as part of the same job.
         </p>
@@ -258,13 +258,16 @@
           </label>
           <span class="tcount">{data.plan.tiers.legacy.count} files · {fmtBytes(data.plan.tiers.legacy.bytes)}</span>
         </div>
-        <p class="hint">mpeg4 / msmpeg4v3 / vp8 / vp9 → H.264. A genuine re-encode, but from small, already-poor sources. Off by default.</p>
+        <p class="hint">mpeg4 / msmpeg4v3 / vp8 / vp9 → H.264. Re-encodes video for browser compatibility. Original resolution is preserved.</p>
       </div>
 
-      <label class="showsubs">
-        <input type="checkbox" bind:checked={includeImageSubs} onchange={refresh} />
-        Include image-subtitle files in the counts above (they would lose subtitles)
-      </label>
+      <div class="tier">
+        <div class="thead">
+          <label class="tswitch"><input type="checkbox" checked={data.config.tiers.video} onchange={() => toggleTier('video')} disabled={saving} /><span class="tname">HEVC, AV1 and 10-bit H.264 video</span></label>
+          <span class="tcount">{data.plan.tiers.video.count} candidates · {fmtBytes(data.plan.tiers.video.bytes)}</span>
+        </div>
+        <p class="hint">Converts SDR video to 8-bit H.264 for Firefox. Often produces larger files. HDR is checked before encoding and skipped.</p>
+      </div>
       {#if saveNote}<span class="savenote">{saveNote}</span>{/if}
     </section>
 
@@ -278,7 +281,7 @@
         {#if data.disk.exceedsFreeSpace}
           <p class="danger">Worst-case retention exceeds free disk space. A real run would need to pace itself well below this.</p>
         {:else if data.disk.exceedsBudget}
-          <p class="warn">Worst-case retention exceeds the configured budget — the worker (once built) would pause and wait for originals to age out rather than run straight through.</p>
+          <p class="warn">Worst-case retention exceeds the configured budget — the queue waits when its retention budget is reached. Review and clean up old originals manually to free space.</p>
         {:else}
           <p class="ok">Worst-case retention fits within both free space and the configured budget.</p>
         {/if}
@@ -299,19 +302,14 @@
       </p>
       <div class="grid">
         <label class="field">
-          <span>Concurrency <em>1–4</em></span>
-          <input type="number" min="1" max="4" value={data.config.concurrency} disabled={saving}
-                 onchange={(e) => commitNumber('concurrency', e.currentTarget.value)} />
+          <span>CPU cores allocated <em>1–{data.hardware?.cpuCores || 6}</em></span>
+          <input type="number" min="1" max={data.hardware?.cpuCores || 6} value={data.config.cpuCores} disabled={saving} onchange={(e) => commitNumber('cpuCores', e.currentTarget.value)} />
         </label>
         <label class="field">
-          <span>CPU niceness <em>0–19</em></span>
-          <input type="number" min="0" max="19" value={data.config.niceness} disabled={saving}
-                 onchange={(e) => commitNumber('niceness', e.currentTarget.value)} />
-        </label>
-        <label class="field">
-          <span>FFmpeg threads <em>1–6</em></span>
-          <input type="number" min="1" max="6" value={data.config.ffmpegThreads} disabled={saving}
-                 onchange={(e) => commitNumber('ffmpegThreads', e.currentTarget.value)} />
+          <span>Picture quality</span>
+          <select value={data.config.videoCrf} disabled={saving || isActive} onchange={(e) => commitNumber('videoCrf', e.currentTarget.value)}>
+            <option value="18">Higher quality · larger files</option><option value="20">Balanced · recommended</option><option value="23">Smaller files</option>
+          </select>
         </label>
         <label class="field">
           <span>Min free space <em>GB</em></span>
@@ -344,14 +342,15 @@
                  onchange={(e) => commitSchedule('end', e.currentTarget.value)} />
         </label>
       </div>
+      <button class="qbtn" disabled={saving} onclick={() => saveConfig({schedule:{start:'',end:''}})}>Run anytime</button>
       <label class="inlinecheck">
         <input type="checkbox" checked={data.config.pauseWhilePlaying} disabled={saving}
                onchange={() => saveConfig({ pauseWhilePlaying: !data.config.pauseWhilePlaying })} />
         Pause conversion whenever anyone is watching
       </label>
       <p class="hint">
-        Both schedule fields empty means "anytime". Niceness 19 is the lowest
-        priority — the worker yields to playback and to anything else on the box.
+        One file runs at a time with low disk priority. CPU allocation applies to all conversion and verification threads,
+        including the current job. Two of six cores allows up to roughly one-third of this machine's CPU capacity; it does not reserve those cores exclusively.
       </p>
     </section>
 
@@ -363,12 +362,9 @@
         {/if}
       </div>
       <p class="hint">
-        Converts the container tier — H.264 already in the wrong container.
-        Every stream is copied, nothing is re-encoded, and each original is kept
-        for {data.config.keepOriginalsDays} days. Runs in the background at
-        niceness {data.config.niceness} with idle IO priority, honours the limits
-        above, and parks itself whenever someone starts watching.
-        Smallest files first, so a run stopped early has converted the most it could.
+        Converts the selected categories, smallest files first. Each output is checked before replacement.
+        Original files are retained for recovery; cleanup is always manual. A server restart stops the queue;
+        Start rebuilds the list and skips files already compatible.
       </p>
 
       {#if queueError}<p class="danger">{queueError}</p>{/if}
@@ -384,7 +380,11 @@
             {/if}
           </div>
           {#if queue.current}
-            <div class="curfile">Converting <code>{queue.current}</code></div>
+            <div class="curfile">{queue.progress?.stage || 'Working on'} <code>{queue.current}</code></div>
+            {#if queue.progress?.duration > 0 && queue.progress.stage === 'Converting'}
+              <div class="progbar"><span style="width:{Math.min(100,queue.progress.seconds / queue.progress.duration * 100)}%"></span></div>
+              <p class="hint">{Math.min(100,Math.round(queue.progress.seconds / queue.progress.duration * 100))}% of this file · {queue.progress.speed || 'measuring speed…'}</p>
+            {/if}
           {/if}
           {#if queue.waitingReason}
             <div class="waiting">Paused automatically — {queue.waitingReason}. Resumes on its own.</div>
@@ -403,15 +403,14 @@
           <button class="qbtn" disabled>Stopping…</button>
         {:else}
           <button class="qbtn go" class:armed={startArmed}
-                  onclick={() => queueAction(api.conversionStart, { arm: true })} disabled={queueBusy}>
-            {startArmed ? 'Click again to start converting' : `Start (${data.plan.tiers.container.count} files eligible)`}
+                  onclick={() => queueAction(api.conversionStart, { arm: true })} disabled={queueBusy || saving || !data.config.enabled}>
+            {startArmed ? 'Click again to start converting' : `Start (${data.eligibleSelected} candidates)`}
           </button>
         {/if}
       </div>
       <p class="hint">
-        Pause lets the file in flight finish. Stop kills it immediately — safe,
-        because nothing is written over the original until a conversion has fully
-        verified. A run is capped at {data.config.maxFilesPerRun} files
+        Pause suspends the current job and Resume continues it. Stop cancels the job and removes its temporary output,
+        leaving the original intact. A run is capped at {data.config.maxFilesPerRun} files
         (<em>Max files per run</em> above); start it again for the next batch.
       </p>
 
@@ -504,10 +503,10 @@
     <section class="card">
       <h2>What this does not do</h2>
       <ul class="dontlist">
-        <li>Never re-encodes HEVC — passthrough already handles it for capable clients.</li>
-        <li>Never re-encodes video that is already H.264 — only the container or audio changes.</li>
-        <li>Never discards an audio track — the original is kept alongside the added one.</li>
-        <li>Never deletes a source until its replacement has been verified and the original safely moved aside.</li>
+        <li>Leaves HDR, Dolby Vision, image subtitles, and unusual video layouts for review.</li>
+        <li>Copies compatible 8-bit H.264 video unchanged; other selected SDR video is converted.</li>
+        <li>Keeps additional audio tracks, converting unsupported audio formats to AAC.</li>
+        <li>Retains the original for recovery after checking the replacement. Cleanup requires your action.</li>
       </ul>
     </section>
   {/if}
