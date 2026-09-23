@@ -16,7 +16,7 @@
 
   let cleanupPreview = $state(null);
   let cleanupBusy = $state(false);
-  let cleanupArmed = $state(false);
+  let cleanupMode = $state('expired');
   let cleanupError = $state('');
   let cleanupDone = $state('');
 
@@ -60,19 +60,18 @@
     }
   }
 
-  async function previewCleanup() {
+  async function previewCleanup(mode = 'expired', retainedPath = null) {
+    cleanupPreview = null; cleanupMode = mode;
     cleanupBusy = true; cleanupError = ''; cleanupDone = '';
-    try { cleanupPreview = await api.conversionCleanup(true); }
+    try { cleanupPreview = await api.conversionCleanup(true, {mode, ...(retainedPath ? {retainedPaths:[retainedPath]} : {})}); }
     catch (e) { cleanupError = e.body?.error || 'Cleanup preview failed'; }
     finally { cleanupBusy = false; }
   }
 
   async function runCleanup() {
-    if (!cleanupArmed) { cleanupArmed = true; setTimeout(() => { cleanupArmed = false; }, 5000); return; }
-    cleanupArmed = false;
     cleanupBusy = true; cleanupError = '';
     try {
-      const r = await api.conversionCleanup(false);
+      const r = await api.conversionCleanup(false, {mode:cleanupMode, retainedPaths:cleanupPreview.retainedPaths});
       cleanupDone = `Deleted ${r.deleted.length} file(s), freed ${fmtBytes(r.bytes)}`;
       cleanupPreview = null;
       await loadOriginals();
@@ -408,6 +407,13 @@
           </button>
         {/if}
       </div>
+      <button class="qbtn" disabled={saving || queueBusy}
+              onclick={() => saveConfig({pauseWhilePlaying: !data.config.pauseWhilePlaying})}>
+        {data.config.pauseWhilePlaying ? 'Keep converting while watching' : 'Restore automatic pause while watching'}
+      </button>
+      {#if !data.config.pauseWhilePlaying}
+        <p class="warn">Watching override is on until you turn it off. CPU limits and the schedule still apply. Playback may buffer if the server is busy.</p>
+      {/if}
       <p class="hint">
         Pause suspends the current job and Resume continues it. Stop cancels the job and removes its temporary output,
         leaving the original intact. A run is capped at {data.config.maxFilesPerRun} files
@@ -434,7 +440,8 @@
         {/if}
       </div>
       <p class="hint">
-        Every converted file's original is kept here for {data.config.keepOriginalsDays} days.
+        Originals stay here until you delete them. You can delete one or all at any time,
+        or check for those older than {data.config.keepOriginalsDays} days.
         Restoring puts the original back and moves watch progress with it.
         <strong>Nothing is ever deleted on a timer</strong> — cleanup only runs
         when you click it below, and it previews first.
@@ -442,26 +449,29 @@
       {#if originalsError}<p class="danger">{originalsError}</p>{/if}
 
       <div class="cleanupbar">
-        <button class="qbtn" onclick={previewCleanup} disabled={cleanupBusy}>
+        <button class="qbtn" onclick={() => previewCleanup()} disabled={cleanupBusy || isActive}>
           {cleanupBusy && !cleanupPreview ? 'Checking…' : 'Check for expired originals'}
         </button>
-        {#if cleanupPreview}
-          {#if cleanupPreview.candidates > 0}
-            <button class="qbtn danger" class:armed={cleanupArmed} onclick={runCleanup} disabled={cleanupBusy}>
-              {cleanupArmed
-                ? `Click again to delete ${cleanupPreview.candidates} file(s)`
-                : `Delete ${cleanupPreview.candidates} expired · free ${fmtBytes(cleanupPreview.bytes)}`}
-            </button>
-          {:else}
-            <span class="hint">Nothing is past {originals?.keepOriginalsDays ?? data.config.keepOriginalsDays} days yet.</span>
-          {/if}
-        {/if}
+        <button class="qbtn danger" onclick={() => previewCleanup('all')}
+                disabled={cleanupBusy || isActive || !originals?.items.length}>Delete all originals…</button>
       </div>
+      {#if cleanupPreview}
+        <div class="card" role="region" aria-label="Confirm original deletion">
+          {#if cleanupPreview.candidates > 0}
+            <p>Permanently delete {cleanupPreview.candidates} original file(s) and free {fmtBytes(cleanupPreview.bytes)}?</p>
+            <p class="warn">This cannot be undone. Converted files stay in your library, but you will lose the option to restore these originals.</p>
+            <button class="qbtn danger" onclick={runCleanup} disabled={cleanupBusy || isActive}>Confirm permanent deletion</button>
+          {:else}
+            <p>No originals can be deleted for this selection.</p>
+          {/if}
+          <button class="qbtn" onclick={() => { cleanupPreview = null; }} disabled={cleanupBusy}>Cancel</button>
+        </div>
+      {/if}
       {#if cleanupError}<p class="danger">{cleanupError}</p>{/if}
       {#if cleanupDone}<p class="ok">{cleanupDone}</p>{/if}
       {#if cleanupPreview?.skippedOnlyCopy?.length}
         <p class="warn">
-          {cleanupPreview.skippedOnlyCopy.length} expired original(s) will NOT be
+          {cleanupPreview.skippedOnlyCopy.length} original(s) will NOT be
           deleted — their converted replacement is missing, so the retained copy
           is the only one left. Restore or investigate those instead.
         </p>
@@ -481,10 +491,12 @@
               </span>
               {#if o.restorable}
                 <button class="restorebtn" class:armed={restoreArmed === o.retainedPath}
-                        onclick={() => restore(o)} disabled={restoringPath === o.retainedPath}>
+                        onclick={() => restore(o)} disabled={!!restoringPath || cleanupBusy || isActive}>
                   {restoringPath === o.retainedPath ? 'Restoring…'
                     : restoreArmed === o.retainedPath ? 'Click again to restore' : 'Restore'}
                 </button>
+                <button class="qbtn danger" onclick={() => previewCleanup('single', o.retainedPath)}
+                        disabled={cleanupBusy || !!restoringPath || isActive}>Delete original…</button>
               {:else}
                 <span class="presult bad" title="The converted file is no longer at its expected path">can't restore</span>
               {/if}

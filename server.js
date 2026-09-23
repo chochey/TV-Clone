@@ -2392,7 +2392,9 @@ app.get('/api/conversion/config', requireAdminSession, (_req, res) => {
 });
 
 app.put('/api/conversion/config', requireAdminSession, (req, res) => {
-  res.json({ ok: true, config: conversionConfig.update(req.body) });
+  const updated = conversionConfig.update(req.body);
+  conversionQueue.configurationChanged();
+  res.json({ ok: true, config: updated });
 });
 
 app.get('/api/conversion/plan', requireAdminSession, (req, res) => {
@@ -2561,9 +2563,18 @@ app.post('/api/conversion/cleanup', requireAdminSession, (req, res) => {
   try {
     const cfg = conversionConfig.get();
     const roots = config.folders.map((f) => f.path).filter(Boolean);
-    const result = conversionWorker.cleanupExpiredOriginals(roots, cfg.keepOriginalsDays, { dryRun });
+    const mode = req.body?.mode || 'expired';
+    const retainedPaths = req.body?.retainedPaths ?? null;
+    if (!['expired','all','single'].includes(mode)
+        || (retainedPaths !== null && (!Array.isArray(retainedPaths) || !retainedPaths.every(p => typeof p === 'string')))
+        || (mode === 'single' && retainedPaths?.length !== 1)
+        || (!dryRun && mode !== 'expired' && retainedPaths === null)) {
+      return res.status(400).json({ok:false,error:'Choose originals and preview them before deleting'});
+    }
+    const result = conversionWorker.cleanupExpiredOriginals(roots, cfg.keepOriginalsDays,
+      { dryRun, includeRecent: mode !== 'expired', retainedPaths });
     if (!dryRun && result.deleted.length) {
-      console.log(`[conversion] Cleanup deleted ${result.deleted.length} expired original(s), freed ${(result.bytes / 1e9).toFixed(2)} GB`);
+      console.log(`[conversion] Cleanup deleted ${result.deleted.length} original(s), freed ${(result.bytes / 1e9).toFixed(2)} GB`);
     }
     res.json({ ok: true, dryRun, ...result });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }

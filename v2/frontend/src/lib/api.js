@@ -151,8 +151,8 @@ export const api = {
   conversionResume: () => fetch('/api/conversion/resume', opts('POST')).then(json),
   conversionStop: () => fetch('/api/conversion/stop', opts('POST')).then(json),
   // dryRun defaults true server-side; the UI always previews before deleting.
-  conversionCleanup: (dryRun = true) =>
-    fetch('/api/conversion/cleanup', opts('POST', { dryRun })).then(json),
+  conversionCleanup: (dryRun = true, selection = {}) =>
+    fetch('/api/conversion/cleanup', opts('POST', { ...selection, dryRun })).then(json),
   conversionOriginals: () => fetch('/api/conversion/originals', opts('GET')).then(json),
   conversionRestore: (retainedPath) =>
     fetch('/api/conversion/restore', opts('POST', { retainedPath })).then(json),
