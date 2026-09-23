@@ -718,7 +718,7 @@
   nav a:hover, nav a.active { color: var(--ink); }
   nav a.active::after {
     content: ''; position: absolute; left: 0; right: 0; bottom: -6px;
-    height: 2px; background: var(--ink); border-radius: 2px;
+    height: 2px; background: #9e6aff; border-radius: 2px;
   }
   main { position: relative; }
 

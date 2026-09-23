@@ -1,6 +1,6 @@
 <script>
   import PosterCard from './PosterCard.svelte';
-  let { title, items = [], onopen, onplay, size = 'md', resume = false } = $props();
+  let { title, items = [], onopen, onplay, size = 'md', resume = false, wide = false } = $props();
 
   // The track hides its scrollbar, and a plain mouse has no horizontal wheel —
   // without these arrows the row is only reachable by trackpad or touch.
@@ -41,9 +41,9 @@
           <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true"><path d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
         </button>
       {/if}
-      <div class="track" class:lg={size === 'lg'} bind:this={track} onscroll={measure}>
+      <div class="track" class:lg={size === 'lg'} class:wide={wide} bind:this={track} onscroll={measure}>
         {#each items as item (item.id)}
-          <div class="cell"><PosterCard {item} {onopen} {onplay} {resume} /></div>
+          <div class="cell"><PosterCard {item} {onopen} {onplay} {resume} {wide} /></div>
         {/each}
       </div>
       {#if !atEnd}
@@ -73,6 +73,7 @@
     overflow-x: auto; overflow-y: visible;
     padding: var(--s3) var(--gutter) var(--s4);
     scroll-snap-type: x proximity;
+    scroll-padding-inline: var(--gutter);
     scrollbar-width: none;
   }
   .track::-webkit-scrollbar { display: none; }
@@ -81,6 +82,8 @@
     scroll-snap-align: start;
   }
   .track.lg .cell { flex-basis: clamp(150px, 14vw, 188px); }
+
+  .track.wide .cell { flex-basis:clamp(260px,31vw,470px); }
 
   /* Full-height grab targets at the row edges, revealed on hover like the
      cards themselves. Hidden on touch, where swiping is the natural gesture. */

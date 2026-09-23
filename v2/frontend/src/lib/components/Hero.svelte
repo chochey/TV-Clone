@@ -2,7 +2,7 @@
   import { posterUrl, backdropUrl } from '../api.js';
   import { library, enrichItem, AUTO_WATCHED_PERCENT } from '../stores.js';
   import { seriesPlayTarget } from '../series-playback.js';
-  let { item, onopen, onplay } = $props();
+  let { item, onopen, onplay, home = false } = $props();
 
   $effect(() => { if (!posterUrl(item)) enrichItem(item.id); });
 
@@ -30,7 +30,7 @@
   });
 </script>
 
-<section class="hero">
+<section class="hero" class:homehero={home}>
   <div class="stage">
     {#if poster}
       <div class="ambient" style={`background-image:url(${poster})`}></div>
@@ -42,7 +42,7 @@
   </div>
 
   <div class="content">
-    <span class="kicker meta">{resuming ? 'Continue Watching' : 'Now Playing'}</span>
+    <span class="kicker meta">{resuming ? 'Pick up where you left off' : 'Your next movie night'}</span>
     <h1 class="display">{title}</h1>
     <div class="metarow">
       {#if year}<span>{year}</span>{/if}
@@ -75,6 +75,10 @@
     overflow: hidden;
     isolation: isolate;
   }
+  .homehero .resumebar span {background:var(--cta);}
+  .homehero { min-height:540px; padding-top:110px; }
+  @media(min-width:1101px) { .homehero .content { max-width:min(640px,calc(100vw - 390px - 2 * var(--gutter))); } }
+  @media(max-width:600px) { .homehero { min-height:480px; padding-top:100px; } }
   .stage { position: absolute; inset: 0; z-index: -1; background: var(--bg-sunken); }
 
   /* Fallback layer: the poster as pure ambience — blurred beyond recognition

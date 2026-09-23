@@ -5,7 +5,7 @@
   import { seriesPlayTarget } from '../series-playback.js';
   // resume: rendered in the Continue Watching row — show which episode and how
   // much is left, and offer a way to drop it from the row.
-  let { item, onopen, onplay, resume = false } = $props();
+  let { item, onopen, onplay, resume = false, wide = false } = $props();
 
   // No poster? Ask OMDb once — the store patch re-renders this card.
   $effect(() => { if (!posterUrl(item)) enrichItem(item.id); });
@@ -34,15 +34,16 @@
   let backdropFailed = $state(false);
   $effect(() => { poster; backdrop; posterFailed = false; backdropFailed = false; });
   const artSrc = $derived(
-    poster && !posterFailed ? poster : (backdrop && !backdropFailed ? backdrop : ''),
+    wide && backdrop && !backdropFailed ? backdrop : (poster && !posterFailed ? poster : (backdrop && !backdropFailed ? backdrop : '')),
   );
   function artError() {
-    if (poster && !posterFailed) posterFailed = true;
+    if (wide && backdrop && !backdropFailed) backdropFailed = true;
+    else if (poster && !posterFailed) posterFailed = true;
     else backdropFailed = true;
   }
 </script>
 
-<div class="card" role="button" tabindex="0"
+<div class="card" class:wide role="button" tabindex="0"
      onclick={() => onopen?.(item)}
      onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onopen?.(item); } }}>
   <div class="art">
@@ -91,6 +92,13 @@
 </div>
 
 <style>
+  .wide .art { aspect-ratio:16 / 8; border-radius:11px; }
+  .wide .info-strip { padding-bottom:16px; }
+  .wide .hover-overlay {opacity:1;background:none;place-items:end;padding:16px 14px 54px;}
+  .wide .play {width:36px;height:36px;background:#0b0b0ebf;color:white;border:1px solid #fff8;}
+  .wide .progress span {background:var(--cta);}
+  .wide .t {font-size:1rem;}
+  @media(prefers-reduced-motion:reduce){.card .art,.card .play{transition:none;transform:none;}}
   .card { display: block; cursor: pointer; }
   .art {
     position: relative;
