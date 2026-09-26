@@ -1072,18 +1072,21 @@
       </div>
 
       <div class="zone zright">
+      {#if prev || next}<div class="episode-nav" aria-label="Episode navigation">
       {#if prev}
-        <button class="nextbtn prevbtn" onclick={() => { saveProgress(); onprev?.(prev); }} title={`Previous — ${episodeCode(prev)}`}>
+        <button class="nextbtn prevbtn" onclick={() => { saveProgress(); onprev?.(prev); }} aria-label={`Previous episode ${episodeCode(prev)}`} title={`Previous — ${episodeCode(prev)}`}>
           <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M18 18l-8.5-6L18 6v12zM8 6v12H6V6h2z"/></svg>
           Prev <strong>{episodeCode(prev)}</strong>
         </button>
       {/if}
       {#if next}
-        <button class="nextbtn" onclick={() => { saveProgress(); onnext?.(next); }} title={`Next — ${episodeCode(next)}`}>
+        <button class="nextbtn" onclick={() => { saveProgress(); onnext?.(next); }} aria-label={`Next episode ${episodeCode(next)}`} title={`Next — ${episodeCode(next)}`}>
           Next <strong>{episodeCode(next)}</strong>
           <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
         </button>
       {/if}
+
+      </div>{/if}
 
       {#if full?.subtitles?.length}
         <div class="menuwrap">
@@ -1353,6 +1356,8 @@
   .zleft { justify-self: start; }
   .zcenter { justify-self: center; gap: var(--s3); }
   .zright { justify-self: end; }
+  .episode-nav {display:flex;align-items:center;gap:var(--s2);}
+  .iconbtn, .nextbtn {flex-shrink:0;}
   .iconbtn {
     display: grid; place-items: center;
     width: 42px; height: 42px; border-radius: 99px;
@@ -1428,11 +1433,37 @@
   .menu button:hover { background: rgba(242, 242, 244, 0.1); color: var(--ink); }
   .menu button.active { color: var(--ink); background: rgba(242, 242, 244, 0.14); font-weight: 600; }
 
+  /* The desktop's centered cluster cannot share a single row with episode
+     navigation on phones. Give each group real layout space, not overlap. */
+  @media (max-width: 1400px) {
+    .buttons {grid-template-columns:minmax(0,1fr) auto;gap:4px 12px;}
+    .zleft {grid-column:1;grid-row:1;}
+    .zcenter {grid-column:2;grid-row:1;justify-self:end;gap:8px;}
+    .zright {grid-column:1 / -1;grid-row:2;justify-self:stretch;justify-content:flex-end;flex-wrap:wrap;gap:6px;}
+    .nextbtn strong {display:none;}
+    .vol input[type='range'], .pct {display:none;}
+    .iconbtn {width:44px;height:44px;}
+    .iconbtn.skip {width:44px;height:44px;}
+    .iconbtn.playbtn {width:48px;height:48px;}
+    .nextbtn {min-height:44px;padding:8px 14px;}
+    .episode-nav {margin-right:auto;}
+    .time {margin-left:0;font-size:.75rem;}
+    .scrub {padding:16px 0;}
+    .cue.lifted {bottom:calc(145px + env(safe-area-inset-bottom));}
+    .skipintro.lifted,.upnext.lifted {bottom:calc(155px + env(safe-area-inset-bottom));}
+    .menu {position:fixed;left:max(12px,env(safe-area-inset-left));right:max(12px,env(safe-area-inset-right));bottom:calc(64px + env(safe-area-inset-bottom));max-height:45dvh;min-width:0;}
+    .menu button {min-height:44px;white-space:normal;overflow-wrap:anywhere;}
+  }
   @media (max-width: 640px) {
-    .time { display: none; }
-    .nextbtn strong { display: none; }
-    .vol input[type='range'], .pct { display: none; }
-    .iconbtn.skip { width: 44px; height: 44px; }
-    .iconbtn.playbtn { width: 48px; height: 48px; }
+    .controls {padding-left:max(12px,env(safe-area-inset-left));padding-right:max(12px,env(safe-area-inset-right));}
+    .buttons {grid-template-columns:minmax(0,1fr);gap:4px;}
+    .zleft {grid-column:1;grid-row:1;justify-self:center;}
+    .zcenter {grid-column:1;grid-row:2;justify-self:center;gap:12px;}
+    .zright {grid-column:1;grid-row:3;justify-content:center;}
+    .episode-nav {flex-basis:100%;justify-content:center;margin:0;gap:12px;}
+    .episode-nav .nextbtn {min-width:110px;justify-content:center;}
+    .vol {margin-left:4px;}
+    .cue.lifted {bottom:calc(230px + env(safe-area-inset-bottom));}
+    .skipintro.lifted,.upnext.lifted {bottom:calc(240px + env(safe-area-inset-bottom));}
   }
 </style>
