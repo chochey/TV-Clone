@@ -1,0 +1,10 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Start ChocheyTV
+Comment=Start the media server, downloads, organizer, and background services
+Exec=/usr/bin/python3 /home/blue/Desktop/Repos/TV-Clone-prod/scripts/start-chocheytv.py
+Icon=/home/blue/Desktop/Repos/TV-Clone-prod/scripts/assets/chocheytv.svg
+Terminal=false
+Categories=AudioVideo;Video;
+StartupNotify=false
