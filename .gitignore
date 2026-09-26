@@ -12,3 +12,6 @@ tests/screenshots/
 
 # Nested standalone repo (has its own .git) — never commit it here
 media-organizer/
+
+# Python import-guard bytecode
+lib/__pycache__/

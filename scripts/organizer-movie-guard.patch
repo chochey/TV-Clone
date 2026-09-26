@@ -1,0 +1,33 @@
+--- movie_renamer.py
++++ movie_renamer.py
+@@ -19,6 +19,11 @@
+ from PTN import parse
+ 
+ import config
++import sys
++
++# Shared, versioned import guard from the media-server repository.
++sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
++from movie_import_guard import check_movie
+ 
+ # Set up logging
+ _log_format = logging.Formatter("[%(asctime)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+@@ -501,6 +506,7 @@
+                 "year": data.get("Year"),
+                 "type": data.get("Type"),
+                 "imdbID": data.get("imdbID"),
++                "runtime": data.get("Runtime"),
+             }
+     except OMDbRateLimitError:
+         raise
+@@ -1263,6 +1269,10 @@
+     if len(videos) != 1:
+         review_item(movie, title, "Multiple videos need individual identification; all source files retained")
+         return False
++    reason = check_movie(videos[0], omdb_info)
++    if reason:
++        review_item(movie, title, reason)
++        return False
+     plan = [(videos[0], destination / create_clean_filename(title, year, videos[0].suffix.lower()))]
+     for file in movie.get("subtitle_files", []):
+         stem, suffix = get_file_parts(file)
