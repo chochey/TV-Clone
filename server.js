@@ -3196,6 +3196,7 @@ app.get('/api/qbt/torrents', requirePermission('canDownload'), requireQbt, async
 // land in the notification history; a completed download also schedules a
 // rescan for after the organizer has had time to move the file — the
 // organizer-watch usually beats it, and the rescan no-ops when so.
+const writeDownloadReadiness = (torrents) => saveJSONSync(path.join(DATA_DIR, 'download-readiness.json'), require('./lib/download-readiness').downloadReadiness(torrents));
 const downloadReviews = new Map();
 if (QBT_USERNAME && QBT_PASSWORD) {
   let watcherBusy = false;
@@ -3209,6 +3210,7 @@ if (QBT_USERNAME && QBT_PASSWORD) {
     try { torrents = qbtJson(await qbt('GET', '/api/v2/torrents/info')); }
     catch { return; } // qbt momentarily unreachable — skip this tick
     if (!Array.isArray(torrents)) return;
+    writeDownloadReadiness(torrents);
 
     let reviewChanged = false;
     for (const t of torrents) {

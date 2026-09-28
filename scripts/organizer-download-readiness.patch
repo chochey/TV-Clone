@@ -1,0 +1,42 @@
+--- movie_renamer.py
++++ movie_renamer.py
+@@ -24,6 +24,9 @@
+ # Shared, versioned import guard from the media-server repository.
+ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+ from movie_import_guard import check_movie
++from organizer_readiness import ready_for_import, existing_series
++_download_observations = {}
++_DOWNLOAD_SNAPSHOT = Path(__file__).resolve().parent.parent / "data" / "download-readiness.json"
+ 
+ # Set up logging
+ _log_format = logging.Formatter("[%(asctime)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+@@ -878,6 +881,9 @@
+     Raises OMDbRateLimitError if too many consecutive 401 errors are detected.
+     Results are cached to avoid re-querying the same titles in watch mode.
+     """
++    local = existing_series(title, year, config.TV_DEST_DIRS)
++    if local:
++        return local
+     cache_key = (f"series:{title.lower().strip()}", year)
+     cached_time = _omdb_no_match_cache.get(cache_key)
+     if cached_time and (time.time() - cached_time) < _OMDB_CACHE_TTL:
+@@ -975,7 +981,9 @@
+     for item in source.iterdir():
+         # Underscore prefix = admin parking convention (_review, _keep):
+         # deliberately left in Share, never organized or judged.
+-        if item.name.startswith("_"):
++        if item.name.startswith("_") or item.name.lower() == "incomplete":
++            continue
++        if not ready_for_import(item, _DOWNLOAD_SNAPSHOT, _download_observations):
+             continue
+         if item.is_file() and item.suffix.lower() in config.VIDEO_EXTENSIONS:
+             if is_still_transferring(item.stem):
+@@ -1972,6 +1980,8 @@
+             log.info("=== DRY RUN MODE - No files will be moved ===")
+ 
+     movies, tv_shows = find_media_in_source()
++    # Single episodes should not wait behind a multi-season copy.
++    tv_shows.sort(key=lambda item: len(item.get("video_files", [item["path"]])))
+ 
+     # Prune _watch_skip_logged: remove entries for files no longer in source
+     current_names = {m["parse_name"] for m in movies} | {t["parse_name"] for t in tv_shows}

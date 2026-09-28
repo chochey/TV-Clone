@@ -29,3 +29,14 @@ python3 -m unittest discover -s lib -p 'movie_import_guard_test.py'
 Review entries appear in the existing Organizer manual-review list. Legitimate
 very short films without runtime metadata require manual verification/placement;
 there is no automatic deletion or guessed approval.
+
+## Downloader readiness and existing series
+
+After the runtime-guard patch, apply `organizer-download-readiness.patch` to the
+standalone organizer. It imports `lib/organizer_readiness.py`. The server writes
+`data/download-readiness.json` from its authenticated downloader poll; no
+credentials are shared with the organizer. Missing/stale status pauses imports.
+A completed download must be out of moving/checking states, and source files
+must be unchanged across polls for 30 seconds. Single episodes run before packs.
+Existing series are recognized only by exact normalized title and unambiguous
+year, with an existing episode as evidence. Remakes are not guessed.
