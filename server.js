@@ -230,6 +230,7 @@ const storageHealth = require('./lib/storage-health')({
 
 const { findPosterInDir: _findPoster, findSubtitles: _findSubs } = require('./lib/fs-helpers');
 const { buildFfmpegArgs } = require('./lib/ffmpeg-args');
+const { embeddedTracks, BITMAP_CODECS } = require('./lib/subtitle-tracks');
 const findPosterInDir = (dir, baseName) => _findPoster(dir, baseName, POSTER_EXT);
 const findSubtitles = (dir, baseName) => _findSubs(dir, baseName, SUBTITLE_EXT);
 
@@ -454,10 +455,7 @@ async function doRescan(trigger) {
       }
 
       // Embedded subtitles (from probe cache)
-      const embeddedSubs = (subProbeCache[fullPath] || []).filter(s => s.extractable).map(s => {
-        const label = s.title || LANG_CODES[s.lang] || (s.lang ? s.lang.toUpperCase() : 'Track ' + s.index);
-        return { id: `emb_${id}_${s.index}`, label: `${label} [embedded]`, url: `/subtitle/embedded/${id}/${s.index}`, embedded: true };
-      });
+      const embeddedSubs = embeddedTracks(id, subProbeCache[fullPath]);
 
       // Episode info for shows and custom types with episode patterns
       const isShowLike = type === 'show' || (type !== 'movie' && hasEpisodePattern(file));
@@ -1015,7 +1013,7 @@ app.get('/api/library', requireAuth, (req, res) => {
 });
 
 // Full item details (for playback — includes subtitles, audioTracks, videoUrl)
-app.get('/api/item/:id', requireAuth, (req, res) => {
+app.get('/api/item/:id', requireAuth, async (req, res) => {
   const lib = scanLibrary();
   const item = lib.find(m => m.id === req.params.id);
   if (!item) return res.status(404).json({ error: 'Not found' });
@@ -1024,6 +1022,8 @@ app.get('/api/item/:id', requireAuth, (req, res) => {
   if (!profileId) return res.status(403).json({ error: 'Cannot access other profiles' });
   const profileData = loadProfileData(profileId);
   const { _filePath, ...safeItem } = item;
+  const embedded = await probeSubtitlesAsync(fileIndex[item.id]);
+  safeItem.subtitles = [...(item.subtitles || []).filter(s => !s.embedded), ...embeddedTracks(item.id, embedded)];
   // Strip internal fields from subtitles
   if (safeItem.subtitles) {
     safeItem.subtitles = safeItem.subtitles.map(({ _absPath, _format, ...s }) => s);
@@ -2735,7 +2735,7 @@ function canVaapiDecode(filePath) {
   return VAAPI_DECODE_CODECS.has(codec);
 }
 
-function startFfmpeg(id, filePath, sessionDir, seekTime, startSegNum, audioStreamIndex, quality, hevcPassthrough = false) {
+function startFfmpeg(id, filePath, sessionDir, seekTime, startSegNum, audioStreamIndex, quality, hevcPassthrough = false, subtitleStreamIndex = null) {
   const mode = getStreamMode(filePath);
   const preset = Object.hasOwn(QUALITY_PRESETS, quality) ? QUALITY_PRESETS[quality] : QUALITY_PRESETS.auto;
 
@@ -2751,7 +2751,7 @@ function startFfmpeg(id, filePath, sessionDir, seekTime, startSegNum, audioStrea
   // spawning ffmpeg or booting the server. Everything it needs is resolved
   // from the probe caches here and passed in as plain values.
   const { args: ffmpegArgs, hevcCopy, delivery } = buildFfmpegArgs({
-    filePath, sessionDir, seekTime, startSegNum, audioStreamIndex,
+    filePath, sessionDir, seekTime, startSegNum, audioStreamIndex, subtitleStreamIndex,
     mode, preset,
     srcHeight: heightCache[filePath] || 0,
     pixFmt: pixFmtCache[filePath] || '',
@@ -2843,9 +2843,14 @@ app.get('/hls/:id/:playbackId/master.m3u8', requireAuth, ensureLibrary, async (r
       (audioTrack !== null && (!Number.isInteger(audioTrack) || audioTrack < 0))) {
     return res.status(400).send('Invalid playback options');
   }
+  const subtitleTrack = req.query.subtitle === undefined ? null : Number(req.query.subtitle);
+  if (subtitleTrack !== null && (!Number.isInteger(subtitleTrack) || subtitleTrack < 0
+      || !(await probeSubtitlesAsync(filePath)).some(s => s.index === subtitleTrack && BITMAP_CODECS.has(s.codec)))) {
+    return res.status(400).send('Invalid image subtitle track');
+  }
   const quality = Object.hasOwn(QUALITY_PRESETS, req.query.quality) ? req.query.quality : 'auto';
   const clientHevcLevel = Math.max(0, parseInt(req.query.hevcMaxLevel, 10) || 0);
-  const signature = JSON.stringify([mediaId, startTime, audioTrack, quality, clientHevcLevel]);
+  const signature = JSON.stringify([mediaId, startTime, audioTrack, quality, clientHevcLevel, subtitleTrack]);
   // Retired URLs must not resurrect a stopped generation via a late retry.
   for (const [key, at] of retiredPlaybacks) {
     if (Date.now() - at > TRANSCODE_TIMEOUT_MS) retiredPlaybacks.delete(key);
@@ -2887,7 +2892,7 @@ app.get('/hls/:id/:playbackId/master.m3u8', requireAuth, ensureLibrary, async (r
       const hevcPassthrough = clientHevcLevel > 0
         && (probeCache[filePath] || '').toLowerCase() === 'hevc'
         && srcLevel > 0 && srcLevel <= clientHevcLevel;
-      startFfmpeg(id, filePath, session.dir, startTime, 0, audioTrack, quality, hevcPassthrough);
+      startFfmpeg(id, filePath, session.dir, startTime, 0, audioTrack, quality, hevcPassthrough, subtitleTrack);
       const libItem = libraryCache?.find(i => i.id === mediaId);
       recordStream({ id: mediaId, title: libItem?.title || path.basename(filePath),
         profileName: session.profileName, mode: getStreamMode(filePath),

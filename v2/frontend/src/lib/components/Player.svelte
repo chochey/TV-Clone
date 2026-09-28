@@ -4,13 +4,14 @@
   import { library, session, dismissed, AUTO_WATCHED_PERCENT } from '../stores.js';
   import { startPlayback, STARTUP_ERROR, startupFragmentCount, startHlsFromPosition } from '../playback-startup.js';
   import { loadHls, parseVtt, cueAt, fmtTime } from '../player-core.js';
+  import { forcedEnglishSubtitle } from '../subtitle-selection.js';
   import { episodeCode, episodeTitle } from '../format.js';
   import { hevcMaxLevel, demoteHevc, isFirefoxDesktopLinux } from '../hevc-probe.js';
 
   // Remounted per item via {#key} in App — `item` is static for this mount.
   let { item, next = null, prev = null, onclose, onnext, onprev } = $props();
 
-  const isDirect = item.streamMode === 'direct';
+  const isDirect = $derived(item.streamMode === 'direct' && !full?.subtitles?.[subIdx]?.bitmap);
   // HEVC can be copied straight through to a browser that can decode it,
   // instead of being re-encoded to H.264 for the whole runtime.
   const isHevc = (item.codec || '').toLowerCase() === 'hevc';
@@ -195,12 +196,14 @@
     playbackId = currentPlayback;
     const params = new URLSearchParams({ start: String(start), quality });
     if (audioTrack != null) params.set('audio', String(audioTrack));
+    const selectedSub = full?.subtitles?.[subIdx];
+    if (selectedSub?.bitmap) params.set('subtitle', String(selectedSub.streamIndex));
     // Ask for passthrough only after this browser has actually decoded a real
     // HEVC clip. The probe runs once per browser build and is cached, so this
     // costs nothing after the first HEVC play. The server still applies its own
     // level ceiling, so a claim here is a request, not a guarantee.
     passthroughActive = false;
-    if (isHevc && !hevcBlocked) {
+    if (isHevc && !hevcBlocked && !selectedSub?.bitmap) {
       const lvl = await hevcMaxLevel();
       if (seq !== loadSeq) return;  // a seek landed while probing
       if (lvl > 0) { params.set('hevcMaxLevel', String(lvl)); passthroughActive = true; }
@@ -585,18 +588,35 @@
   // ── Subtitles: custom cue rendering so HLS session restarts (video
   // timeline resets to 0) can't desync the text — we track real time. ──
   let subSeq = 0;
-  async function setSub(i) {
+  async function setSub(i, initial = false) {
+    const wasBitmap = !!full?.subtitles?.[subIdx]?.bitmap;
     subIdx = i;
     cues = [];
     cueText = '';
     openMenu = '';
     const seq = ++subSeq;
-    if (i < 0 || !full?.subtitles?.[i]) return;
+    const selected = full?.subtitles?.[i];
+    if (!initial && (wasBitmap || selected?.bitmap)) {
+      error = '';
+      if (item.streamMode === 'direct' && !selected?.bitmap) {
+        ++loadSeq;
+        cancelStartup();
+        clearTimeout(retryTimer);
+        startupPending = false;
+        destroyHls();
+        if (playbackId) fetch(`/api/hls/${playbackId}/stop`, { method: 'POST', credentials: 'same-origin' }).catch(() => {});
+        playbackId = null;
+        seekOffset = 0;
+        loadDirect(cur);
+      } else loadHlsSession(cur);
+    }
+    if (!selected || selected.bitmap) return;
     try {
       const r = await fetch(full.subtitles[i].url, { credentials: 'same-origin' });
+      if (!r.ok) throw new Error('Subtitle request failed');
       const text = await r.text();
       if (seq === subSeq) cues = parseVtt(text);
-    } catch {}
+    } catch { if (seq === subSeq && !destroyed) notice = 'Could not load subtitles. Please try again.'; }
   }
 
   // ── Menus / controls chrome ─────────────────────────────────────────
@@ -838,6 +858,8 @@
     const prog = full?.progress || item.progress || {};
     const start = (prog.percent || 0) >= AUTO_WATCHED_PERCENT ? 0 : (prog.currentTime > 5 ? prog.currentTime : 0);
     cur = start;
+    const forcedEnglish = forcedEnglishSubtitle(full?.subtitles);
+    if (forcedEnglish >= 0) setSub(forcedEnglish, true);
 
     if (isDirect) { seekOffset = 0; loadDirect(start); }
     else loadHlsSession(start);
