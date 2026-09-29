@@ -3611,6 +3611,8 @@ function episodeShowMeta(showName) {
 
 let episodeRefreshRunning = false;
 let lastEpisodeReport = null;
+let episodeRefreshProgress = null;
+let episodeRefreshError = '';
 
 app.get('/api/episodes/report', requirePermission('canDownload'), ensureLibrary, async (_req, res) => {
   // Cache-only pass (budget 0) — instant, never spends OMDb calls.
@@ -3620,23 +3622,27 @@ app.get('/api/episodes/report', requirePermission('canDownload'), ensureLibrary,
     budget: 0,
   });
   lastEpisodeReport = report;
-  res.json({ ok: true, refreshing: episodeRefreshRunning, ...report });
+  res.json({ ok: true, refreshing: episodeRefreshRunning, refreshProgress: episodeRefreshProgress, refreshError: episodeRefreshError, ...report });
 });
 
 app.post('/api/episodes/refresh', requirePermission('canDownload'), ensureLibrary, (req, res) => {
   if (episodeRefreshRunning) return res.json({ ok: true, started: false, refreshing: true });
   episodeRefreshRunning = true;
-  const budget = Math.min(500, parseInt(req.body?.budget, 10) || 300);
+  episodeRefreshError = '';
+  episodeRefreshProgress = null;
+  const budget = Math.max(1, Math.min(500, parseInt(req.body?.budget, 10) || 300));
   (async () => {
     try {
       const report = await episodeIndex.buildReport({
         holdings: buildHoldings(scanLibrary() || []),
         getShowMeta: episodeShowMeta,
         budget,
+        onProgress: progress => { episodeRefreshProgress = progress; },
       });
       lastEpisodeReport = report;
       console.log(`[Episodes] Refresh done: ${report.budgetUsed} OMDb calls, ${report.staleSlots} slots still stale`);
     } catch (e) {
+      episodeRefreshError = 'Episode check failed. Please try again.';
       console.error('[Episodes] Refresh failed:', e.message);
     } finally {
       episodeRefreshRunning = false;
