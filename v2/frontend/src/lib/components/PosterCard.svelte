@@ -1,8 +1,8 @@
 <script>
   import { posterUrl, backdropUrl } from '../api.js';
-  import { library, enrichItem, dismissFromContinue, AUTO_WATCHED_PERCENT } from '../stores.js';
+  import { seriesIndex, watchState, enrichItem, dismissFromContinue, AUTO_WATCHED_PERCENT } from '../stores.js';
   import { episodeCode } from '../format.js';
-  import { seriesPlayTarget } from '../series-playback.js';
+  import { cardPlayback, seriesSummary } from '../series-playback.js';
   // resume: rendered in the Continue Watching row — show which episode and how
   // much is left, and offer a way to drop it from the row.
   let { item, onopen, onplay, resume = false, wide = false } = $props();
@@ -10,15 +10,17 @@
   // No poster? Ask OMDb once — the store patch re-renders this card.
   $effect(() => { if (!posterUrl(item)) enrichItem(item.id); });
 
-  const playTarget = $derived(resume ? item : seriesPlayTarget(item, $library));
+  const current = $derived({ ...item, ...$watchState[item.id] });
+  const summary = $derived(item.seriesCard ? seriesSummary(item, $seriesIndex, $watchState) : null);
+  const watched = $derived(summary ? summary.allWatched : current.watched);
   const poster = $derived(posterUrl(item));
   const backdrop = $derived(backdropUrl(item));
   const title = $derived(item.showName || item.title || item.omdbTitle || 'Untitled');
   const year = $derived(item.year || item.omdbYear || '');
   const rating = $derived(item.imdbRating && item.imdbRating !== 'N/A' ? item.imdbRating : '');
-  const pct = $derived(item.progress?.percent || 0);
+  const pct = $derived(item.seriesCard && !resume ? 0 : current.progress?.percent || 0);
   const minsLeft = $derived.by(() => {
-    const p = item.progress;
+    const p = current.progress;
     if (!p?.duration || !p?.currentTime) return 0;
     return Math.max(0, Math.round((p.duration - p.currentTime) / 60));
   });
@@ -45,7 +47,7 @@
 
 <div class="card" class:wide role="button" tabindex="0"
      onclick={() => onopen?.(item)}
-     onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onopen?.(item); } }}>
+     onkeydown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onopen?.(item); } }}>
   <div class="art">
     {#if artSrc}
       <img src={artSrc} alt={title} loading="lazy" decoding="async" onerror={artError} />
@@ -56,11 +58,11 @@
       </div>
     {/if}
 
-    {#if item.watched}<span class="badge watched" title="Watched">✓</span>{/if}
+    {#if watched}<span class="badge watched" title={summary ? 'All available episodes watched' : 'Watched'}>✓</span>{/if}
 
     <!-- Hover: play button -->
     <div class="hover-overlay">
-      <button class="play" onclick={(e) => { e.stopPropagation(); onplay?.(playTarget); }} aria-label={`Play ${title}`}>
+      <button class="play" onclick={(e) => { e.stopPropagation(); onplay?.(resume ? current : cardPlayback(item, $seriesIndex, $watchState)); }} aria-label={`Play ${title}`}>
         <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
       </button>
     </div>
@@ -81,6 +83,7 @@
           {resumeLine}
         {:else}
           {year}{item.type === 'show' ? ' · Series' : ''}{rating ? ` · ★ ${rating}` : ''}
+          {#if summary && summary.watched}<span class="series-progress">{summary.watched} of {summary.total} watched</span>{/if}
         {/if}
       </span>
     </div>
@@ -192,6 +195,7 @@
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   .y { display: block; font-size: 0.68rem; color: var(--ink-soft); margin-top: 2px; }
+  .series-progress { display: block; margin-top: 3px; }
 
   .progress {
     position: absolute; left: 0; right: 0; bottom: 0; height: 3px;

@@ -1,5 +1,6 @@
 <script>
-  import { onMount, onDestroy } from 'svelte';
+  import { onDestroy } from 'svelte';
+  import { createRefreshLoop } from '../lib/refresh-loop.js';
   import { api } from '../lib/api.js';
 
   let data = $state(null);   // {ok, lines, total, meta}
@@ -8,7 +9,15 @@
   let q = $state('');
   let live = $state(false);
   let restarting = $state(false);
-  let timer, debounce;
+  let closed = false, firstRefresh = true;
+  const delayed = new Set();
+  let refreshError = $state('');
+  let actionError = $state('');
+  let lastUpdated = $state(null);
+  function later(fn, delay) {
+    const timer = setTimeout(() => { delayed.delete(timer); if (!closed) fn(); }, delay);
+    delayed.add(timer);
+  }
 
   // ── Needs Review (fix queue) ────────────────────────────────────────
   let fq = $state(null);          // {ok, queue, aliases, leftovers} — null = not admin / loading
@@ -18,14 +27,15 @@
   const hot = $derived((fq?.queue || []).filter((e) => e.stillPresent));
   const history = $derived((fq?.queue || []).filter((e) => !e.stillPresent));
 
+  function applyFixQueue(d) {
+    for (const e of d?.queue || []) {
+      if (!(e.id in fixTo)) fixTo[e.id] = e.suggestedAlias || e.title;
+    }
+    fq = d;
+  }
   async function loadFixQueue() {
-    try {
-      const d = await api.organizerFixQueue();
-      for (const e of d.queue || []) {
-        if (!(e.id in fixTo)) fixTo[e.id] = e.suggestedAlias || e.title;
-      }
-      fq = d;
-    } catch { fq = null; } // 403 for non-admin — hide the panel
+    try { const d = await api.organizerFixQueue(); if (!closed) applyFixQueue(d); }
+    catch (e) { if (!closed) actionError = e.body?.error || 'Could not refresh the review queue.'; }
   }
 
   // Save the alias, then bounce the organizer so it re-scans Share with it.
@@ -41,7 +51,7 @@
       });
       await api.organizerRestart();
       fixDone[entry.id] = 'Alias saved — organizer is retrying…';
-      setTimeout(async () => { await loadFixQueue(); fixDone[entry.id] = ''; }, 8000);
+      later(async () => { await loadFixQueue(); if (!closed) fixDone[entry.id] = ''; }, 8000);
     } catch (e) {
       fixDone[entry.id] = e.body?.error || 'Failed to save alias';
     } finally {
@@ -50,32 +60,54 @@
   }
 
   async function removeAlias(id) {
-    try { await api.organizerAliasDelete(id); await loadFixQueue(); } catch {}
+    actionError = '';
+    try { await api.organizerAliasDelete(id); await loadFixQueue(); } catch (e) { if (!closed) actionError = e.body?.error || 'Could not remove alias.'; }
   }
 
-  async function refresh() {
-    try { data = await api.organizerLogs({ filter, q, lines: 300 }); } catch { data = { ok: false }; }
-    try { status = await api.organizerStatus(); } catch {}
-    loadFixQueue();
-  }
-  onMount(refresh);
-  onDestroy(() => { clearInterval(timer); clearTimeout(debounce); });
-
-  $effect(() => { filter; refresh(); });
-  $effect(() => {
-    q;
-    clearTimeout(debounce);
-    debounce = setTimeout(refresh, 300);
+  const loop = createRefreshLoop({
+    load: async () => {
+      const query = { filter, q, lines: 300 };
+      const [logs, service, queue] = await Promise.allSettled([
+        api.organizerLogs(query), api.organizerStatus(), api.organizerFixQueue(),
+      ]);
+      return { query, logs, service, queue };
+    },
+    onData: ({ query, logs, service, queue }) => {
+      if (query.filter !== filter || query.q !== q) return;
+      const failures = [];
+      if (logs.status === 'fulfilled' && logs.value.ok) data = logs.value;
+      else failures.push('logs');
+      if (service.status === 'fulfilled') status = service.value;
+      else failures.push('service status');
+      if (queue.status === 'fulfilled') applyFixQueue(queue.value);
+      else if (queue.reason?.status === 403) fq = null;
+      else failures.push('review queue');
+      refreshError = failures.length ? `Could not refresh ${failures.join(', ')}. Showing the last available information.` : '';
+      if (!failures.length) lastUpdated = Date.now();
+      if (!data && failures.includes('logs')) data = { ok: false };
+    },
+    onError: () => { refreshError = 'Organizer could not refresh. Try again.'; },
+    interval: () => live ? 4000 : 0,
   });
+  const refresh = () => loop.refresh();
+  onDestroy(() => { closed = true; loop.stop(); for (const timer of delayed) clearTimeout(timer); });
+  // One initial request set; subsequent filter/search edits share a debounce.
   $effect(() => {
-    clearInterval(timer);
-    if (live) timer = setInterval(refresh, 4000);
+    filter; q; loop.invalidate();
+    const timer = setTimeout(refresh, firstRefresh ? 0 : 300);
+    firstRefresh = false;
+    return () => clearTimeout(timer);
   });
+  $effect(() => { live; loop.schedule(); });
 
   async function restartOrganizer() {
-    restarting = true;
-    try { await api.organizerRestart(); } catch {}
-    setTimeout(async () => { await refresh(); restarting = false; }, 3000);
+    restarting = true; actionError = '';
+    try {
+      await api.organizerRestart();
+      if (!closed) later(async () => { await refresh(); if (!closed) restarting = false; }, 3000);
+    } catch (e) {
+      if (!closed) { actionError = e.body?.error || 'Could not restart organizer.'; restarting = false; }
+    }
   }
 
   function ago(ts) {
@@ -103,6 +135,9 @@
     </button>
   </header>
 
+  {#if actionError}<p class="err" role="alert">{actionError}</p>{/if}
+  {#if refreshError}<p class="err" role="status">{refreshError} <button onclick={refresh}>Retry</button></p>{/if}
+  {#if lastUpdated}<p class="meta">Last refreshed {new Date(lastUpdated).toLocaleTimeString()}</p>{/if}
   {#if data?.meta}
     <div class="chips">
       <span class="chip">Heartbeat <strong class={stale ? 'bad' : ''}>{ago(data.meta.lastHeartbeat)}</strong></span>

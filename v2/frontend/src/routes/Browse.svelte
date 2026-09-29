@@ -1,6 +1,6 @@
 <script>
   import PosterCard from '../lib/components/PosterCard.svelte';
-  import { library, collapseShows } from '../lib/stores.js';
+  import { catalog, collapseShows } from '../lib/stores.js';
 
   let { kind, onopen, onplay } = $props(); // kind: 'movie' | 'show'
 
@@ -14,7 +14,7 @@
 
   // One card per title: movies as-is, shows collapsed to a representative.
   const pool = $derived.by(() => {
-    const of = $library.filter((i) => i.type === kind);
+    const of = $catalog.filter((i) => i.type === kind);
     return kind === 'show' ? collapseShows(of) : of;
   });
 

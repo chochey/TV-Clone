@@ -1,6 +1,6 @@
 <script>
   import PosterCard from '../lib/components/PosterCard.svelte';
-  import { library, collapseShows, searchQuery } from '../lib/stores.js';
+  import { catalog, collapseShows, searchQuery } from '../lib/stores.js';
   import { searchLibrary } from '../lib/search.js';
 
   let { onopen, onplay } = $props();
@@ -13,7 +13,7 @@
   let sentinel = $state(null);
 
   // Everything, one card per title.
-  const pool = $derived(collapseShows($library));
+  const pool = $derived(collapseShows($catalog));
   const results = $derived(searchLibrary(pool, $q));
 
   $effect(() => { $q; shown = PAGE; });

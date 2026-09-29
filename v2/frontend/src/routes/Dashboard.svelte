@@ -1,6 +1,7 @@
 <script>
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount } from 'svelte';
   import { api } from '../lib/api.js';
+  import { createRefreshLoop } from '../lib/refresh-loop.js';
 
   let stats = $state(null);
   let sys = $state(null);
@@ -8,7 +9,7 @@
   let org = $state(null);
   let storage = $state(null); // {pool, drives} with SMART + projection
   let watching = $state([]);
-  let timer;
+  let refreshError = $state('');
 
   // How a live stream is reaching the viewer. The cheap paths hand the file's
   // own video through untouched; the transcode paths rebuild every frame, so
@@ -34,19 +35,22 @@
     return (b / 1e12).toFixed(2) + ' TB';
   }
 
-  async function tick() {
-    try { sys = await api.systemStats(); } catch {}
-    try { watching = await api.nowWatching(); } catch {}
-  }
-  onMount(async () => {
-    tick();
-    try { stats = await api.stats(); } catch {}
-    try { org = await api.organizerStatus(); } catch {}
-    try { rel = await api.reliability(); } catch {}
-    try { storage = await api.storage(); } catch {}
-    timer = setInterval(tick, 15000);
+  onMount(() => {
+    let closed = false;
+    const loop = createRefreshLoop({
+      load: () => Promise.all([api.systemStats(), api.nowWatching()]),
+      onData: ([system, viewers]) => { sys = system; watching = viewers; refreshError = ''; },
+      onError: () => { refreshError = 'Live status could not refresh. Retrying shortly.'; },
+      interval: () => 15000,
+    });
+    loop.refresh();
+    Promise.allSettled([api.stats(), api.organizerStatus(), api.reliability(), api.storage()]).then(values => {
+      if (closed) return;
+      const value = i => values[i].status === 'fulfilled' ? values[i].value : null;
+      stats = value(0); org = value(1); rel = value(2); storage = value(3);
+    });
+    return () => { closed = true; loop.stop(); };
   });
-  onDestroy(() => clearInterval(timer));
 
   // SMART verdict for a drive row: FAIL beats warnings beats OK.
   function smartBadge(s) {
@@ -80,6 +84,7 @@
 
 <div class="page">
   <header><h1 class="display">Dashboard</h1></header>
+  {#if refreshError}<p class="warn" role="status">{refreshError}</p>{/if}
 
   <div class="cards">
     <section class="card">

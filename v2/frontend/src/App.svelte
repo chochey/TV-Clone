@@ -1,7 +1,7 @@
 <script>
   import { onMount, tick } from 'svelte';
   import { api } from './lib/api.js';
-  import { library, session, loadLibrary, resetSessionState, searchQuery, collapseShows } from './lib/stores.js';
+  import { library, catalog, session, loadLibrary, resetSessionState, searchQuery, collapseShows } from './lib/stores.js';
   import { searchLibrary } from './lib/search.js';
   import { posterUrl } from './lib/api.js';
   import { route, navigate } from './lib/router.js';
@@ -109,6 +109,7 @@
   const playingPrev = $derived(playing ? prevEpisodeOf(playing, $library) : null);
 
   function openItem(item) {
+    searchExpanded = false;
     navigate(`/title/${encodeURIComponent(item.id)}`);
   }
   function playItem(item) {
@@ -117,7 +118,7 @@
 
   // ── Header live search: results drop down as you type, no page jump ───
   let searchFocused = $state(false);
-  const searchPool = $derived(collapseShows($library));
+  const searchPool = $derived(collapseShows($catalog));
   const searchMatches = $derived(searchLibrary(searchPool, $searchQuery));
   const searchSuggestions = $derived(searchMatches.slice(0, 8));
   const searchMore = $derived(searchMatches.length - searchSuggestions.length);
@@ -161,6 +162,17 @@
   let pendingCount = $state(0);
   let scanBusy = $state(false);
   let confirmRestart = $state(false);
+  let searchExpanded = $state(false);
+  let searchInput, accountButton;
+  async function openMobileSearch() {
+    menuOpen = false; bellOpen = false; searchExpanded = true;
+    await tick(); searchInput?.focus();
+  }
+  function dismissPanels(e) {
+    if (e.key !== 'Escape') return;
+    if (menuOpen) { menuOpen = false; confirmRestart = false; accountButton?.focus(); }
+    bellOpen = false; searchExpanded = false;
+  }
 
   const isAdmin = $derived($session?.role === 'admin');
   const can = (p) => $session?.role === 'admin' || ($session?.permissions || []).includes(p);
@@ -221,6 +233,7 @@
   $effect(() => { if (phase === 'ready') refreshPending(); });
 
   function go(path) {
+    searchExpanded = false;
     menuOpen = false;
     confirmRestart = false;
     navigate(path);
@@ -267,7 +280,7 @@
   }
 </script>
 
-<svelte:window bind:scrollY onclick={() => { menuOpen = false; confirmRestart = false; bellOpen = false; }} />
+<svelte:window bind:scrollY onkeydown={dismissPanels} onclick={() => { menuOpen = false; confirmRestart = false; bellOpen = false; }} />
 
 {#if phase === 'loading'}
   <div class="splash">
@@ -304,25 +317,28 @@
     </form>
   </div>
 {:else}
-  <header class="topbar" class:solid={scrollY > 24}>
-    <button class="brand display" onclick={() => navigate('/')}>
+  <header class="topbar" class:solid={scrollY > 24} class:searching={searchExpanded}>
+    <button class="brand display" onclick={() => go('/')}>
       <span class="wordmark">CHOCHEY<span class="brandtv">TV</span></span>
     </button>
-    <nav>
-      <a class:active={$route.name === 'home'} href="/" onclick={(e) => { e.preventDefault(); navigate('/'); }}>Home</a>
-      <a class:active={$route.name === 'movies'} href="/movies" onclick={(e) => { e.preventDefault(); navigate('/movies'); }}>Films</a>
-      <a class:active={$route.name === 'shows'} href="/shows" onclick={(e) => { e.preventDefault(); navigate('/shows'); }}>Series</a>
+    <nav aria-label="Main navigation">
+      <a class:active={$route.name === 'home'} href="/" onclick={(e) => { e.preventDefault(); go('/'); }}>Home</a>
+      <a class:active={$route.name === 'movies'} href="/movies" onclick={(e) => { e.preventDefault(); go('/movies'); }}>Films</a>
+      <a class:active={$route.name === 'shows'} href="/shows" onclick={(e) => { e.preventDefault(); go('/shows'); }}>Series</a>
+      <button class="mobile-search" onclick={openMobileSearch}>Search</button>
     </nav>
     <div class="searchbox" class:open={searchDropOpen} onclick={(e) => e.stopPropagation()}>
       <svg class="sicon" viewBox="0 0 24 24" width="17" height="17" fill="currentColor" aria-hidden="true"><path d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"/></svg>
       <input
         class="searchinput" type="search" placeholder="Search films and series" enterkeyhint="search"
+        aria-label="Search films and series" bind:this={searchInput}
         autocomplete="off" spellcheck="false"
         bind:value={$searchQuery}
         onfocus={() => { searchFocused = true; }}
         onblur={() => { setTimeout(() => { searchFocused = false; }, 140); }}
         onkeydown={onSearchKey}
       />
+      {#if searchExpanded}<button class="search-close" aria-label="Close search" onclick={() => { searchExpanded = false; }}>✕</button>{/if}
       {#if $searchQuery.trim()}
         <button class="sclear" aria-label="Clear search" onclick={clearSearch}>
           <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
@@ -385,13 +401,13 @@
     </div>
     {/if}
     <div class="usermenu">
-      <button class="avatar" aria-label="Account menu" aria-expanded={menuOpen}
+      <button class="avatar" aria-label="Account menu" aria-expanded={menuOpen} aria-controls="account-menu" bind:this={accountButton}
               onclick={(e) => { e.stopPropagation(); menuOpen = !menuOpen; if (menuOpen) refreshPending(); }}>
         {($session?.name || '?').slice(0, 1)}
         {#if pendingCount > 0}<span class="badge">{pendingCount}</span>{/if}
       </button>
       {#if menuOpen}
-        <div class="dropdown" onclick={(e) => e.stopPropagation()}>
+        <div class="dropdown" id="account-menu" onclick={(e) => e.stopPropagation()}>
           <div class="who meta">{$session?.name}</div>
           <button onclick={() => go('/history')}>History</button>
           <button onclick={() => go('/stats')}>Watch Stats</button>
@@ -698,7 +714,10 @@
     border-radius: var(--r-md); padding: var(--s2);
     box-shadow: 0 18px 50px rgba(0, 0, 0, 0.6), 0 0 0 1px var(--line-strong);
     display: flex; flex-direction: column; gap: 1px;
+    max-height: calc(100dvh - 90px); overflow-y: auto; overscroll-behavior: contain;
   }
+  .dropdown > * { flex-shrink: 0; }
+  .mobile-search, .search-close { display: none; }
   .dropdown .who { padding: 8px 12px 4px; }
   .dropdown > button {
     display: flex; align-items: center;
@@ -752,8 +771,25 @@
      search results. Tablets and up keep the nav alongside the box. */
   @media (max-width: 560px) {
     .topbar { padding: var(--s3) var(--s4); gap: var(--s2); }
-    nav { display: none; }
-    .searchbox { max-width: none; margin: 0 auto 0 var(--s3); padding: 0 12px; }
+    .brand { margin-right: auto; }
+    nav {
+      position: fixed; inset: auto 0 0; margin: 0; gap: 0; display: grid; grid-template-columns: repeat(4, 1fr);
+      padding: 5px 8px calc(5px + env(safe-area-inset-bottom)); background: #111116; border-top: 1px solid var(--line-strong);
+    }
+    nav a, .mobile-search { display: grid; place-items: center; min-height: 44px; font-size: .86rem; color: var(--ink-soft); }
+    nav a.active { color: #c5a6ff; }
+    nav a.active::after { bottom: 0; left: 20%; right: 20%; }
+    main { padding-bottom: calc(60px + env(safe-area-inset-bottom)); }
+    .searchbox { display: none; }
+    .searching .searchbox {
+      display: flex; position: absolute; left: var(--s4); right: var(--s4); top: 8px;
+      margin: 0; max-width: none; padding: 0 12px; min-height: 44px; background: #202027; z-index: 2;
+    }
+    .searching .brand, .searching .bell, .searching .usermenu { visibility: hidden; }
+    .search-close { display: grid; place-items: center; min-width: 44px; min-height: 44px; }
     .bell { margin-left: 0; }
+    .bellbtn, .avatar { width: 44px; height: 44px; }
+    .dropdown { top: 50px; max-height: calc(100dvh - 140px - env(safe-area-inset-bottom)); }
+    .dropdown > button { min-height: 44px; }
   }
 </style>

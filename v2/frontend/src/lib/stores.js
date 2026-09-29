@@ -3,9 +3,51 @@ import { api } from './api.js';
 import { loadNotifications, resetNotifications } from './notifications.js';
 
 import { startLiveUpdates } from './live-updates.js';
+import { unpackCatalog } from './catalog-response.js';
 
 export const session = writable(null);     // { loggedIn, profileId, name, role }
-export const library = writable([]);       // full library array
+const liveLibrary = writable([]);
+export const catalog = writable([]); // structural metadata; never invalidated by a progress tick
+export const watchState = writable({});
+let itemPositions = new Map();
+export const mediaById = derived(catalog, items => new Map(items.map(i => [i.id, i])));
+export const seriesIndex = derived(catalog, items => {
+  const groups = new Map();
+  for (const item of items) {
+    if (!item.showName) continue;
+    const key = item.type + '::' + item.showName;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(item);
+  }
+  return groups;
+});
+export function replaceLibrary(items) {
+  itemPositions = new Map(items.map((item, position) => [item.id, position]));
+  const state = {};
+  for (const item of items) {
+    if (item.watched || item.progress?.duration || item.progress?.updatedAt || item.progress?.percent) {
+      state[item.id] = { watched: !!item.watched, progress: item.progress };
+    }
+  }
+  catalog.set(items);
+  watchState.set(state);
+  liveLibrary.set(items);
+}
+export const library = {
+  subscribe: liveLibrary.subscribe,
+  set: replaceLibrary,
+  update: fn => replaceLibrary(fn(get(liveLibrary))),
+};
+export function updateWatchState(id, patch) {
+  const position = itemPositions.get(id);
+  if (position === undefined) return;
+  const items = get(liveLibrary);
+  const item = { ...items[position], ...(typeof patch === 'function' ? patch(items[position]) : patch) };
+  watchState.update(state => ({ ...state, [id]: { watched: !!item.watched, progress: item.progress } }));
+  // Existing detail/history views keep their live snapshot, without rebuilding
+  // the metadata indexes, search pool, genre rows or recently-added sort.
+  const next = items.slice(); next[position] = item; liveLibrary.set(next);
+}
 export const libraryLoaded = writable(false);
 export const searchQuery = writable('');   // shared: header search box <-> Search page
 
@@ -46,28 +88,25 @@ export { AUTO_WATCHED_PERCENT };
 const FINISHED_PERCENT = AUTO_WATCHED_PERCENT;
 
 // Continue Watching: in-progress items, most-recent first, de-duped per show.
-export const continueWatching = derived([library, dismissed], ([$lib, $dismissed]) => {
+export const continueWatching = derived([watchState, mediaById, dismissed], ([$state, $byId, $dismissed]) => {
   const hidden = $dismissed.continueWatching || {};
-  const inProgress = $lib
-    .filter((m) => m.progress?.percent > 0 && m.progress?.percent < FINISHED_PERCENT)
-    .filter((m) => !hidden[m.id])
+  const inProgress = Object.entries($state)
+    .filter(([id, s]) => !hidden[id] && $byId.has(id) && s.progress?.percent > 0 && s.progress.percent < FINISHED_PERCENT)
+    .map(([id, state]) => ({ ...$byId.get(id), ...state }))
     .sort((a, b) => (b.progress?.updatedAt || 0) - (a.progress?.updatedAt || 0));
   const seen = new Set();
-  const out = [];
-  for (const item of inProgress) {
+  return inProgress.filter(item => {
     const key = item.showName ? item.type + '::' + item.showName : item.id;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(item);
-  }
-  return out;
+    if (seen.has(key)) return false;
+    seen.add(key); return true;
+  });
 });
 
 // Collapse a list so a show's episodes become one representative card
 // (the newest episode that has artwork), keeping standalone movies as-is.
 export function collapseShows(items) {
   const seen = new Map();
-  const out = [];
+  const out = [], positions = new Map();
   for (const item of items) {
     if (item.showName) {
       const key = item.type + '::' + item.showName;
@@ -75,12 +114,12 @@ export function collapseShows(items) {
       // Prefer an entry that actually has a poster, then the newest.
       const better = !prev ||
         (!!(item.omdbPosterUrl || item.posterUrl) && !(prev.omdbPosterUrl || prev.posterUrl)) ||
-        (item.addedAt || 0) > (prev.addedAt || 0);
+        (!!(item.omdbPosterUrl || item.posterUrl) === !!(prev.omdbPosterUrl || prev.posterUrl) && (item.addedAt || 0) > (prev.addedAt || 0));
       if (better) {
         // Present it as the show, not the episode.
-        const card = { ...item, title: item.showName };
-        if (prev) out[out.indexOf(prev)] = card;
-        else out.push(card);
+        const card = { ...item, title: item.showName, seriesCard: true };
+        if (prev) out[positions.get(key)] = card;
+        else { positions.set(key, out.length); out.push(card); }
         seen.set(key, card);
       }
     } else {
@@ -91,12 +130,12 @@ export function collapseShows(items) {
 }
 
 // Recently Added: newest first, shows collapsed to one card each.
-export const recentlyAdded = derived(library, ($lib) =>
+export const recentlyAdded = derived(catalog, ($lib) =>
   collapseShows([...$lib].sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0))).slice(0, 40),
 );
 
 // Genre clusters from real OMDb/folder genre data.
-export const genreClusters = derived(library, ($lib) => {
+export const genreClusters = derived(catalog, ($lib) => {
   const byGenre = new Map();
   for (const item of $lib) {
     const genres = [];
@@ -118,16 +157,15 @@ export const genreClusters = derived(library, ($lib) => {
 
 // Library-at-a-glance numbers (v1's home-stat panel definitions:
 // in progress = started && not watched; unwatched = not watched).
-export const libraryStats = derived(library, ($lib) => {
-  let movies = 0, inProgress = 0, unwatched = 0;
-  const shows = new Set();
-  for (const i of $lib) {
-    if (i.type === 'movie') movies++;
-    else if (i.showName) shows.add(i.showName);
-    if ((i.progress?.percent || 0) > 0 && !i.watched) inProgress++;
-    if (!i.watched) unwatched++;
-  }
-  return { total: $lib.length, movies, shows: shows.size, inProgress, unwatched };
+const catalogStats = derived(catalog, items => ({
+  total: items.length,
+  movies: items.filter(i => i.type === 'movie').length,
+  shows: new Set(items.filter(i => i.showName).map(i => i.showName)).size,
+}));
+export const libraryStats = derived([catalogStats, watchState], ([$stats, $state]) => {
+  const states = Object.values($state);
+  return { ...$stats, inProgress: states.filter(i => (i.progress?.percent || 0) > 0 && !i.watched).length,
+    unwatched: $stats.total - states.filter(i => i.watched).length };
 });
 
 // Self-healing artwork: when a rendered item has no poster, ask v1's
@@ -188,9 +226,9 @@ export async function loadLibrary(profileId) {
   if (!profile || profile !== activeProfile) return [];
   const generation = sessionGeneration;
   const request = ++libraryRequest;
-  const data = await api.library({ profile });
+  const data = await api.library({ profile, format: 'compact' });
   if (generation !== sessionGeneration || request !== libraryRequest) return [];
-  const items = Array.isArray(data) ? data : data.items || [];
+  const items = unpackCatalog(data);
   library.set(items);
   libraryLoaded.set(true);
   loadDismissed();

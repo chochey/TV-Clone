@@ -904,6 +904,8 @@ app.delete('/api/requests/:id', requireAuth, (req, res) => {
 });
 
 const libraryEtag = require('./lib/library-etag')();
+const { packCatalog, createCompactCache } = require('./lib/catalog-response');
+const compactCatalog = createCompactCache();
 
 app.get('/api/library', requireAuth, (req, res) => {
   const profileId = getRequestProfile(req);
@@ -920,7 +922,7 @@ app.get('/api/library', requireAuth, (req, res) => {
   if (req.fresh) return res.status(304).end();
 
   // Slim response: exclude heavy fields not needed for browsing
-  let result = lib.map(item => {
+  const serializeItem = item => {
     const omdb = getMetadataForItem(item);
     return {
       id: item.id,
@@ -950,7 +952,12 @@ app.get('/api/library', requireAuth, (req, res) => {
       imdbID: omdb?.imdbID,
       omdbPosterUrl: omdb?.omdbPosterUrl || omdb?.posterUrl,
     };
-  });
+  };
+  if (req.query.format === 'compact' && Object.keys(req.query).every(k => ['format', 'profile'].includes(k))) {
+    const revision = `${libraryVersion}|${omdb.cacheVersion || omdb.cacheSize}|${metadataOverrides.revision}`;
+    return res.json(compactCatalog(lib, revision, () => lib.map(serializeItem), profileData));
+  }
+  let result = lib.map(serializeItem);
 
   // --- Filtering ---
   const typeFilter = req.query.type;
@@ -1009,7 +1016,7 @@ app.get('/api/library', requireAuth, (req, res) => {
     return res.json({ items, page, limit, total, totalPages });
   }
 
-  res.json(result);
+  res.json(req.query.format === 'compact' ? packCatalog(result) : result);
 });
 
 // Full item details (for playback — includes subtitles, audioTracks, videoUrl)
@@ -2512,17 +2519,15 @@ const conversionQueue = require('./lib/conversion-queue')({
   // on: a segment request or a direct-play byte range within the last minute.
   isPlaybackActive: () => Object.keys(transcodeSessions).length > 0
     || (Date.now() - lastPlaybackAt) < 60_000,
-  getRetainedBytes: () => {
-    try {
-      const roots = config.folders.map((f) => f.path).filter(Boolean);
-      return conversionWorker
-        .listRetainedOriginals(roots, conversionConfig.get().keepOriginalsDays)
-        .reduce((s, o) => s + o.size, 0);
-    } catch { return 0; }
+  getRetainedBytes: async () => {
+    const roots = config.folders.map((f) => f.path).filter(Boolean);
+    return (await conversionWorker
+      .listRetainedOriginals(roots, conversionConfig.get().keepOriginalsDays))
+      .reduce((s, o) => s + o.size, 0);
   },
   // fs.watch is blind on this box's fuse.mergerfs media mount (see
   // setupOrganizerWatch below), so nothing else would notice these renames.
-  onFileComplete: () => invalidateLibrary('conversion-file'),
+  onFileComplete: () => { conversionWorker.invalidateOriginals(); invalidateLibrary('conversion-file'); },
   onBatchComplete: () => invalidateLibrary('conversion-queue'),
   log: (msg) => console.log(`[conversion] ${msg}`),
 });
@@ -2557,7 +2562,7 @@ app.post('/api/conversion/stop', requireAdminSession, (_req, res) => {
 
 // Cleanup — delete retained originals past their keep-days. dryRun first from
 // the UI so the admin sees exactly what would go before anything is deleted.
-app.post('/api/conversion/cleanup', requireAdminSession, (req, res) => {
+app.post('/api/conversion/cleanup', requireAdminSession, async (req, res) => {
   if (conversionQueue.status !== 'idle') return res.status(409).json({ok:false,error:'Stop conversion before cleaning up originals'});
   const dryRun = req.body?.dryRun !== false;
   try {
@@ -2571,8 +2576,8 @@ app.post('/api/conversion/cleanup', requireAdminSession, (req, res) => {
         || (!dryRun && mode !== 'expired' && retainedPaths === null)) {
       return res.status(400).json({ok:false,error:'Choose originals and preview them before deleting'});
     }
-    const result = conversionWorker.cleanupExpiredOriginals(roots, cfg.keepOriginalsDays,
-      { dryRun, includeRecent: mode !== 'expired', retainedPaths });
+    const result = await conversionWorker.cleanupExpiredOriginals(roots, cfg.keepOriginalsDays,
+      { dryRun, includeRecent: mode !== 'expired', retainedPaths, canDelete: () => conversionQueue.status === 'idle' });
     if (!dryRun && result.deleted.length) {
       console.log(`[conversion] Cleanup deleted ${result.deleted.length} original(s), freed ${(result.bytes / 1e9).toFixed(2)} GB`);
     }
@@ -2582,11 +2587,11 @@ app.post('/api/conversion/cleanup', requireAdminSession, (req, res) => {
 
 // Retained originals — the undo window for anything already converted.
 // Listing is admin-only because it exposes real filesystem paths.
-app.get('/api/conversion/originals', requireAdminSession, (_req, res) => {
+app.get('/api/conversion/originals', requireAdminSession, async (_req, res) => {
   try {
     const cfg = conversionConfig.get();
     const roots = config.folders.map((f) => f.path).filter(Boolean);
-    const items = conversionWorker.listRetainedOriginals(roots, cfg.keepOriginalsDays);
+    const items = await conversionWorker.listRetainedOriginals(roots, cfg.keepOriginalsDays);
     res.json({
       ok: true,
       items,

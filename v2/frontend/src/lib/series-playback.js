@@ -1,6 +1,23 @@
 // Shared by the series detail page and every collapsed series card.
 export const AUTO_WATCHED_PERCENT = 92;
 
+export function cardPlayback(item, index, state) {
+  if (item?.type !== 'show' || !item.showName) return { ...item, ...state[item.id] };
+  const episodes = (index.get(item.type + '::' + item.showName) || []).map(i => ({ ...i, ...state[i.id] }));
+  return seriesPlayTarget(item, episodes);
+}
+
+export function seriesSummary(item, index, state) {
+  const episodes = new Map();
+  for (const base of index.get(item.type + '::' + item.showName) || []) {
+    const e = { ...base, ...state[base.id] };
+    const key = e.epInfo?.season != null && e.epInfo?.episode != null ? `${e.epInfo.season}x${e.epInfo.episode}` : e.id;
+    episodes.set(key, !!(episodes.get(key) || e.watched || e.progress?.percent > AUTO_WATCHED_PERCENT));
+  }
+  const watched = [...episodes.values()].filter(Boolean).length;
+  return { total: episodes.size, watched, allWatched: episodes.size > 0 && watched === episodes.size };
+}
+
 export function seriesEpisodes(item, library) {
   if (item?.type !== 'show' || !item.showName) return [];
   const byEpisode = new Map();

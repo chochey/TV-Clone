@@ -1,7 +1,7 @@
 <script>
   import { posterUrl, backdropUrl } from '../api.js';
-  import { library, enrichItem, AUTO_WATCHED_PERCENT } from '../stores.js';
-  import { seriesPlayTarget } from '../series-playback.js';
+  import { seriesIndex, watchState, enrichItem, AUTO_WATCHED_PERCENT } from '../stores.js';
+  import { cardPlayback } from '../series-playback.js';
   let { item, onopen, onplay, home = false } = $props();
 
   $effect(() => { if (!posterUrl(item)) enrichItem(item.id); });
@@ -13,7 +13,7 @@
   const runtime = $derived(item.runtime && item.runtime !== 'N/A' ? item.runtime : '');
   const genres = $derived((item.genre || (item.genres || []).join(', ') || '').split(',').slice(0, 3).map((g) => g.trim()).filter(Boolean));
   const plot = $derived(item.plot && item.plot !== 'N/A' ? item.plot : '');
-  const playTarget = $derived(seriesPlayTarget(item, $library));
+  const playTarget = $derived(cardPlayback(item, $seriesIndex, $watchState));
   const resuming = $derived(playTarget?.progress?.percent > 0 && playTarget?.progress?.percent < AUTO_WATCHED_PERCENT);
 
   // The real star of the hero: a landscape still from the actual file.

@@ -1,19 +1,20 @@
 <script>
   import Hero from '../lib/components/Hero.svelte';
   import Row from '../lib/components/Row.svelte';
-  import { continueWatching, recentlyAdded, genreClusters, libraryStats, library, collapseShows } from '../lib/stores.js';
+  import { continueWatching, recentlyAdded, genreClusters, libraryStats, catalog, watchState, collapseShows } from '../lib/stores.js';
   import { posterUrl } from '../lib/api.js';
   import { navigate } from '../lib/router.js';
   import { moods, moodMatches, discoveryPool, nextPick } from '../lib/home-discovery.js';
   let { onopen, onplay } = $props();
   const featured = $derived($continueWatching[0] || $recentlyAdded[0] || null);
-  const pool = $derived(discoveryPool($library, featured?.id));
+  const movies = $derived($catalog.filter(i => i.type === 'movie'));
+  const pool = $derived(discoveryPool(movies.map(i => ({ ...i, ...$watchState[i.id] })), featured?.id));
   let pickId = $state('');
   let pickFailed = $state(false);
   const pick = $derived(pool.find(i => i.id === pickId) || pool[0] || null);
   $effect(() => { pick?.id; pickFailed = false; });
   let mood = $state('');
-  const moodItems = $derived(mood ? collapseShows(moodMatches($library, mood)).slice(0,40) : []);
+  const moodItems = $derived(mood ? collapseShows(moodMatches($catalog, mood)).slice(0,40) : []);
   function shuffle() { pickId = nextPick(pool, pick?.id)?.id || ''; }
   function surprise() {
     const choice = nextPick(pool, pick?.id);

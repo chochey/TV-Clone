@@ -1,6 +1,6 @@
 <script>
   import { api, posterUrl, backdropUrl } from '../lib/api.js';
-  import { library, libraryLoaded, session, enrichItem, AUTO_WATCHED_PERCENT } from '../lib/stores.js';
+  import { library, updateWatchState, libraryLoaded, session, enrichItem, AUTO_WATCHED_PERCENT } from '../lib/stores.js';
   import { navigate } from '../lib/router.js';
   import { seriesEpisodes, seriesPlayTarget } from '../lib/series-playback.js';
   import { episodeTitle, episodeCode } from '../lib/format.js';
@@ -86,7 +86,7 @@
   async function toggleWatched(target) {
     const newVal = !target.watched;
     try { await api.toggleWatched(target.id, newVal, $session?.profileId); } catch { return; }
-    library.update((list) => list.map((i) => (i.id === target.id ? { ...i, watched: newVal } : i)));
+    updateWatchState(target.id, { watched: newVal });
     if (full && target.id === full.id) full = { ...full, watched: newVal };
   }
 

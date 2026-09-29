@@ -1,7 +1,8 @@
 <script>
+  import { updateWatchState } from '../stores.js';
   import { onMount, onDestroy } from 'svelte';
   import { api, streamUrl, posterUrl, backdropUrl } from '../api.js';
-  import { library, session, dismissed, AUTO_WATCHED_PERCENT } from '../stores.js';
+  import { session, dismissed, AUTO_WATCHED_PERCENT } from '../stores.js';
   import { startPlayback, STARTUP_ERROR, startupFragmentCount, startHlsFromPosition } from '../playback-startup.js';
   import { loadHls, parseVtt, cueAt, fmtTime } from '../player-core.js';
   import { createPauseBookmark } from '../pause-resume.js';
@@ -596,9 +597,7 @@
     // AUTO_WATCHED_PERCENT, and it un-dismisses anything you actively play.
     // Without the first, finishing an episode leaves the show page still
     // offering the episode you just watched.
-    library.update((list) => list.map((i) => (
-      i.id === item.id ? { ...i, progress: prog, watched: i.watched || pct > AUTO_WATCHED_PERCENT } : i
-    )));
+    updateWatchState(item.id, current => ({ progress: prog, watched: current.watched || pct > AUTO_WATCHED_PERCENT }));
     if (pct > 0) {
       dismissed.update((d) => {
         if (!d.continueWatching?.[item.id]) return d;
