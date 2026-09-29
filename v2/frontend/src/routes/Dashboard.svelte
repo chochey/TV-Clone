@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { api } from '../lib/api.js';
   import { createRefreshLoop } from '../lib/refresh-loop.js';
+  import { physicalDriveWarnings } from '../lib/storage-warnings.js';
 
   let stats = $state(null);
   let sys = $state(null);
@@ -10,6 +11,7 @@
   let storage = $state(null); // {pool, drives} with SMART + projection
   let watching = $state([]);
   let refreshError = $state('');
+  const driveWarnings = $derived(physicalDriveWarnings(sys?.disks || storage?.drives || []));
 
   // How a live stream is reaching the viewer. The cheap paths hand the file's
   // own video through untouched; the transcode paths rebuild every frame, so
@@ -124,6 +126,15 @@
 
     <section class="card wide">
       <h2 class="meta">Storage</h2>
+      {#if (sys?.libraryScan || stats?.libraryScan)?.degraded}
+        <p class="warn" role="status">Some library locations could not be read during the last scan. Existing titles have been kept. Check the storage connection before removing missing titles.</p>
+      {/if}
+      {#each driveWarnings as d (d.mount)}
+        <p class="drive-warning" class:critical={d.percent >= 95} role="status">
+          <strong>{d.label}: {d.percent}% full · {fmtBytes(d.available)} free.</strong>
+          Downloads and conversions on this drive can run out of space even when the media pool has free space.
+        </p>
+      {/each}
       {#if storage?.pool}
         <div class="kv disk"><span>Media pool</span>
           <strong>{storage.pool.pct}%</strong>
@@ -186,6 +197,9 @@
   .good { color: #7ed491 !important; }
   .bad { color: #ff6b6b !important; }
   .warn { color: #ffb46b !important; }
+  .drive-warning { color: #ffb46b; padding: 12px; border: 1px solid currentColor; border-radius: var(--r-sm); font-size: 0.86rem; line-height: 1.5; }
+  .drive-warning strong { display: block; }
+  .drive-warning.critical { color: #ff6b6b; }
   /* Delivery badge on Now Watching. Outlined in currentColor so the colour
      comes entirely from the d-* modifier. Those are :global because they are
      applied dynamically and Svelte would otherwise prune them as unused. */

@@ -22,6 +22,7 @@
 
   const isActive = $derived(queue?.status === 'running' || queue?.status === 'paused' || queue?.status === 'stopping');
   const pct = $derived(queue?.total ? Math.round((queue.done / queue.total) * 100) : 0);
+  const driveWarnings = $derived(queue?.storage?.warnings || data?.disk?.drives || []);
 
   async function loadStatus() {
     if (statusLoading || closed) return;
@@ -273,7 +274,24 @@
     <section class="card">
       <h2>Disk impact</h2>
       {#if data.disk}
-        <div class="kv"><span>Free space on /mnt/media</span><strong>{fmtBytes(data.disk.availBytes)}</strong></div>
+        <div class="kv"><span>Free space across the media pool</span><strong>{fmtBytes(data.disk.availBytes)}</strong></div>
+        <p class="hint">Each conversion also checks its own physical drive. Free space on another drive cannot cover a full drive.</p>
+        {#each driveWarnings as d (d.mount)}
+          <p class="drive-warning" class:critical={d.percent >= 95} role="status">
+            <strong>{d.label || d.mount}: {d.percent}% full · {fmtBytes(d.available)} free.</strong>
+            {d.message || 'Conversions on this drive may need to wait for more space.'}
+          </p>
+        {/each}
+        {#if queue?.storage?.current}
+          {@const current = queue.storage.current}
+          <p class="hint">Current file drive: <strong>{current.label || current.mount || 'Unavailable'}</strong>.
+            {#if current.known}
+              {fmtBytes(current.available)} free{current.requiredBytes ? `; ${fmtBytes(current.requiredBytes)} required before writing` : ''}.
+            {:else}
+              Its free space could not be checked. Conversion will wait until the drive can be checked.
+            {/if}
+          </p>
+        {/if}
         {#if data.config.retainOriginals !== false}
         <div class="kv"><span>Worst-case retained originals</span><strong>{fmtBytes(data.disk.worstCaseRetainedBytes)}</strong>
           <em>if every eligible file converted inside one grace window</em></div>
@@ -502,22 +520,29 @@
       {:else}
         <div class="pilotlist">
           {#each originals.items as o (o.retainedPath)}
+            {@const canRestore = o.canRestore ?? o.restorable}
+            {@const replacementExists = o.replacementExists ?? o.restorable}
             <div class="pilotrow">
               <span class="pfile">{o.name}</span>
               <span class="ometa">
                 {fmtBytes(o.size)} · kept {o.ageDays}d
                 {#if o.expired}<span class="warn">· past {originals.keepOriginalsDays}d</span>{/if}
               </span>
-              {#if o.restorable}
+              {#if !replacementExists && canRestore}
+                <span class="warn">Converted copy missing — restore this original to recover the title.</span>
+              {/if}
+              {#if canRestore}
                 <button class="restorebtn" class:armed={restoreArmed === o.retainedPath}
                         onclick={() => restore(o)} disabled={!!restoringPath || cleanupBusy || isActive}>
                   {restoringPath === o.retainedPath ? 'Restoring…'
                     : restoreArmed === o.retainedPath ? 'Click again to restore' : 'Restore'}
                 </button>
+              {:else}
+                <span class="presult bad" title="The original location already contains a file, so restoring would overwrite it">Restore unavailable</span>
+              {/if}
+              {#if replacementExists}
                 <button class="qbtn danger" onclick={() => previewCleanup('single', o.retainedPath)}
                         disabled={cleanupBusy || !!restoringPath || isActive}>Delete original…</button>
-              {:else}
-                <span class="presult bad" title="The converted file is no longer at its expected path">can't restore</span>
               {/if}
             </div>
           {/each}
@@ -549,6 +574,9 @@
   h1 { font-size: clamp(1.8rem, 3.4vw, 2.6rem); }
   .sub { color: var(--ink-soft); font-size: 0.9rem; }
   .err { color: #ff6b6b; margin-bottom: var(--s3); }
+  .drive-warning { color: #ffb46b; padding: 12px; border: 1px solid currentColor; border-radius: var(--r-sm); font-size: 0.86rem; line-height: 1.5; margin: var(--s3) 0; }
+  .drive-warning strong { display: block; }
+  .drive-warning.critical { color: #ff6b6b; }
 
   .card {
     background: var(--bg-raised); border: 1px solid var(--line);

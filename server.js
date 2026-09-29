@@ -14,7 +14,7 @@ const app = express();
 // Trust reverse proxy headers (X-Forwarded-For) for accurate req.ip in rate limiting
 if (process.env.TRUST_PROXY) app.set('trust proxy', process.env.TRUST_PROXY === 'true' ? true : process.env.TRUST_PROXY);
 const PORT = parseInt(process.env.PORT, 10) || 4800;
-const CONFIG_FILE = path.join(__dirname, 'config.json');
+const CONFIG_FILE = process.env.TVCLONE_CONFIG_FILE || path.join(__dirname, 'config.json');
 const DATA_DIR = path.join(__dirname, 'data');
 const TRANSCODE_DIR = path.join(__dirname, PORT === 4800 ? 'transcode_tmp' : `transcode_tmp_${PORT}`);
 const COOKIE_NAME = PORT === 4800 ? 'session' : `session_${PORT}`;
@@ -136,7 +136,7 @@ const DEFAULT_CONFIG = {
   genres: {},  // fileId -> [genre strings]
 };
 
-const { loadJSON, saveJSON, saveJSONSync, saveRaw } = require('./lib/json-store');
+const { loadJSON, saveJSON, saveJSONStrict, saveJSONSync, saveRaw } = require('./lib/json-store');
 
 // ── Auth module (sessions, admin/cast tokens, password hashing) ───────
 const auth = require('./lib/auth')({
@@ -202,8 +202,8 @@ async function ensureLibrary(req, res, next) {
 }
 
 // Per-profile data (lib/profile-data.js)
-const { revision: profileRevision, loadProfileData, saveProfileData, cache: profileDataCache, sanitizeProfileId, profileDataPath } =
-  require('./lib/profile-data')({ DATA_DIR, loadJSON, saveJSON });
+const { revision: profileRevision, loadProfileData, saveProfileData, saveProfileDataStrict, cache: profileDataCache, sanitizeProfileId, profileDataPath } =
+  require('./lib/profile-data')({ DATA_DIR, loadJSON, saveJSON, saveJSONStrict });
 
 // Content requests (lib/requests.js) — users ask, admin fulfills via Downloads
 const requests = require('./lib/requests')({ DATA_DIR, loadJSON, saveJSON });
@@ -228,11 +228,11 @@ const storageHealth = require('./lib/storage-health')({
 // ── Library scanner ──────────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════
 
-const { findPosterInDir: _findPoster, findSubtitles: _findSubs } = require('./lib/fs-helpers');
+const { findPosterInDir: _findPoster, createDirectoryLookup } = require('./lib/fs-helpers');
+const { preserveFailedEntries, libraryChanged, publicScanState } = require('./lib/library-scan-state');
 const { buildFfmpegArgs } = require('./lib/ffmpeg-args');
 const { embeddedTracks, BITMAP_CODECS } = require('./lib/subtitle-tracks');
 const findPosterInDir = (dir, baseName) => _findPoster(dir, baseName, POSTER_EXT);
-const findSubtitles = (dir, baseName) => _findSubs(dir, baseName, SUBTITLE_EXT);
 
 let fileIndex = {};      // id -> absolute video path
 let posterIndex = {};    // id -> absolute poster path
@@ -323,15 +323,14 @@ const SKIP_DIRS = new Set(['featurettes','extras','behind the scenes','deleted s
 
 // Async walk: every readdir yields to the event loop, so a full-library
 // walk over slow mergerfs never stalls HLS segment delivery.
-async function walkDirAsync(dir, collected) {
-  let entries;
-  try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); } catch { return; }
+async function walkDirAsync(dir, collected, lookup) {
+  const entries = await lookup.readDir(dir);
   for (const entry of entries) {
     if (entry.name.startsWith('.')) continue;
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       if (SKIP_DIRS.has(entry.name.toLowerCase())) continue;
-      await walkDirAsync(full, collected);
+      await walkDirAsync(full, collected, lookup);
     } else if (entry.isFile()) {
       const ext = path.extname(entry.name).toLowerCase();
       if (SUPPORTED_EXT.includes(ext)) collected.push(full);
@@ -340,6 +339,7 @@ async function walkDirAsync(dir, collected) {
 }
 
 let libraryCache = null;
+let libraryScanState = { degraded: false, failedLocations: [], retainedCount: 0, lastScanAt: 0 };
 const LIBRARY_CACHE_FILE = path.join(DATA_DIR, 'library_cache.json');
 
 function saveLibraryCache() {
@@ -426,13 +426,15 @@ async function doRescan(trigger) {
   const newFileIndex = {};
   const newPosterIndex = {};
   const newSubtitleIndex = {};
+  const previousIndexes = { files: fileIndex, posters: posterIndex, subtitles: subtitleIndex };
+  const lookup = createDirectoryLookup();
 
   for (const folder of config.folders) {
     const dirPath = folder.path;
-    if (!dirPath || !fs.existsSync(dirPath)) continue;
+    if (!dirPath) continue;
 
     const videoPaths = [];
-    await walkDirAsync(dirPath, videoPaths);
+    await walkDirAsync(dirPath, videoPaths, lookup);
 
     for (const fullPath of videoPaths) {
       const file = path.basename(fullPath);
@@ -442,14 +444,18 @@ async function doRescan(trigger) {
       const type = detectType(file, folder.type);
       const id = hashId(fullPath);
 
+      let fileSize, addedAt;
+      try { const st = await fs.promises.stat(fullPath); fileSize = st.size; addedAt = st.mtimeMs; }
+      catch (err) { lookup.recordFailure(fullPath, err); continue; }
+
       newFileIndex[id] = fullPath;
 
       // Poster (check file's own directory)
-      const posterAbsPath = findPosterInDir(fileDir, baseName);
+      const posterAbsPath = await lookup.poster(fileDir, baseName, POSTER_EXT);
       if (posterAbsPath) newPosterIndex[id] = posterAbsPath;
 
       // External subtitles (check file's own directory)
-      const subs = findSubtitles(fileDir, baseName);
+      const subs = await lookup.subtitles(fileDir, baseName, SUBTITLE_EXT);
       for (const s of subs) {
         newSubtitleIndex[s.id] = { absPath: s.absPath, format: s.format };
       }
@@ -470,11 +476,6 @@ async function doRescan(trigger) {
         // If the file is directly in the library root, fall back to filename parsing
         showName = (topFolder !== file) ? topFolder : (parseShowName(file) || title);
       }
-
-      // File size & modification time. Async stat doubles as the per-file
-      // event-loop yield that keeps streaming smooth during a scan.
-      let fileSize = 0, addedAt = 0;
-      try { const st = await fs.promises.stat(fullPath); fileSize = st.size; addedAt = st.mtimeMs; } catch {}
 
       // Genres from config
       const genres = config.genres[id] || folder.genres || [];
@@ -508,21 +509,35 @@ async function doRescan(trigger) {
     }
   }
 
-  // Safety check: if scan returns 0 files but folders are configured,
-  // it's likely a mount/permission issue. Keep serving the existing cache.
-  if (library.length === 0 && config.folders.length > 0 && libraryCache && libraryCache.length > 0) {
-    console.warn(`  [scan] WARNING: scan found 0 files but cache has ${libraryCache.length}. Likely mount issue — keeping existing cache.`);
-    recordScan({ count: 0, durationMs: Date.now() - _scanStart, trigger, skipped: 'mount-issue' });
-    return libraryCache;
+  let unavailableBranches = [];
+  if (config.folders.some(folder => folder.path === '/mnt/media' || folder.path?.startsWith('/mnt/media/'))) {
+    try {
+      const health = await conversionStorage.scanHealth();
+      unavailableBranches = health.unavailableBranches;
+      if (health.degraded) lookup.recordFailure(health.poolMount, { code: 'EDRIVE' });
+    } catch { lookup.recordFailure('/mnt/media', { code: 'EDRIVE' }); }
   }
+  // Keep the previous all-empty safeguard too: an unmounted pool may leave
+  // readable empty mountpoint directories instead of returning an I/O error.
+  if (!library.length && config.folders.length && libraryCache?.length && !lookup.failures().length) {
+    for (const folder of config.folders) if (folder.path) lookup.recordFailure(folder.path, { code: 'EMPTY_SCAN' });
+  }
+  const failures = lookup.failures();
+  const retainedCount = preserveFailedEntries({ items: library,
+    indexes: { files: newFileIndex, posters: newPosterIndex, subtitles: newSubtitleIndex },
+    previous: libraryCache || [], previousIndexes, failures,
+    roots: config.folders.map(folder => folder.path).filter(Boolean) });
+  const wasDegraded = libraryScanState.degraded;
+  libraryScanState = { degraded: failures.length > 0, failedLocations: failures, unavailableBranches, retainedCount, lastScanAt: Date.now() };
+  if (failures.length) console.warn(`  [scan] ${failures.length} unavailable location(s); keeping ${retainedCount} cached media item(s)`);
+  if (wasDegraded !== libraryScanState.degraded) notifyClients('library-updated');
 
   library.sort((a, b) => a.title.localeCompare(b.title, undefined, { numeric: true }));
 
-  // Did content actually change? Both arrays are sorted, so a positional
-  // compare works. addedAt catches in-place file replacements.
+  // Artwork, subtitles and post-probe playback metadata change the response
+  // even when the video's ID and modification time stay the same.
   const prev = libraryCache;
-  const changed = !prev || prev.length !== library.length ||
-    library.some((it, i) => prev[i].id !== it.id || prev[i].addedAt !== it.addedAt);
+  const changed = libraryChanged(prev, library);
 
   // Atomic swap
   fileIndex = newFileIndex;
@@ -532,7 +547,8 @@ async function doRescan(trigger) {
   if (changed) libraryVersion++;
 
   saveLibraryCache();
-  recordScan({ count: libraryCache.length, durationMs: Date.now() - _scanStart, trigger });
+  recordScan({ count: libraryCache.length, durationMs: Date.now() - _scanStart, trigger,
+    degraded: libraryScanState.degraded, retainedCount });
   // Auto-fulfill open requests whose title just landed in the library.
   // (Clients refetch requests on the library-updated SSE event.)
   try { requests.matchLibrary(libraryCache); } catch (e) { console.error('[Requests] matchLibrary:', e.message); }
@@ -573,7 +589,7 @@ if (_migrated) saveJSONSync(CONFIG_FILE, config);
 
 // Health / ready check — frontend uses this to show loading screen
 app.get('/api/health', (_req, res) => {
-  res.json({ ready: serverReady, status: serverReadyStatus, uptime: process.uptime() });
+  res.json({ ready: serverReady, status: serverReadyStatus, uptime: process.uptime(), libraryScan: publicScanState(libraryScanState) });
 });
 
 // Profiles — only return list to authenticated sessions (hide from public)
@@ -918,7 +934,8 @@ app.get('/api/library', requireAuth, (req, res) => {
   const etag = libraryEtag({ profileId, profileRevision: profileRevision(profileId),
     libraryVersion, omdbVersion: omdb.cacheVersion || omdb.cacheSize,
     overrideVersion: metadataOverrides.revision, query: req.query });
-  res.set({ ETag: etag, 'Cache-Control': 'private, no-cache', Vary: 'Cookie, X-Session-Token' });
+  res.set({ ETag: etag, 'Cache-Control': 'private, no-cache', Vary: 'Cookie, X-Session-Token',
+    'X-Library-Degraded': String(libraryScanState.degraded) });
   if (req.fresh) return res.status(304).end();
 
   // Slim response: exclude heavy fields not needed for browsing
@@ -1624,7 +1641,8 @@ app.get('/api/stats', requireAuth, (_req, res) => {
     }
   }
 
-  res.json({ totalFiles: lib.length, totalSize, movies, episodes, shows, byFolder, customTypes });
+  res.json({ totalFiles: lib.length, totalSize, movies, episodes, shows, byFolder, customTypes,
+    libraryScan: publicScanState(libraryScanState) });
 });
 
 // ══════════════════════════════════════════════════════════════════════
@@ -1717,37 +1735,12 @@ app.get('/api/browse', requireAdmin, (req, res) => {
 // ── Streaming & File serving ─────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════
 
-app.get('/stream/:id', requireAuth, ensureLibrary, (req, res) => {
+const { streamMediaFile } = require('./lib/direct-stream');
+app.get('/stream/:id', requireAuth, ensureLibrary, async (req, res) => {
   const filePath = fileIndex[req.params.id];
-  if (!filePath || !fs.existsSync(filePath)) return res.status(404).send('File not found');
+  if (!filePath) return res.status(404).send('File not found');
   lastPlaybackAt = Date.now(); // pause sprite gen during direct play
-
-  const stat = fs.statSync(filePath);
-  const fileSize = stat.size;
-  const ext = path.extname(filePath).toLowerCase();
-  const mimeTypes = { '.mp4': 'video/mp4', '.mkv': 'video/x-matroska', '.avi': 'video/x-msvideo' };
-  const contentType = mimeTypes[ext] || 'application/octet-stream';
-  const range = req.headers.range;
-
-  if (range) {
-    const parts = range.replace(/bytes=/, '').split('-');
-    let start = Number(parts[0]) || 0;
-    let end = parts[1] ? Number(parts[1]) : fileSize - 1;
-    // Validate range
-    if (isNaN(start) || isNaN(end) || start < 0 || end >= fileSize || start > end) {
-      return res.status(416).send('Requested Range Not Satisfiable');
-    }
-    res.writeHead(206, {
-      'Content-Range': `bytes ${start}-${end}/${fileSize}`,
-      'Accept-Ranges': 'bytes',
-      'Content-Length': end - start + 1,
-      'Content-Type': contentType,
-    });
-    fs.createReadStream(filePath, { start, end }).pipe(res);
-  } else {
-    res.writeHead(200, { 'Content-Length': fileSize, 'Content-Type': contentType, 'Accept-Ranges': 'bytes' });
-    fs.createReadStream(filePath).pipe(res);
-  }
+  await streamMediaFile(req, res, filePath, { onError: err => recordError('direct-stream', err.message) });
 });
 
 app.get('/poster/:id', requireAuth, ensureLibrary, (req, res) => {
@@ -2360,14 +2353,16 @@ app.get('/api/admin/error-logs', requirePermission('canLogs'), (_req, res) => {
 });
 
 const systemStats = require('./lib/system-stats')();
-app.get('/api/system/stats', requirePermission('canDashboard'), (_req, res) => {
-  res.json(systemStats.snapshot({ activeTranscodes: Object.keys(transcodeSessions).length }));
+app.get('/api/system/stats', requirePermission('canDashboard'), async (_req, res) => {
+  try { res.json({ ...(await systemStats.snapshot({ activeTranscodes: Object.keys(transcodeSessions).length })),
+    libraryScan: publicScanState(libraryScanState) }); }
+  catch { res.status(503).json({ error: 'System status is temporarily unavailable' }); }
 });
 
 // Pool + per-drive fill, SMART health, fill-rate projection.
 app.get('/api/storage', requirePermission('canDashboard'), async (_req, res) => {
   try {
-    res.json({ ok: true, ...(await storageHealth.snapshot()) });
+    res.json({ ok: true, ...(await storageHealth.snapshot()), libraryScan: libraryScanState });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
@@ -2404,6 +2399,7 @@ app.put('/api/conversion/config', requireAdminSession, (req, res) => {
   res.json({ ok: true, config: updated });
 });
 
+const conversionStorage = require('./lib/conversion-storage')();
 app.get('/api/conversion/plan', requireAdminSession, (req, res) => {
   const includeImageSubs = req.query.includeImageSubs === '1' || req.query.includeImageSubs === 'true';
   const lib = scanLibrary();
@@ -2428,8 +2424,8 @@ app.get('/api/conversion/plan', requireAdminSession, (req, res) => {
   // appear here until something plays them or a rescan backfills probe data.
   const notYetProbed = files.filter((f) => !f.videoCodec).length;
 
-  storageHealth.snapshot()
-    .then(({ pool }) => {
+  Promise.all([storageHealth.snapshot(), conversionStorage.snapshot(null)])
+    .then(([{ pool }, storage]) => {
       const config = conversionConfig.get();
       const worst = plan.totals.worstCaseRetainedBytes;
       const budget = config.retainedBudgetGB * 1e9;
@@ -2437,15 +2433,17 @@ app.get('/api/conversion/plan', requireAdminSession, (req, res) => {
         ok: true, plan, config, notYetProbed,
         hardware: { cpuCores: require('os').availableParallelism(), model: require('os').cpus()[0]?.model || '' },
         eligibleSelected: eligibleContainerFiles(config).length,
-        disk: pool ? {
-          availBytes: pool.avail,
+        disk: {
+          availBytes: pool?.avail ?? null,
           worstCaseRetainedBytes: worst,
           // Two independent checks: would the worst case alone blow the
           // budget the user set, and would it blow what the disk actually
           // has free. Either is worth a loud warning before anything runs.
           exceedsBudget: worst > budget,
-          exceedsFreeSpace: worst > pool.avail,
-        } : null,
+          exceedsFreeSpace: pool ? worst > pool.avail : false,
+          drives: storage.warnings,
+          spaceCheck: 'physical drive per file',
+        },
       });
     })
     .catch((err) => res.status(500).json({ ok: false, error: err.message }));
@@ -2465,7 +2463,7 @@ const conversionWorker = require('./lib/conversion-worker')({
   getActiveTranscodeFilePaths: () => new Set(
     Object.values(transcodeSessions).map((s) => s.filePath).filter(Boolean),
   ),
-  loadProfileData, saveProfileData,
+  loadProfileData, saveProfileData, saveProfileDataStrict,
   profileIds: () => config.profiles.map((p) => p.id),
   TEXT_SUB_CODECS,
   // Read per file rather than captured once, so a limit changed mid-run takes
@@ -2480,8 +2478,8 @@ const conversionWorker = require('./lib/conversion-worker')({
 // Image-subtitle files are excluded for the same reason the planner excludes
 // them — a container change cannot carry PGS/VOBSUB across without OCR.
 function eligibleContainerFiles(cfg) {
-
   const out = [];
+  const sizes = new Map();
   for (const item of scanLibrary()) {
     const filePath = item._filePath;
     if (!filePath) continue;
@@ -2496,17 +2494,12 @@ function eligibleContainerFiles(cfg) {
       subs: subProbeCache[filePath] || [],
     }, {includeModernVideo: true});
     const tier = ['audioOnly','both'].includes(c.tier) ? 'audio' : c.tier;
-    if (tier && cfg.tiers[tier] && !c.hasImageSubs) out.push(filePath);
+    if (tier && cfg.tiers[tier] && !c.hasImageSubs) { out.push(filePath); sizes.set(filePath, item.fileSize || 0); }
   }
   // Smallest first: a run that is stopped early has then converted the most
   // files it could have, and any problem shows up on a cheap file rather than
   // after twenty minutes on a large one.
-  out.sort((a, b) => {
-    let sa = 0, sb = 0;
-    try { sa = fs.statSync(a).size; } catch {}
-    try { sb = fs.statSync(b).size; } catch {}
-    return sa - sb;
-  });
+  out.sort((a, b) => sizes.get(a) - sizes.get(b));
   return out;
 }
 
@@ -2532,8 +2525,10 @@ const conversionQueue = require('./lib/conversion-queue')({
   log: (msg) => console.log(`[conversion] ${msg}`),
 });
 
-app.get('/api/conversion/status', requireAdminSession, (_req, res) => {
-  res.json({ ok: true, ...conversionQueue.snapshot() });
+app.get('/api/conversion/status', requireAdminSession, async (_req, res) => {
+  const status = conversionQueue.snapshot();
+  try { res.json({ ok: true, ...status, storage: await conversionStorage.snapshot(status.currentPath) }); }
+  catch { res.json({ ok: true, ...status, storage: { warnings: [], current: null, unavailable: true } }); }
 });
 
 app.post('/api/conversion/start', requireAdminSession, (_req, res) => {
@@ -3710,7 +3705,7 @@ app.post('/api/organizer/preview', requireAdminSession, async (_req, res) => {
   const cwd = path.dirname(ORGANIZER_SCRIPT);
   const child = spawn(process.env.ORGANIZER_PYTHON || 'python3', [ORGANIZER_SCRIPT, '--dry-run'], {
     cwd,
-    env: { ...process.env, ORGANIZER_ALIAS_FILE },
+    env: { ...process.env, ORGANIZER_ALIAS_FILE, ORGANIZER_PREVIEW: '1' },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let output = '';

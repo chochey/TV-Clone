@@ -4,6 +4,7 @@
   import { navigate } from '../lib/router.js';
   import { seriesEpisodes, seriesPlayTarget } from '../lib/series-playback.js';
   import { episodeTitle, episodeCode } from '../lib/format.js';
+  import { deleteBatchResult } from '../lib/delete-batch-result.js';
 
   let { id, onplay } = $props();
 
@@ -93,25 +94,28 @@
   // ── Delete ─────────────────────────────────────────────────────────
   let showDeleteConfirm = $state(false);
   let deleting = $state(false);
+  let deleteError = $state('');
 
   const deleteTargets = $derived(isShow ? episodes : (m.id ? [m] : []));
   const deleteCount = $derived(deleteTargets.length);
 
   async function confirmDelete() {
-    deleting = true;
+    deleting = true; deleteError = '';
     try {
       // One batched request for the whole show — the server pays the
       // library-cache rewrite once instead of once per episode.
-      await api.deleteMediaBatch(deleteTargets.map((t) => t.id));
+      const result = deleteBatchResult(deleteTargets.map((t) => t.id), await api.deleteMediaBatch(deleteTargets.map((t) => t.id)));
       library.update((list) => {
-        const ids = new Set(deleteTargets.map((t) => t.id));
+        const ids = new Set(result.deletedIds);
         return list.filter((i) => !ids.has(i.id));
       });
-      navigate('/');
-    } catch (err) {
-      deleting = false;
       showDeleteConfirm = false;
-    }
+      if (result.failed.length) deleteError = result.error;
+      else navigate('/');
+    } catch (err) {
+      deleteError = err.body?.error || err.message || 'Could not delete this title. Please try again.';
+      showDeleteConfirm = false;
+    } finally { deleting = false; }
   }
 </script>
 
@@ -162,6 +166,7 @@
             {#if isShow && seasons.length}<span>{seasons.length} season{seasons.length > 1 ? 's' : ''}</span>{/if}
             {#if genres.length}<span>{genres.slice(0, 4).join(', ')}</span>{/if}
           </div>
+          {#if deleteError}<p class="warn" role="alert">{deleteError}</p>{/if}
           {#if plot}<p class="plot">{plot}</p>{/if}
           <div class="actions">
             <button class="play" onclick={() => playTarget && onplay?.(playTarget)}>
@@ -207,7 +212,7 @@
               {@const pct = e.progress?.percent || 0}
               <div class="ep" class:nextup={e.id === nextUp?.id} role="button" tabindex="0"
                    onclick={() => onplay?.(e)}
-                   onkeydown={(ev) => (ev.key === 'Enter' || ev.key === ' ') && onplay?.(e)}>
+                   onkeydown={(ev) => { if (ev.target === ev.currentTarget && (ev.key === 'Enter' || ev.key === ' ')) { ev.preventDefault(); onplay?.(e); } }}>
                 <span class="num">{e.epInfo?.episode === 0 ? 'SP' : (e.epInfo?.episode ?? '·')}</span>
                 <div class="eptext">
                   <span class="eptitle">{episodeTitle(e)}</span>

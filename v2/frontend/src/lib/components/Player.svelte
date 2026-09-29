@@ -4,6 +4,8 @@
   import { api, streamUrl, posterUrl, backdropUrl } from '../api.js';
   import { session, dismissed, AUTO_WATCHED_PERCENT } from '../stores.js';
   import { startPlayback, STARTUP_ERROR, startupFragmentCount, startHlsFromPosition } from '../playback-startup.js';
+  import { startDirectPlayback, directPlaybackError } from '../direct-playback.js';
+  import { createSpriteLoader } from '../sprite-loader.js';
   import { loadHls, parseVtt, cueAt, fmtTime } from '../player-core.js';
   import { createPauseBookmark } from '../pause-resume.js';
   import { forcedEnglishSubtitle } from '../subtitle-selection.js';
@@ -171,21 +173,21 @@
     buffering = true;
     cur = start;
     seekOffset = 0;
-    video.pause();
-    video.src = streamUrl(item);
-    video.addEventListener('loadedmetadata', () => {
-      if (seq !== loadSeq || destroyed) return;
-      video.currentTime = start;
-      timelineReady = true;
-      cancelStartup = startPlayback(video, {
-        isCurrent: () => seq === loadSeq && !destroyed,
-        onSlow: () => { notice = 'Resuming video…'; },
-        onBlocked: () => { startupPending = false; buffering = false; notice = 'Press Play to resume.'; },
-        onTimeout: () => { startupPending = false; buffering = false; error = STARTUP_ERROR; },
-      });
-    }, { once: true });
-    // Keep the initial play request within the user's gesture for autoplay.
-    video.play().catch(() => {});
+    cancelStartup = startDirectPlayback(video, streamUrl(item), start, {
+      isCurrent: () => seq === loadSeq && !destroyed,
+      onMetadata: () => { timelineReady = true; },
+      onSlow: () => { notice = 'Preparing video…'; },
+      onBlocked: () => { startupPending = false; buffering = false; notice = 'Press Play to resume.'; },
+      onTimeout: () => { startupPending = false; buffering = false; error = STARTUP_ERROR; },
+    });
+  }
+
+  function onVideoError() {
+    if (destroyed || !isDirect || !video?.error) return;
+    cancelStartup();
+    startupPending = false;
+    buffering = false;
+    error = directPlaybackError(video.error);
   }
 
   let busyRetries = 0;
@@ -760,36 +762,18 @@
   // ── Seek-preview sprites (v1's sheets: cols×rows tiles, one per
   // interval seconds; generate-on-demand, poll while the server bakes) ──
   let sprite = $state(null); // {totalSheets, cols, rows, width, height, interval}
-  let spritePollTimer = null;
-  let spritePreloaded = false;
   function preloadSheets(meta) {
     for (let s = 0; s < meta.totalSheets; s++) {
       const img = new Image();
       img.src = `/api/sprites/${encodeURIComponent(item.id)}/${s}`;
     }
   }
-  async function loadSprites() {
-    try {
-      const r = await fetch(`/api/sprites/${encodeURIComponent(item.id)}/generate`, { method: 'POST', credentials: 'same-origin' });
-      if (!r.ok) return;
-      const data = await r.json();
-      // Use the meta as soon as it exists (v1 does the same): sheets that are
-      // already on disk preview immediately, missing ones 404 to a black tile
-      // and pop in on the next poll. Waiting for 'ready' meant files whose
-      // last sheet can never bake showed no previews at all.
-      if (data.totalSheets > 0 && !sprite) sprite = data;
-      if (data.status === 'ready') {
-        sprite = data;
-        preloadSheets(data);
-      } else {
-        if (!spritePreloaded && data.totalSheets > 0) {
-          spritePreloaded = true;
-          preloadSheets(data);
-        }
-        spritePollTimer = setTimeout(loadSprites, 5000);
-      }
-    } catch {}
-  }
+  const spriteLoader = createSpriteLoader({
+    id: item.id,
+    isCurrent: () => !destroyed,
+    onData: data => { if (data.totalSheets > 0 && (!sprite || data.status === 'ready')) sprite = data; },
+    preload: preloadSheets,
+  });
   // Sprites bake at 160×90 server-side; display them scaled up — the mild
   // upscale reads fine for a soft preview and beats rebaking every sheet.
   const THUMB_SCALE = 1.5;
@@ -892,7 +876,7 @@
     if (isDirect) { seekOffset = 0; loadDirect(start); }
     else loadHlsSession(start);
 
-    loadSprites();
+    spriteLoader.load();
     // Don't block playback on this — the button just appears once it lands.
     api.skipSegments(item.id).then((s) => {
       const i = s?.intro;
@@ -923,7 +907,7 @@
     clearTimeout(idleTimer);
     clearTimeout(retryTimer);
     clearTimeout(touchTapTimer);
-    clearTimeout(spritePollTimer);
+    spriteLoader.stop();
     stopFrameCounter();
     // Must come off before the final save: a listener left behind would keep a
     // closure over this item and could beacon a stale position later, clobbering
@@ -1002,6 +986,7 @@
     onprogress={onProgress}
     ondurationchange={() => { videoDur = video?.duration || 0; }}
     onended={handleEnded}
+    onerror={onVideoError}
   ></video>
 
   {#if cueText}

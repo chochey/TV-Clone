@@ -24,6 +24,7 @@
   let fixTo = $state({});         // entryId -> corrected title input
   let fixBusy = $state({});       // entryId -> saving flag
   let fixDone = $state({});       // entryId -> 'retrying' message
+  let fixError = $state({});
   const hot = $derived((fq?.queue || []).filter((e) => e.stillPresent));
   const history = $derived((fq?.queue || []).filter((e) => !e.stillPresent));
 
@@ -41,7 +42,8 @@
   // Save the alias, then bounce the organizer so it re-scans Share with it.
   async function saveFix(entry) {
     const to = (fixTo[entry.id] || '').trim();
-    if (!to) return;
+    if (!to || fixBusy[entry.id]) return;
+    fixError[entry.id] = '';
     fixBusy[entry.id] = true;
     try {
       await api.organizerAliasSave({
@@ -53,7 +55,7 @@
       fixDone[entry.id] = 'Alias saved — organizer is retrying…';
       later(async () => { await loadFixQueue(); if (!closed) fixDone[entry.id] = ''; }, 8000);
     } catch (e) {
-      fixDone[entry.id] = e.body?.error || 'Failed to save alias';
+      fixError[entry.id] = e.body?.error || 'Failed to save alias. Please try again.';
     } finally {
       fixBusy[entry.id] = false;
     }
@@ -182,6 +184,7 @@
               <button class="rsave" onclick={() => saveFix(e)} disabled={fixBusy[e.id] || !(fixTo[e.id] || '').trim()}>
                 {fixBusy[e.id] ? 'Saving…' : 'Fix & retry'}
               </button>
+              {#if fixError[e.id]}<p class="err" role="alert">{fixError[e.id]}</p>{/if}
             </div>
           {/if}
         </div>
