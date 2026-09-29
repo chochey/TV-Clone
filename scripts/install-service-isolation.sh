@@ -8,7 +8,8 @@ RUN_USER=chocheytv
 INSTALL_BACKUP="${3:-/var/backups/tvclone-isolation-$(date +%Y%m%d-%H%M%S)}"
 if [[ -L "$REPO_DIR/data" || -L "$REPO_DIR/transcode_tmp" ]]; then echo "State directories must be regular directories" >&2; exit 1; fi
 install -d -m 0700 "$INSTALL_BACKUP"
-getfacl -Rp "$REPO_DIR/data" "$REPO_DIR/transcode_tmp" /home/blue /media/blue "$REPO_DIR/media-organizer/config.py" "$REPO_DIR/media-organizer/organizer_aliases.json" >"$INSTALL_BACKUP/access.acl"
+getfacl -Rp "$REPO_DIR/data" "$REPO_DIR/transcode_tmp" >"$INSTALL_BACKUP/access.acl"
+getfacl -p /home/blue /media/blue "$REPO_DIR/media-organizer/config.py" "$REPO_DIR/media-organizer/organizer_aliases.json" >>"$INSTALL_BACKUP/access.acl"
 cp -a /etc/systemd/system/tvclone-prod.service.d "$INSTALL_BACKUP/app-dropins"
 cp -a "$REPO_DIR/config.json" "$INSTALL_BACKUP/config.json"
 cp -a "$REPO_DIR/media-organizer/movie_renamer.py" "$INSTALL_BACKUP/movie_renamer.py"
