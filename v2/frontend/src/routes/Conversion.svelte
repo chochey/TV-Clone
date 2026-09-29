@@ -239,7 +239,7 @@
         </div>
         <p class="hint">
           H.264 video with non-browser or surround-only audio. Adds a stereo AAC
-          track first, while keeping additional audio tracks and retaining the original file.
+          track first, while keeping additional audio tracks.
           {data.plan.tiers.audio.breakdown.both.count} of these also need a container fix,
           done as part of the same job.
         </p>
@@ -274,6 +274,7 @@
       <h2>Disk impact</h2>
       {#if data.disk}
         <div class="kv"><span>Free space on /mnt/media</span><strong>{fmtBytes(data.disk.availBytes)}</strong></div>
+        {#if data.config.retainOriginals !== false}
         <div class="kv"><span>Worst-case retained originals</span><strong>{fmtBytes(data.disk.worstCaseRetainedBytes)}</strong>
           <em>if every eligible file converted inside one grace window</em></div>
         <div class="kv"><span>Retention budget (config)</span><strong>{data.config.retainedBudgetGB} GB</strong></div>
@@ -283,6 +284,9 @@
           <p class="warn">Worst-case retention exceeds the configured budget — the queue waits when its retention budget is reached. Review and clean up old originals manually to free space.</p>
         {:else}
           <p class="ok">Worst-case retention fits within both free space and the configured budget.</p>
+        {/if}
+        {:else}
+          <p class="hint">Old files are deleted after each successful conversion. Temporary space is still needed for one replacement, and the minimum free-space limit still applies.</p>
         {/if}
       {:else}
         <p class="hint">Disk info unavailable.</p>
@@ -321,6 +325,15 @@
                  onchange={(e) => commitNumber('maxFilesPerRun', e.currentTarget.value)} />
         </label>
         <label class="field">
+          <span>After conversion</span>
+          <select value={data.config.retainOriginals === false ? 'delete' : 'keep'} disabled={saving || isActive}
+                  onchange={(e) => saveConfig({retainOriginals:e.currentTarget.value === 'keep'})}>
+            <option value="delete">Delete old file after verification</option>
+            <option value="keep">Keep old file for recovery</option>
+          </select>
+        </label>
+        {#if data.config.retainOriginals !== false}
+        <label class="field">
           <span>Keep originals <em>days</em></span>
           <input type="number" min="1" max="90" value={data.config.keepOriginalsDays} disabled={saving}
                  onchange={(e) => commitNumber('keepOriginalsDays', e.currentTarget.value)} />
@@ -330,6 +343,7 @@
           <input type="number" min="10" max="10000" value={data.config.retainedBudgetGB} disabled={saving}
                  onchange={(e) => commitNumber('retainedBudgetGB', e.currentTarget.value)} />
         </label>
+        {/if}
         <label class="field">
           <span>Schedule start</span>
           <input type="time" value={data.config.schedule.start} disabled={saving}
@@ -341,6 +355,9 @@
                  onchange={(e) => commitSchedule('end', e.currentTarget.value)} />
         </label>
       </div>
+      {#if data.config.retainOriginals === false}
+        <p class="hint">The old file is permanently deleted only after the replacement passes duration, audio, video and playback checks. Failed or stopped conversions keep the original. This setting applies to future conversions; existing backups can be deleted below.</p>
+      {/if}
       <button class="qbtn" disabled={saving} onclick={() => saveConfig({schedule:{start:'',end:''}})}>Run anytime</button>
       <label class="inlinecheck">
         <input type="checkbox" checked={data.config.pauseWhilePlaying} disabled={saving}
@@ -362,7 +379,8 @@
       </div>
       <p class="hint">
         Converts the selected categories, smallest files first. Each output is checked before replacement.
-        Original files are retained for recovery; cleanup is always manual. A server restart stops the queue;
+        {data.config.retainOriginals === false ? 'Old files are deleted after verification.' : 'Original files are retained for recovery; cleanup is manual.'}
+        A server restart stops the queue;
         Start rebuilds the list and skips files already compatible.
       </p>
 
@@ -425,7 +443,7 @@
           {#each queue.results as r (r.name + r.at)}
             <div class="pilotrow" class:ok={r.ok} class:bad={!r.ok}>
               <span class="pfile">{r.name}</span>
-              <span class="presult {r.ok ? 'ok' : 'bad'}">{r.ok ? 'converted' : r.reason}</span>
+              <span class="presult {r.ok && !r.reason ? 'ok' : 'bad'}">{r.reason || (r.ok ? 'converted' : 'failed')}</span>
             </div>
           {/each}
         </div>
@@ -440,10 +458,11 @@
         {/if}
       </div>
       <p class="hint">
-        Originals stay here until you delete them. You can delete one or all at any time,
+        {data.config.retainOriginals === false ? 'New conversions delete their old files after verification. Any backups saved earlier remain here until you remove them.' : 'Originals stay here until you delete them.'}
+        You can delete one or all saved backups at any time,
         or check for those older than {data.config.keepOriginalsDays} days.
         Restoring puts the original back and moves watch progress with it.
-        <strong>Nothing is ever deleted on a timer</strong> — cleanup only runs
+        <strong>These saved backups are never deleted on a timer</strong> — cleanup only runs
         when you click it below, and it previews first.
       </p>
       {#if originalsError}<p class="danger">{originalsError}</p>{/if}
@@ -479,7 +498,7 @@
       {#if !originals}
         <p class="hint">Loading…</p>
       {:else if !originals.items.length}
-        <p class="hint">No retained originals — nothing has been converted yet.</p>
+        <p class="hint">No old conversion files are being kept.</p>
       {:else}
         <div class="pilotlist">
           {#each originals.items as o (o.retainedPath)}
@@ -513,12 +532,12 @@
     </section>
 
     <section class="card">
-      <h2>What this does not do</h2>
+      <h2>Conversion details</h2>
       <ul class="dontlist">
         <li>Leaves HDR, Dolby Vision, image subtitles, and unusual video layouts for review.</li>
         <li>Copies compatible 8-bit H.264 video unchanged; other selected SDR video is converted.</li>
         <li>Keeps additional audio tracks, converting unsupported audio formats to AAC.</li>
-        <li>Retains the original for recovery after checking the replacement. Cleanup requires your action.</li>
+        <li>{data.config.retainOriginals === false ? 'Deletes the old file only after a successful, verified replacement.' : 'Retains the original for recovery after checking the replacement. Cleanup requires your action.'}</li>
       </ul>
     </section>
   {/if}
