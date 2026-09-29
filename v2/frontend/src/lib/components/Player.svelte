@@ -4,6 +4,7 @@
   import { library, session, dismissed, AUTO_WATCHED_PERCENT } from '../stores.js';
   import { startPlayback, STARTUP_ERROR, startupFragmentCount, startHlsFromPosition } from '../playback-startup.js';
   import { loadHls, parseVtt, cueAt, fmtTime } from '../player-core.js';
+  import { createPauseBookmark } from '../pause-resume.js';
   import { forcedEnglishSubtitle } from '../subtitle-selection.js';
   import { episodeCode, episodeTitle } from '../format.js';
   import { hevcMaxLevel, demoteHevc, isFirefoxDesktopLinux } from '../hevc-probe.js';
@@ -147,7 +148,8 @@
   let startupPending = false;
   let cancelStartup = () => {};
   let hlsRetries = 0;
-  let pausedAt = 0;        // when the user paused — long pauses outlive the server session
+  const pauseBookmark = createPauseBookmark();
+  let timelineReady = true; // ignore old-source events until the replacement is attached
   let recoverAttempts = 0; // consecutive dead-session restarts without playback progress
   let recoverFromT = -1;   // position of the last auto-restart
   let root = $state(null);
@@ -161,17 +163,28 @@
   }
 
   function loadDirect(start) {
+    const seq = ++loadSeq;
+    cancelStartup();
+    startupPending = true;
+    timelineReady = false;
+    buffering = true;
+    cur = start;
+    seekOffset = 0;
+    video.pause();
     video.src = streamUrl(item);
-    if (start > 0) {
-      const fallback = setTimeout(() => { video.currentTime = start; video.play().catch(() => {}); }, 5000);
-      video.addEventListener('loadedmetadata', () => {
-        clearTimeout(fallback);
-        video.currentTime = start;
-        video.play().catch(() => {});
-      }, { once: true });
-    } else {
-      video.play().catch(() => {});
-    }
+    video.addEventListener('loadedmetadata', () => {
+      if (seq !== loadSeq || destroyed) return;
+      video.currentTime = start;
+      timelineReady = true;
+      cancelStartup = startPlayback(video, {
+        isCurrent: () => seq === loadSeq && !destroyed,
+        onSlow: () => { notice = 'Resuming video…'; },
+        onBlocked: () => { startupPending = false; buffering = false; notice = 'Press Play to resume.'; },
+        onTimeout: () => { startupPending = false; buffering = false; error = STARTUP_ERROR; },
+      });
+    }, { once: true });
+    // Keep the initial play request within the user's gesture for autoplay.
+    video.play().catch(() => {});
   }
 
   let busyRetries = 0;
@@ -180,6 +193,9 @@
     const seq = ++loadSeq;
     cancelStartup();
     startupPending = true;
+    timelineReady = false;
+    cur = start;
+    video?.pause();
     clearTimeout(retryTimer);
     buffering = true;
     let H;
@@ -263,6 +279,7 @@
     if (passthroughActive) startFrameCounter(); else stopFrameCounter();
     hls.on(H.Events.MANIFEST_PARSED, () => {
       if (seq !== loadSeq) return;
+      timelineReady = true;
       startHlsFromPosition(hls);
       cancelStartup();
       cancelStartup = startPlayback(video, {
@@ -279,6 +296,8 @@
     });
     hls.on(H.Events.ERROR, async (_e, data) => {
       if (seq !== loadSeq || destroyed || !data.fatal) return;
+      // Paused streams may expire; reopen them only when the viewer resumes.
+      if (paused && !startupPending) return;
       // A passthrough session that dies on a media error is a capability
       // misjudgement, not a transient fault — hls.recoverMediaError() would
       // just fail the same way. Give up the claim and rebuild as a transcode.
@@ -289,7 +308,7 @@
       if (data.type === H.ErrorTypes.NETWORK_ERROR) {
         // Segments 404 forever once the server reaped the session — only a
         // fresh session at the current position can revive playback.
-        if (await sessionDead()) { if (seq === loadSeq) recoverSession(); return; }
+        if (await sessionDead()) { if (seq === loadSeq && !video?.paused) recoverSession(); return; }
         if (seq === loadSeq) startHlsFromPosition(hls, video.currentTime);
       } else if (data.type === H.ErrorTypes.MEDIA_ERROR) hls.recoverMediaError();
     });
@@ -438,7 +457,7 @@
   let stallNudges = 0;
 
   function stallCheck() {
-    if (!video || paused || error || scrubbing || video.readyState === 0) return;
+    if (!video || paused || error || scrubbing || startupPending || !timelineReady) return;
     const now = Date.now();
     if (lastPos < 0 || Math.abs(video.currentTime - lastPos) > 0.05) {
       lastPos = video.currentTime;      // progressing normally
@@ -496,21 +515,26 @@
     recoverFromT = cur;
     loadHlsSession(cur);
   }
-  async function resumeCheck() {
-    // Only worth checking after a pause long enough that the session might
-    // be gone (server reaps at 2min idle; 60s leaves margin for clock skew).
-    const wasPausedFor = pausedAt ? Date.now() - pausedAt : 0;
-    pausedAt = 0;
-    if (isDirect || wasPausedFor < 60_000) return;
-    if (await sessionDead()) {
-      if (video?.paused) return; // paused again while we were checking
-      recoverSession();
-    }
+  function resumePausedPlayback() {
+    const saved = pauseBookmark.take(cur);
+    if (!saved.expired && !error) return false;
+    // Reopen before calling play(): dead media can reject play without ever
+    // firing onplay, and a long pause has already outlived the server lease.
+    error = '';
+    recoverAttempts = 0;
+    recoverFromT = saved.position;
+    lastPos = -1;
+    stallNudges = 0;
+    paused = false;
+    if (isDirect) loadDirect(saved.position);
+    else loadHlsSession(saved.position);
+    return true;
   }
 
   function seekTo(t) {
     if (!total) return;
     t = Math.max(0, Math.min(t, Math.max(0, total - 1)));
+    pauseBookmark.seek(t);
     if (isDirect) {
       video.currentTime = t;
       cur = t;
@@ -640,7 +664,12 @@
 
   function togglePlay() {
     if (!video) return;
-    if (video.paused) video.play().catch(() => {});
+    if (video.paused || error) {
+      if (resumePausedPlayback()) return;
+      video.play().catch(() => {
+        if (!destroyed && video?.paused) notice = 'Press Play to resume.';
+      });
+    }
     else { startupPending = false; cancelStartup(); video.pause(); }
   }
 
@@ -919,7 +948,7 @@
     if (error === STARTUP_ERROR) error = '';
   }
   function onTimeUpdate() {
-    if (!video) return;
+    if (!video || !timelineReady || startupPending) return;
     const nextTime = seekOffset + video.currentTime;
     if (nextTime > cur && !video.paused && !video.seeking && video.readyState >= 3) {
       clearStartupError();
@@ -950,21 +979,25 @@
     ondblclick={onVideoDblClick}
     onpointerup={onVideoPointerUp}
     onplay={() => {
-      paused = false; poke(); resumeCheck();
+      if (!timelineReady) return;
+      if (resumePausedPlayback()) return;
+      paused = false; poke();
       try { if (!startupPending && hls) startHlsFromPosition(hls, video.currentTime); } catch {}
     }}
     onpause={() => {
-      paused = true;
       // load()/detach can deliver a late pause while the next stream starts.
-      if (startupPending) return;
-      pausedAt = Date.now(); saveProgress(); poke();
+      if (startupPending || !timelineReady) return;
+      paused = true;
+      cur = seekOffset + video.currentTime;
+      pauseBookmark.capture(cur);
+      saveProgress(); poke();
       // Stop MSE appends while paused — Firefox/Linux was flashing on each
       // fragment even with the clock frozen and hardware decode off.
       try { hls?.stopLoad(); } catch {}
     }}
     onwaiting={() => { buffering = true; }}
     onstalled={() => { buffering = true; }}
-    onplaying={() => { clearStartupError(); startupPending = false; cancelStartup(); buffering = false; notice = ''; applySpeed(); }}
+    onplaying={() => { if (!timelineReady) return; paused = false; clearStartupError(); startupPending = false; cancelStartup(); buffering = false; notice = ''; applySpeed(); }}
     oncanplay={() => { if (!startupPending) buffering = false; applySpeed(); }}
     ontimeupdate={onTimeUpdate}
     onprogress={onProgress}
