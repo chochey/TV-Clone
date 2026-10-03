@@ -1,4 +1,4 @@
-# Complete movie-title separator variants
+# Complete movie-title punctuation variants
 
 The organizer now tries complete colon, spaced-dash, and separator-free titles
 when a release folder uses a different franchise/subtitle separator. For example,
@@ -6,6 +6,13 @@ when a release folder uses a different franchise/subtitle separator. For example
 `Pirates of the Caribbean: On Stranger Tides`. Every word and sequel number stays
 in each new query. Internal word hyphens such as `Spider-Man` and `X-Men` stay
 intact. The original title and explicit aliases retain priority.
+
+Missing possessive apostrophes are now tried one word at a time, on complete
+original and separator variants. For example, `Pirates of the Caribbean - At
+Worlds End` can query `Pirates of the Caribbean: At World's End` while keeping
+`Pirates` intact. The helper tries at most six words per complete title form and
+adds at most twelve distinct queries in total. These candidates precede legacy
+fallbacks and do not expand into further guessed forms.
 
 The existing movie type, title similarity, sequel-number, and year checks still
 validate results against the original parsed title. The patch adds no relaxed
@@ -35,6 +42,8 @@ metadata requests, disable preview file logging, and move only temporary fixture
 files. They cover the actual Pirates folder name, word-hyphen preservation,
 multiple separators, empty subtitle parts, successful full-title lookup, and
 rejection of wrong movie types, years, truncated titles, and other sequels.
+The actual `At Worlds End (2007)` release-folder regression verifies the correct
+possessive query, bounded requests, and unchanged original-title validation.
 They also verify existing matches across roots retain every source file, junk-only
 folders allow import, and unreadable/offline roots preserve the incoming release.
 Deployment and service restart are separate steps after reviewing test results.
