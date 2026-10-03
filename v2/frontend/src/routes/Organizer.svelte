@@ -25,8 +25,9 @@
   let fixBusy = $state({});       // entryId -> saving flag
   let fixDone = $state({});       // entryId -> 'retrying' message
   let fixError = $state({});
-  const hot = $derived((fq?.queue || []).filter((e) => e.stillPresent));
-  const history = $derived((fq?.queue || []).filter((e) => !e.stillPresent));
+  const hot = $derived((fq?.queue || []).filter((e) => e.stillPresent && !e.resolved));
+  const history = $derived((fq?.queue || []).filter((e) => !e.stillPresent || e.resolved));
+  const duplicateReview = (entry) => entry.manualReview && /^Movie already exists at /i.test(entry.reason || '');
 
   function applyFixQueue(d) {
     for (const e of d?.queue || []) {
@@ -81,7 +82,7 @@
       else failures.push('logs');
       if (service.status === 'fulfilled') status = service.value;
       else failures.push('service status');
-      if (queue.status === 'fulfilled') applyFixQueue(queue.value);
+      if (queue.status === 'fulfilled' && queue.value.ok) applyFixQueue(queue.value);
       else if (queue.reason?.status === 403) fq = null;
       else failures.push('review queue');
       refreshError = failures.length ? `Could not refresh ${failures.join(', ')}. Showing the last available information.` : '';
@@ -160,7 +161,7 @@
       </h2>
 
       {#if !hot.length && !(fq.leftovers?.length)}
-        <p class="allclear">Nothing stuck — the Share folder is clean.</p>
+        <p class="allclear">Nothing needs review.</p>
       {/if}
 
       {#each hot as e (e.id)}
@@ -168,10 +169,12 @@
           <div class="rinfo">
             <span class="rtype">{e.type === 'show' ? 'Series' : 'Film'}</span>
             <span class="rtitle">{e.title}{e.year ? ` (${e.year})` : ''}</span>
-            <span class="rmeta">{e.reason} · tried {e.count}× · {ago(e.lastSeen)}</span>
+            <span class="rmeta">{duplicateReview(e) ? 'Already in library; new download kept for comparison' : e.reason} · tried {e.count}× · {ago(e.lastSeen)}</span>
           </div>
           {#if fixDone[e.id]}
             <p class="rdone">{fixDone[e.id]}</p>
+          {:else if duplicateReview(e)}
+            <p class="rmeta">Compare the new download with your library copy before deciding which one to keep.</p>
           {:else if e.manualReview}
             <p class="rmeta">Files have been kept in Share. Check the file names and any existing copy, then use Restart organizer to retry after correcting them.</p>
           {:else}
@@ -200,14 +203,27 @@
         </div>
       {/each}
 
+      {#if fq.importedLeftovers?.length}
+        <details class="rextra">
+          <summary>{fq.importedLeftovers.length} imported release{fq.importedLeftovers.length > 1 ? 's' : ''} with other files left behind</summary>
+          {#each fq.importedLeftovers as l (l.name)}
+            <div class="hrow">
+              <span class="rtype">Imported</span>
+              <span class="rtitle">{l.name}</span>
+              <span class="rmeta">{l.reason}</span>
+            </div>
+          {/each}
+        </details>
+      {/if}
+
       {#if history.length}
         <details class="rextra">
-          <summary>{history.length} past failure{history.length > 1 ? 's' : ''} (no longer in Share)</summary>
+          <summary>{history.length} past review item{history.length > 1 ? 's' : ''}</summary>
           {#each history as e (e.id)}
             <div class="hrow">
               <span class="rtype">{e.type === 'show' ? 'Series' : 'Film'}</span>
               <span class="rtitle">{e.title}{e.year ? ` (${e.year})` : ''}</span>
-              <span class="rmeta">{e.reason} · {ago(e.lastSeen)}{e.suggestedAlias ? ` · alias → ${e.suggestedAlias}` : ''}</span>
+              <span class="rmeta">{e.resolved ? 'Resolved after retry' : 'No longer in Share'} · {e.reason} · {ago(e.lastSeen)}{e.suggestedAlias ? ` · alias → ${e.suggestedAlias}` : ''}</span>
             </div>
           {/each}
         </details>

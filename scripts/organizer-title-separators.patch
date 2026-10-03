@@ -1,0 +1,307 @@
+--- movie_renamer.py
++++ movie_renamer.py
+@@ -97,6 +97,45 @@
+         candidate = Path(drive_dir) / movie_folder_name
+         if candidate.exists():
+             return Path(drive_dir)
++    return None
++
++
++def movie_folder_identity(name: str) -> str:
++    """Compare the complete folder title and year; only punctuation varies."""
++    return re.sub(r"[\W_]+", " ", name.casefold()).strip()
++
++
++def _folder_has_movie_video(folder: Path) -> bool:
++    """Require a nonempty regular video; unreadable folders raise for review."""
++    pending = [folder]
++    while pending:
++        with os.scandir(pending.pop()) as entries:
++            for entry in entries:
++                if entry.is_dir(follow_symlinks=False):
++                    pending.append(Path(entry.path))
++                elif (entry.is_file(follow_symlinks=False)
++                      and Path(entry.name).suffix.lower() in config.VIDEO_EXTENSIONS
++                      and entry.stat(follow_symlinks=False).st_size > 0):
++                    return True
++    return False
++
++
++def find_existing_equivalent_movie(movie_folder_name: str) -> Path | None:
++    """Find existing media by the full folder name/year across configured roots.
++
++    Only immediate movie folders are compared. No fuzzy title matching, article
++    removal, word removal, or year tolerance is used for duplicate detection.
++    """
++    wanted = movie_folder_identity(movie_folder_name)
++    for drive_dir in dict.fromkeys([config.MOVIE_DEST_DIR, *config.MOVIE_DEST_DIRS]):
++        with os.scandir(drive_dir) as entries:
++            for entry in entries:
++                if movie_folder_identity(entry.name) != wanted:
++                    continue
++                if entry.is_symlink():
++                    raise OSError(f"Existing movie location is a shortcut: {entry.path}")
++                if entry.is_dir(follow_symlinks=False) and _folder_has_movie_video(Path(entry.path)):
++                    return Path(entry.path)
+     return None
+ 
+ 
+@@ -247,6 +286,25 @@
+     return results
+ 
+ 
++def get_separator_variations(title: str) -> list[str]:
++    """Vary full-title separators without removing words or word hyphens.
++
++    Release folders often use 'Franchise - Subtitle' where metadata uses a
++    colon. Only standalone, spaced dashes qualify: 'Spider-Man' stays intact.
++    Every part is retained, including sequel numbers and multiple subtitles.
++    """
++    parts = re.split(r"\s+[-\u2013\u2014]\s+|:\s*", title)
++    if len(parts) == 1 or any(not part.strip() for part in parts):
++        return []
++    parts = [part.strip() for part in parts]
++    variations = []
++    for separator in (": ", " ", " - "):
++        variant = separator.join(parts)
++        if variant != title and variant not in variations:
++            variations.append(variant)
++    return variations
++
++
+ def get_title_variations(title: str) -> list[str]:
+     """Generate variations of a title to try searching.
+ 
+@@ -259,6 +317,11 @@
+     for alias in get_alias_variations(title, "movie"):
+         if alias not in variations:
+             variations.append(alias)
++
++    # Keep complete separator forms ahead of broader legacy fallback queries.
++    for variant in get_separator_variations(title):
++        if variant not in variations:
++            variations.append(variant)
+ 
+     # Acronym forms: 'R I P D 2 ...' -> 'R.I.P.D. 2 ...' / 'RIPD 2 ...'
+     for acro in get_acronym_variations(title):
+@@ -1268,11 +1331,15 @@
+ def move_movie(movie: dict, omdb_info: dict, dry_run: bool = False) -> bool:
+     title, year = omdb_info["title"], omdb_info["year"]
+     folder = create_clean_filename(title, year, "")
++    try:
++        existing = find_existing_equivalent_movie(folder)
++    except OSError as error:
++        review_item(movie, title, f"Cannot verify existing movie folders: {error}; source retained")
++        return False
++    if existing:
++        review_item(movie, title, f"Movie already exists at {existing}; source retained for comparison")
++        return False
+     destination = get_movie_dest(folder) / folder
+-    if destination.exists() and any(f.is_file() and f.suffix.lower() in config.VIDEO_EXTENSIONS
+-                                    for f in destination.rglob("*")):
+-        review_item(movie, title, f"Movie already exists at {destination}; source retained for comparison")
+-        return False
+     videos = [movie["path"]] if movie["type"] == "loose" else movie["video_files"]
+     # Multiple videos could be a collection, split movie, alternate cut or extras.
+     # Never choose the largest and discard the rest.
+--- test_movie_renamer.py
++++ test_movie_renamer.py
+@@ -16,12 +16,15 @@
+     check_if_actually_series,
+     get_acronym_variations,
+     get_series_title_variations,
++    get_separator_variations,
+     get_title_variations,
+     is_good_match,
+     is_good_series_match,
+     move_movie,
++    movie_folder_identity,
+     normalize_for_match,
+     parse_filename,
++    query_omdb,
+     strip_foreign_release_prefix,
+     title_match_ratio,
+ )
+@@ -70,6 +73,85 @@
+ 
+     def test_original_title_always_first(self):
+         self.assertEqual(get_title_variations("Heat")[0], "Heat")
++
++    @patch("movie_renamer.get_alias_variations", return_value=[])
++    def test_pirates_folder_keeps_full_title_in_early_separator_queries(self, _aliases):
++        title, year = parse_filename(
++            "Pirates of the Caribbean - On Stranger Tides (2011) [1080p]")
++        self.assertEqual(year, "2011")
++        self.assertEqual(title, "Pirates of the Caribbean - On Stranger Tides")
++        self.assertEqual(get_title_variations(title)[:3], [
++            title, "Pirates of the Caribbean: On Stranger Tides",
++            "Pirates of the Caribbean On Stranger Tides",
++        ])
++
++
++class TestSeparatorVariations(unittest.TestCase):
++    def test_black_pearl_full_title_without_an_alias(self):
++        variants = get_separator_variations(
++            "Pirates of the Caribbean - The Curse of the Black Pearl")
++        self.assertIn("Pirates of the Caribbean: The Curse of the Black Pearl", variants)
++        self.assertIn("Pirates of the Caribbean The Curse of the Black Pearl", variants)
++        self.assertNotIn("Pirates of the Caribbean", variants)
++        self.assertNotIn("The Curse of the Black Pearl", variants)
++
++    def test_colon_and_unicode_dash_forms_preserve_every_word_and_number(self):
++        for title in ("Movie 2: Chapter Three - The Return", "Movie 2 – Chapter Three — The Return"):
++            with self.subTest(title=title):
++                variants = get_separator_variations(title)
++                self.assertIn("Movie 2 Chapter Three The Return", variants)
++                for variant in variants:
++                    self.assertEqual(normalize_for_match(variant), normalize_for_match(title))
++
++    def test_internal_word_hyphens_are_preserved(self):
++        self.assertEqual(get_separator_variations("Spider-Man"), [])
++        self.assertEqual(get_separator_variations("One-Way Ticket"), [])
++        self.assertEqual(get_separator_variations("X-Men - Days of Future Past"), [
++            "X-Men: Days of Future Past", "X-Men Days of Future Past",
++        ])
++        self.assertIn("Spider-Man - No Way Home", get_separator_variations("Spider-Man: No Way Home"))
++
++    def test_empty_parts_do_not_create_shortened_titles(self):
++        for title in ("Movie: ", ": Subtitle", "Movie - ", "Movie: : Subtitle"):
++            with self.subTest(title=title):
++                self.assertEqual(get_separator_variations(title), [])
++
++
++class TestSeparatorLookup(unittest.TestCase):
++    def setUp(self):
++        self.title = "Pirates of the Caribbean - On Stranger Tides"
++        self.canonical = "Pirates of the Caribbean: On Stranger Tides"
++        self.result = {"title": self.canonical, "year": "2011", "type": "movie"}
++
++    @patch("movie_renamer._omdb_no_match_cache", {})
++    @patch("movie_renamer.time.sleep")
++    @patch("movie_renamer.query_omdb_search", return_value=None)
++    @patch("movie_renamer.get_alias_variations", return_value=[])
++    def test_exact_full_title_plus_year_matches_without_network(self, _aliases, search, _sleep):
++        def exact(title, year):
++            return self.result if (title, year) == (self.canonical, "2011") else None
++        with patch("movie_renamer.query_omdb_exact", side_effect=exact) as lookup:
++            self.assertEqual(query_omdb(self.title, "2011"), self.result)
++        self.assertEqual(lookup.call_args_list, [
++            unittest.mock.call(self.title, "2011"),
++            unittest.mock.call(self.canonical, "2011"),
++        ])
++        search.assert_not_called()
++
++    @patch("movie_renamer.time.sleep")
++    @patch("movie_renamer.query_omdb_search", return_value=None)
++    @patch("movie_renamer.get_alias_variations", return_value=[])
++    def test_separator_query_cannot_bypass_movie_year_or_full_title_checks(self, _aliases, _search, _sleep):
++        wrong_results = [
++            {**self.result, "type": "series"},
++            {**self.result, "year": "2003"},
++            {**self.result, "title": "Pirates of the Caribbean"},
++            {**self.result, "title": "Pirates of the Caribbean: Dead Man's Chest"},
++        ]
++        for result in wrong_results:
++            with self.subTest(result=result), patch("movie_renamer._omdb_no_match_cache", {}):
++                with patch("movie_renamer.query_omdb_exact", return_value=result):
++                    self.assertIsNone(query_omdb(self.title, "2011"))
+ 
+ 
+ class TestIsGoodMatch(unittest.TestCase):
+@@ -205,6 +287,96 @@
+         self.assertEqual((dest_folder / "Kraven the Hunter (2024).mkv").stat().st_size, 4096,
+                          "existing copy must be untouched")
+ 
++    def test_separator_equivalent_movie_on_another_root_retains_source_and_subtitle(self):
++        other = Path(self._tmp.name) / "OtherMovies"
++        other.mkdir()
++        config.MOVIE_DEST_DIRS.append(str(other))
++        existing = other / "Pirates of the Caribbean - On Stranger Tides (2011)"
++        existing.mkdir()
++        (existing / "movie.mp4").write_bytes(b"existing video")
++        source = self.src / "Pirates of the Caribbean - On Stranger Tides (2011) [1080p]"
++        source.mkdir()
++        video, subtitle = source / "incoming.mp4", source / "incoming.srt"
++        video.write_bytes(b"incoming video"); subtitle.write_text("incoming subtitle")
++        with patch("movie_renamer.check_movie") as guard, patch("movie_renamer.review_item") as review:
++            ok = move_movie({"type": "folder", "path": source, "video_files": [video],
++                             "subtitle_files": [subtitle]},
++                            {"title": "Pirates of the Caribbean: On Stranger Tides", "year": "2011"})
++        self.assertFalse(ok); guard.assert_not_called()
++        self.assertIn(str(existing), review.call_args.args[2])
++        self.assertEqual(video.read_bytes(), b"incoming video")
++        self.assertEqual(subtitle.read_text(), "incoming subtitle")
++        self.assertEqual((existing / "movie.mp4").read_bytes(), b"existing video")
++        self.assertEqual(list(self.dest.iterdir()), [], "no additional canonical folder may be created")
++
++    def test_default_destination_is_checked_even_when_omitted_from_root_list(self):
++        other = Path(self._tmp.name) / "OtherMovies"
++        other.mkdir()
++        config.MOVIE_DEST_DIRS = [str(other)]
++        existing = self.dest / "Kraven - the Hunter (2024)"
++        existing.mkdir()
++        (existing / "movie.mkv").write_bytes(b"existing video")
++        source = self._make_download()
++        with patch("movie_renamer.check_movie") as guard:
++            self.assertFalse(move_movie({"type": "folder", "path": source,
++                                         "video_files": [source / "Kraven.mkv"], "subtitle_files": []},
++                                        {"title": "Kraven the Hunter", "year": "2024"}))
++            guard.assert_not_called()
++        self.assertEqual((source / "Kraven.mkv").read_bytes(), b"x" * 2048)
++        self.assertEqual((existing / "movie.mkv").read_bytes(), b"existing video")
++
++    @patch("movie_renamer.check_movie", return_value=None)
++    def test_equivalent_folder_with_only_junk_or_empty_video_does_not_block_import(self, _guard):
++        existing = self.dest / "Kraven - the Hunter (2024)"
++        existing.mkdir()
++        (existing / "poster.jpg").write_bytes(b"poster")
++        (existing / "empty.mp4").touch()
++        source = self._make_download()
++        self.assertTrue(move_movie({"type": "folder", "path": source,
++                                   "video_files": [source / "Kraven.mkv"], "subtitle_files": []},
++                                  {"title": "Kraven the Hunter", "year": "2024"}))
++        self.assertTrue((self.dest / "Kraven the Hunter (2024)" / "Kraven the Hunter (2024).mkv").is_file())
++
++    def test_unreadable_root_or_matching_folder_preserves_source(self):
++        source = self._make_download()
++        movie = {"type": "folder", "path": source, "video_files": [source / "Kraven.mkv"],
++                 "subtitle_files": []}
++        metadata = {"title": "Kraven the Hunter", "year": "2024"}
++        with patch("movie_renamer.os.scandir", side_effect=PermissionError("library root unreadable")), \
++                patch("movie_renamer.check_movie") as guard:
++            self.assertFalse(move_movie(movie, metadata)); guard.assert_not_called()
++        existing = self.dest / "Kraven - the Hunter (2024)"
++        existing.mkdir()
++        with patch("movie_renamer._folder_has_movie_video", side_effect=PermissionError("movie folder unreadable")), \
++                patch("movie_renamer.check_movie") as guard:
++            self.assertFalse(move_movie(movie, metadata)); guard.assert_not_called()
++        self.assertTrue((source / "Kraven.mkv").is_file())
++        self.assertFalse((self.dest / "Kraven the Hunter (2024)").exists())
++
++    def test_missing_configured_root_preserves_source(self):
++        config.MOVIE_DEST_DIRS.append(str(Path(self._tmp.name) / "OfflineDrive"))
++        source = self._make_download()
++        with patch("movie_renamer.check_movie") as guard:
++            self.assertFalse(move_movie({"type": "folder", "path": source,
++                                         "video_files": [source / "Kraven.mkv"], "subtitle_files": []},
++                                        {"title": "Kraven the Hunter", "year": "2024"}))
++            guard.assert_not_called()
++        self.assertTrue((source / "Kraven.mkv").is_file())
++
++
++class TestMovieFolderIdentity(unittest.TestCase):
++    def test_only_punctuation_space_and_case_differences_are_equal(self):
++        self.assertEqual(movie_folder_identity("Pirates - On Stranger Tides (2011)"),
++                         movie_folder_identity("PIRATES: On Stranger Tides (2011)"))
++        self.assertEqual(movie_folder_identity("Movie_Name (2011)"), movie_folder_identity("Movie Name (2011)"))
++
++    def test_articles_numbers_years_and_word_boundaries_are_not_dropped(self):
++        original = movie_folder_identity("The Movie Part 2 (2011)")
++        for different in ("Movie Part 2 (2011)", "The Movie Part 3 (2011)",
++                          "The Movie Part 2 (2010)", "The Movie (2011)", "The Movie Part2 (2011)"):
++            with self.subTest(different=different):
++                self.assertNotEqual(original, movie_folder_identity(different))
++
+ 
+ class TestCheckIfActuallySeries(unittest.TestCase):
+     """check_if_actually_series is the only function here that touches the

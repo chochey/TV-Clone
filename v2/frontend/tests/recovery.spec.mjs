@@ -93,6 +93,27 @@ test('an organizer alias failure preserves the title input and can be retried', 
   expect(attempts).toBe(2);
 });
 
+test('organizer counts current issues while keeping resolved failures and imported leftovers in details', async ({ page }) => {
+  await mockApi(page, {
+    '/api/organizer/logs': route => route.fulfill({ json: { ok: true, lines: [], total: 0 } }),
+    '/api/organizer/fix-queue': route => route.fulfill({ json: { ok: true,
+      queue: [
+        { id: 'old', type: 'movie', title: 'Black Pearl', source: 'Black Pearl release', stillPresent: true, resolved: true, reason: 'No confident match' },
+        { id: 'current', type: 'movie', title: 'Black Pearl', source: 'Black Pearl release', stillPresent: true, manualReview: true, reason: 'Existing copy retained for comparison', count: 1 },
+      ], aliases: [], leftovers: [],
+      importedLeftovers: [{ name: 'Most Dangerous Game release', reason: 'Media imported; only other files remain in the download folder.' }],
+    } }),
+  });
+  await page.goto(`${origin}/organizer`);
+  await expect(page.locator('.review h2 .badge')).toHaveText('1');
+  await expect(page.locator('.review .rrow')).toHaveCount(1);
+  await expect(page.getByRole('button', { name: 'Fix & retry' })).toHaveCount(0);
+  await page.getByText('1 imported release with other files left behind', { exact: true }).click();
+  await expect(page.getByText('Most Dangerous Game release', { exact: true })).toBeVisible();
+  await page.getByText('1 past review item', { exact: true }).click();
+  await expect(page.getByText(/Resolved after retry/)).toBeVisible();
+});
+
 test('a sole surviving retained original can be restored but cannot be deleted', async ({ page }) => {
   let restored = 0;
   const original = { name: 'Test film.mkv', retainedPath: '/virtual/.converted-originals/Test film.mkv', canRestore: true, replacementExists: false, restorable: false, ageDays: 1, size: 1e9 };

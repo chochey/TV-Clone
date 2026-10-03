@@ -3545,15 +3545,15 @@ app.delete('/api/organizer/aliases/:id', requireAdminSession, (req, res) => {
   res.json({ ok: true, aliases: next });
 });
 
-// Share leftovers: whatever is still sitting in the organizer's source dir
-// is unplaced by definition. Cross-referencing the fix-queue against it
-// separates "needs action now" from historical noise.
+// Cross-reference current download folders with the latest review status.
+// Successful imports can leave advertising or other companion files behind.
 const ORGANIZER_SOURCE_DIR = process.env.ORGANIZER_SOURCE_DIR || '/mnt/media/Share';
 const normName = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
 
 app.get('/api/organizer/fix-queue', requireAdminSession, async (_req, res) => {
   const aliases = getOrganizerAliases();
-  const queue = organizerTools.parseOrganizerFixQueue(readOrganizerLogLines(), aliases).slice(0, 100);
+  const logLines = readOrganizerLogLines();
+  const queue = organizerTools.parseOrganizerFixQueue(logLines, aliases);
 
   // What's physically in Share (skip qbt's working dir, dotfiles, and
   // underscore-prefixed admin parking folders like _review — the organizer
@@ -3568,28 +3568,34 @@ app.get('/api/organizer/fix-queue', requireAdminSession, async (_req, res) => {
       try { mtime = (await fs.promises.stat(path.join(ORGANIZER_SOURCE_DIR, name))).mtimeMs; } catch {}
       return { name, norm: normName(name), mtime, matched: false };
     }));
-  } catch {}
+  } catch {
+    return res.status(503).json({ ok: false, error: 'Could not read the download folder. Review status is unavailable.' });
+  }
 
   // A queue entry is live if its release (or parsed title) still sits in Share.
   for (const entry of queue) {
-    const src = normName(entry.source);
+    const src = entry.source;
     const title = normName(entry.title);
     entry.stillPresent = shareEntries.some((s) => {
-      const hit = (src && (s.norm.includes(src) || src.includes(s.norm))) ||
-                  (title && s.norm.includes(title));
-      if (hit) s.matched = true;
+      const hit = src ? s.name === src : title && s.norm.includes(title);
+      if (hit && !entry.resolved) s.matched = true;
       return hit;
     });
   }
 
-  // Leftovers: aged Share items no failure entry explains (stale folders,
-  // half-deleted releases). Informational — admins clean these by hand.
+  // Unknown leftovers remain in review. Confirmed imports containing only
+  // other files are listed separately; this endpoint never removes files.
   const cutoff = Date.now() - 10 * 60 * 1000;
-  const leftovers = shareEntries
+  const aged = shareEntries
     .filter((s) => !s.matched && s.mtime < cutoff)
     .map((s) => ({ name: s.name, mtime: s.mtime }));
-
-  res.json({ ok: true, queue, aliases, leftovers });
+  const { leftovers, importedLeftovers } = await require('./lib/organizer-share').classifyLeftovers(aged, {
+    sourceDir: ORGANIZER_SOURCE_DIR, lines: logLines,
+    libraryPaths: (libraryCache || []).map(item => item._filePath),
+  });
+  const active = queue.filter(entry => entry.stillPresent && !entry.resolved);
+  const history = queue.filter(entry => !entry.stillPresent || entry.resolved).slice(0, 100);
+  res.json({ ok: true, queue: [...active, ...history], aliases, leftovers, importedLeftovers });
 });
 
 // ── Episode index: missing-episode report + new-episode tracker ─────────
