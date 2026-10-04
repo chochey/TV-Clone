@@ -1,0 +1,162 @@
+--- movie_renamer.py
++++ movie_renamer.py
+@@ -193,0 +194,20 @@
++
++
++def infer_missing_movie_year(movie: dict, title: str, year: str | None) -> str | None:
++    """Use the sole video filename's year only when its complete title agrees.
++
++    Folder names remain the source identity. A supplied folder year always
++    wins; multiple videos, missing years, or different title words never infer
++    a year. Punctuation, whitespace, and case are the only title differences
++    allowed here, without aliases or fuzzy matching.
++    """
++    if year is not None or movie.get("type") != "folder":
++        return year
++    videos = movie.get("video_files", [])
++    if len(videos) != 1:
++        return year
++    video_title, video_year = parse_filename(Path(videos[0]).stem)
++    if (video_title and video_year and movie_folder_identity(title)
++            and movie_folder_identity(title) == movie_folder_identity(video_title)):
++        return video_year
++    return year
+@@ -1968,0 +1989,4 @@
++        folder_year = year
++        year = infer_missing_movie_year(movie, title, year)
++        inferred_year = folder_year is None and year is not None
++
+@@ -1975,0 +2000,2 @@
++                if inferred_year:
++                    log.info(f"  Year inferred from sole matching video: {Path(movie['video_files'][0]).name}")
+@@ -1991,0 +2018,2 @@
++        if inferred_year:
++            log.info(f"  Year inferred from sole matching video: {Path(movie['video_files'][0]).name}")
+--- test_movie_renamer.py
++++ test_movie_renamer.py
+@@ -4 +4 @@
+-No network: only pure helpers are exercised. Run with:
++No network: metadata calls are mocked and file operations use fixtures. Run with:
+@@ -16,0 +17 @@
++    find_media_in_source,
+@@ -21,0 +23 @@
++    infer_missing_movie_year,
+@@ -27,0 +30 @@
++    process_movies_list,
+@@ -42,0 +46,116 @@
++
++
++class TestMissingMovieYear(unittest.TestCase):
++    def setUp(self):
++        self._tmp = tempfile.TemporaryDirectory()
++        self.source = Path(self._tmp.name)
++
++    def tearDown(self):
++        self._tmp.cleanup()
++
++    def _movie(self, folder_name="Iron Man [1080p]", filenames=None):
++        folder = self.source / folder_name
++        folder.mkdir(exist_ok=True)
++        filenames = filenames if filenames is not None else ["Iron.Man.2008.1080p.BrRip.x264.YIFY.mp4"]
++        videos = []
++        for index, name in enumerate(filenames):
++            video = folder / name
++            video.write_bytes(b"fixture" * (index + 1))
++            videos.append(video)
++        return {"type": "folder", "path": folder, "parse_name": folder.name,
++                "video_files": videos, "subtitle_files": []}
++
++    def test_actual_iron_man_filename_supplies_only_the_missing_year(self):
++        movie = self._movie()
++        title, year = parse_filename(movie["parse_name"])
++        self.assertEqual((title, year), ("Iron Man", None))
++        self.assertEqual(infer_missing_movie_year(movie, title, year), "2008")
++        self.assertEqual(movie["parse_name"], "Iron Man [1080p]")
++
++    def test_only_punctuation_whitespace_and_case_may_differ(self):
++        movie = self._movie()
++        self.assertEqual(infer_missing_movie_year(movie, "IRON - MAN", None), "2008")
++
++    def test_sequel_article_and_missing_title_words_cannot_supply_a_year(self):
++        for filename in ("Iron.Man.2.2010.1080p.mp4", "The.Iron.Man.2008.1080p.mp4",
++                         "Man.2008.1080p.mp4", "Iron.Manual.2008.1080p.mp4"):
++            with self.subTest(filename=filename):
++                movie = self._movie(filenames=[filename])
++                self.assertIsNone(infer_missing_movie_year(movie, "Iron Man", None))
++
++    def test_multiple_videos_never_select_a_year_even_when_they_agree(self):
++        movie = self._movie(filenames=["Iron.Man.2008.1080p.mp4", "Iron.Man.2008.720p.mkv"])
++        self.assertIsNone(infer_missing_movie_year(movie, "Iron Man", None))
++
++    def test_supplied_folder_year_is_never_overridden_or_reparsed(self):
++        movie = self._movie(folder_name="Iron Man (2009) [1080p]")
++        title, year = parse_filename(movie["parse_name"])
++        with patch("movie_renamer.parse_filename") as parse_inner:
++            self.assertEqual(infer_missing_movie_year(movie, title, year), "2009")
++        parse_inner.assert_not_called()
++
++    def test_no_video_year_or_subtitle_only_year_leaves_year_unknown(self):
++        movie = self._movie(filenames=["Iron.Man.1080p.mp4"])
++        subtitle = movie["path"] / "Iron.Man.2008.srt"
++        subtitle.write_text("fixture")
++        movie["subtitle_files"] = [subtitle]
++        self.assertIsNone(infer_missing_movie_year(movie, "Iron Man", None))
++        movie["video_files"] = []
++        self.assertIsNone(infer_missing_movie_year(movie, "Iron Man", None))
++
++    def test_loose_items_do_not_inherit_another_file_year(self):
++        movie = self._movie()
++        movie["type"] = "loose"
++        self.assertIsNone(infer_missing_movie_year(movie, "Iron Man", None))
++
++    def test_source_discovery_and_processing_keep_download_identity_with_exact_lookup(self):
++        movie = self._movie()
++        metadata = {"title": "Iron Man", "year": "2008", "type": "movie"}
++        with patch.object(config, "SOURCE_DIR", str(self.source)), \
++                patch("movie_renamer.ready_for_import", return_value=True), \
++                patch("movie_renamer.is_still_transferring", return_value=False):
++            movies, shows = find_media_in_source()
++        self.assertEqual(shows, [])
++        self.assertEqual(len(movies), 1)
++        self.assertEqual(movies[0], movie)
++        with patch("movie_renamer._watch_skip_logged", set()), \
++                patch("movie_renamer._omdb_no_match_cache", {}), \
++                patch("movie_renamer.query_omdb_exact", return_value=metadata) as lookup, \
++                patch("movie_renamer.query_omdb_search") as search, \
++                patch("movie_renamer.check_if_actually_series") as series, \
++                patch("movie_renamer.move_movie", return_value=True) as move, \
++                patch("movie_renamer.requests.get", side_effect=AssertionError("unexpected network")), \
++                self.assertLogs("movie_renamer", level="INFO") as logs:
++            self.assertEqual(process_movies_list(movies, dry_run=True), (1, 0))
++        lookup.assert_called_once_with("Iron Man", "2008")
++        search.assert_not_called(); series.assert_not_called()
++        move.assert_called_once_with(movie, metadata, dry_run=True)
++        self.assertEqual(movies[0], movie)
++        self.assertTrue(any("[MOVIE] Found: Iron Man [1080p]" in entry for entry in logs.output))
++        self.assertTrue(any("Parsed: title='Iron Man', year=2008" in entry for entry in logs.output))
++        self.assertTrue(movie["video_files"][0].is_file())
++
++    def test_processing_ambiguous_or_explicit_year_items_keeps_original_source_in_review(self):
++        cases = (
++            ("Iron Man [1080p]", ["Iron.Man.2.2010.1080p.mp4"], None),
++            ("Iron Man [1080p]", ["Another.Movie.2008.1080p.mp4"], None),
++            ("Iron Man [1080p]", ["Iron.Man.2008.1080p.mp4", "Iron.Man.2008.720p.mkv"], None),
++            ("Iron Man [1080p]", ["Iron.Man.1080p.mp4"], None),
++            ("Iron Man (2009) [1080p]", ["Iron.Man.2008.1080p.mp4"], "2009"),
++        )
++        for folder, files, expected_year in cases:
++            with self.subTest(folder=folder, files=files):
++                movie = self._movie(folder_name=folder, filenames=files)
++                skipped = set()
++                with patch("movie_renamer._watch_skip_logged", skipped), \
++                        patch("movie_renamer.query_omdb", return_value=None) as lookup, \
++                        patch("movie_renamer.check_if_actually_series", return_value=None), \
++                        patch("movie_renamer.move_movie") as move, \
++                        self.assertLogs("movie_renamer", level="INFO") as logs:
++                    self.assertEqual(process_movies_list([movie], dry_run=True), (0, 1))
++                lookup.assert_called_once_with("Iron Man", expected_year)
++                move.assert_not_called()
++                self.assertEqual(skipped, {folder})
++                self.assertEqual(movie["parse_name"], folder)
++                self.assertTrue(any(f"[MOVIE] Found: {folder}" in entry for entry in logs.output))
++                self.assertTrue(all(video.is_file() for video in movie["video_files"]))
