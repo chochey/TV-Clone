@@ -1,7 +1,8 @@
 <script>
   import PosterCard from '../lib/components/PosterCard.svelte';
   import { catalog, collapseShows } from '../lib/stores.js';
-  import { mediaKindOf, isSeriesItem } from '../lib/series-playback.js';
+  import { mediaKindOf, isSeriesItem, isAudioItem } from '../lib/series-playback.js';
+  import { audioPresentation } from '../lib/audio-presentation.js';
 
   let { kind, sectionId = '', section = null, sectionsReady = true, sectionError = '', onretry, onopen, onplay } = $props();
 
@@ -34,6 +35,7 @@
   });
 
   function displayTitle(i) {
+    if (isAudioItem(i)) return audioPresentation(i).title;
     return ((isSeriesItem(i) ? i.showName : '') || i.title || i.omdbTitle || '').replace(/^\(auto\)\s*/i, '');
   }
   function ratingOf(i) {
@@ -78,7 +80,7 @@
   });
 </script>
 
-<div class="browse">
+<div class="browse" class:audio-browse={section?.mediaKind === 'audio'}>
   <header>
     <h1 class="display">{heading}</h1>
     <span class="count meta">{items.length}</span>
@@ -150,6 +152,7 @@
 
   @media (max-width: 640px) {
     .grid { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: var(--s3) var(--s2); }
+    .audio-browse .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .controls { margin-left: 0; width: 100%; }
     .controls select { flex: 1; }
   }

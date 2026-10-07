@@ -17,16 +17,17 @@ function wav() {
   body.write('data', 36); body.writeUInt32LE(size, 40); return body;
 }
 
-async function audioApp(page, { failFirst = false, fullItem = audioItem, itemDelayMs = 0 } = {}) {
-  const saved = [], forbidden = [], errors = []; let streams = 0;
+async function audioApp(page, { failFirst = false, fullItem = audioItem, itemDelayMs = 0,
+  catalogItems = [audioItem], fullItems = {}, initialPath = '/title/podcast', startPlayer = true } = {}) {
+  const saved = [], forbidden = [], errors = [], itemRequests = []; let streams = 0;
   page.on('pageerror', error => errors.push(error.message));
   page.on('request', request => {
-    if (/\/(?:hls|backdrop|api\/sprites)\//.test(new URL(request.url()).pathname)) forbidden.push(request.url());
+    if (/\/(?:hls|backdrop|api\/(?:sprites|metadata))\//.test(new URL(request.url()).pathname)) forbidden.push(request.url());
   });
   await page.route('**/*', route => route.abort());
   await page.route(`${origin}/**`, async route => {
     const url = new URL(route.request().url());
-    if (url.pathname === '/audio-artwork/podcast') {
+    if (url.pathname.startsWith('/audio-artwork/')) {
       return route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400" viewBox="0 0 400 400"><rect width="400" height="400" fill="#38255d"/><circle cx="270" cy="100" r="150" fill="#7950b2"/><path d="M90 115h210v190H90z" fill="#eee1ff"/><path d="M200 115v190" stroke="#ab82dc" stroke-width="8"/></svg>' });
     }
     if (url.pathname === '/stream/podcast') {
@@ -43,11 +44,13 @@ async function audioApp(page, { failFirst = false, fullItem = audioItem, itemDel
       let body = {};
       if (url.pathname === '/api/health') body = { ready: true };
       else if (url.pathname === '/api/me') body = { loggedIn: true, role: 'user', profileId: 'test', name: 'Test' };
-      else if (url.pathname === '/api/library') body = [audioItem];
-      else if (url.pathname === '/api/library/sections') body = { ok: true, sections: [{ id: 'podcasts', label: 'Podcasts', type: 'custom-podcasts', mediaKind: 'audio', count: 1, available: true }] };
-      else if (url.pathname === '/api/item/podcast') {
+      else if (url.pathname === '/api/library') body = catalogItems;
+      else if (url.pathname === '/api/library/sections') body = { ok: true, sections: [{ id: 'podcasts', label: 'Podcasts', type: 'custom-podcasts', mediaKind: 'audio', count: catalogItems.length, available: true }] };
+      else if (url.pathname.startsWith('/api/item/')) {
+        const id = decodeURIComponent(url.pathname.split('/').at(-1));
+        itemRequests.push(id);
         if (itemDelayMs) await new Promise(resolve => setTimeout(resolve, itemDelayMs));
-        body = fullItem;
+        body = fullItems[id] || fullItem;
       }
       else if (url.pathname === '/api/metadata/podcast') body = { found: false };
       else if (url.pathname === '/api/dismissed') body = { continueWatching: {}, recentlyAdded: {} };
@@ -61,9 +64,9 @@ async function audioApp(page, { failFirst = false, fullItem = audioItem, itemDel
     if (file.endsWith('index.html')) body = body.toString().replace(/<link[^>]+https:\/\/fonts\.(?:googleapis|gstatic)\.com[^>]*>/g, '');
     return route.fulfill({ body, contentType: file.endsWith('.js') ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : 'text/html' });
   });
-  await page.goto(`${origin}/title/podcast`);
-  await page.getByRole('button', { name: /^Resume/ }).click();
-  return { saved, forbidden, errors };
+  await page.goto(`${origin}${initialPath}`);
+  if (startPlayer) await page.getByRole('button', { name: /^Resume/ }).click();
+  return { saved, forbidden, errors, itemRequests };
 }
 
 test('late book metadata does not override a manual rewind and pause', async ({ page }) => {
@@ -141,6 +144,19 @@ for (const width of [1280, 390]) {
     expect(await audio.evaluate(el => el.currentTime)).toBeLessThan(5);
 
     const chapter = player.getByLabel('Chapter', { exact: true });
+    const chapterStyle = await chapter.evaluate(select => {
+      const popup = getComputedStyle(select.querySelector('option'));
+      const luminance = color => {
+        const channels = color.match(/[\d.]+/g).slice(0, 3).map(Number).map(c => {
+          const value = c / 255; return value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4;
+        });
+        return .2126 * channels[0] + .7152 * channels[1] + .0722 * channels[2];
+      };
+      const values = [luminance(popup.color), luminance(popup.backgroundColor)].sort((a,b) => b-a);
+      return { scheme:getComputedStyle(select).colorScheme, contrast:(values[0]+.05)/(values[1]+.05) };
+    });
+    expect(chapterStyle.scheme).toContain('dark');
+    expect(chapterStyle.contrast).toBeGreaterThan(4.5);
     const nextLabel = (await chapter.locator('option').allTextContents()).find(text => text.includes('The Next Room'));
     await chapter.selectOption({ label: nextLabel });
     await expect.poll(() => audio.evaluate(el => Math.floor(el.currentTime))).toBe(20);
@@ -169,6 +185,55 @@ for (const width of [1280, 390]) {
     await close.click();
     await expect(player).toHaveCount(0);
     await expect(page.getByRole('button', { name: /^Resume/ })).toBeFocused();
+    expect(forbidden).toEqual([]); expect(errors).toEqual([]);
+  });
+}
+
+for (const width of [1280, 390]) {
+  test(`audio shelf shows authored titles, covers and a clean fallback at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    const books = [
+      { ...audioItem, title:'CarlsDoomsdayScenarioDungeonCrawlerCarlBook2', filename:'CarlsDoomsdayScenarioDungeonCrawlerCarlBook2_ep7.m4b' },
+      { ...audioItem, id:'land', title:'TheLandFoundingALitRPGSaga', filename:'TheLandFoundingALitRPGSaga_ep7.m4b' },
+      { ...audioItem, id:'fallback', title:'AnotherAudioBook2', filename:'AnotherAudioBook2_ep7.mp3', progress:null },
+    ];
+    const { itemRequests, forbidden, errors } = await audioApp(page, {
+      catalogItems:books, initialPath:'/library/podcasts', startPlayer:false, itemDelayMs:100,
+      fullItems:{
+        podcast:{ ...books[0], audioMetadata:{ title:"Carl's Doomsday Scenario: Dungeon Crawler Carl, Book 2", artist:'Matt Dinniman', duration:41295, coverUrl:'/audio-artwork/podcast' } },
+        land:{ ...books[1], audioMetadata:{ title:'The Land: Founding', artist:'Aleron Kong', duration:30000, coverUrl:'/audio-artwork/land' } },
+        fallback:books[2],
+      },
+    });
+    await expect(page.getByRole('heading', { name:'Podcasts', exact:true })).toBeVisible();
+    const cards = page.locator('.grid .card.audio');
+    await expect(cards).toHaveCount(3);
+    const carl = cards.filter({ hasText:"Carl's Doomsday Scenario: Dungeon Crawler Carl, Book 2" });
+    await expect(carl.locator('.audio-title')).toHaveText("Carl's Doomsday Scenario: Dungeon Crawler Carl, Book 2");
+    await expect(carl.locator('.audio-author')).toHaveText('Matt Dinniman');
+    await expect(carl.locator('img')).toHaveAttribute('src','/audio-artwork/podcast');
+    await expect.poll(() => carl.locator('img').evaluate(img => img.naturalWidth)).toBeGreaterThan(0);
+    const land = cards.filter({ hasText:'The Land: Founding' });
+    await expect(land.locator('.audio-author')).toHaveText('Aleron Kong');
+    await expect(land.locator('img')).toHaveAttribute('src','/audio-artwork/land');
+    const fallback = cards.filter({ hasText:'Another Audio Book 2' });
+    await expect(fallback.locator('.audio-placeholder')).toBeVisible();
+    await expect(fallback.locator('.audio-title')).toHaveCount(1);
+    await expect(fallback.locator('img')).toHaveCount(0);
+    await page.getByRole('combobox', { name:'Sort', exact:true }).selectOption('title');
+    await expect(cards.first().locator('.audio-title')).toHaveText('Another Audio Book 2');
+    for (const card of await cards.all()) {
+      const shape = await card.locator('.art').boundingBox();
+      expect(Math.abs(shape.width - shape.height)).toBeLessThan(2);
+    }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path:test.info().outputPath(`audio-shelf-${width}.png`), fullPage:true });
+    await page.getByRole('link', { name:'Home', exact:true }).click();
+    await page.getByRole('link', { name:'Podcasts', exact:true }).click();
+    await expect(page.locator('.grid .card.audio img')).toHaveCount(2);
+    expect(itemRequests.filter(id => id === 'podcast')).toHaveLength(1);
+    expect(itemRequests.filter(id => id === 'land')).toHaveLength(1);
+    expect(itemRequests.filter(id => id === 'fallback')).toHaveLength(1);
     expect(forbidden).toEqual([]); expect(errors).toEqual([]);
   });
 }

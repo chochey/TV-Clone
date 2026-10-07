@@ -5,6 +5,7 @@ import { loadNotifications, resetNotifications } from './notifications.js';
 import { startLiveUpdates } from './live-updates.js';
 import { unpackCatalog } from './catalog-response.js';
 import { isSeriesItem, isAudioItem, mediaKindOf, seriesKey } from './series-playback.js';
+import { createAudioCardMetadataLoader, audioCardIdentity, mergeAudioCardMetadata } from './audio-card-metadata.js';
 
 export const session = writable(null);     // { loggedIn, profileId, name, role }
 const liveLibrary = writable([]);
@@ -23,6 +24,7 @@ export const seriesIndex = derived(catalog, items => {
   return groups;
 });
 export function replaceLibrary(items) {
+  items = items.map(item => mergeAudioCardMetadata(item, audioCardMetadata.cached(item)));
   itemPositions = new Map(items.map((item, position) => [item.id, position]));
   const state = {};
   for (const item of items) {
@@ -205,8 +207,28 @@ let libraryRequest = 0;
 let stopLiveUpdates = null;
 let activeProfile = null;
 
+const audioCardMetadata = createAudioCardMetadataLoader({
+  load: async (id, signal) => {
+    const response = await fetch(`/api/item/${encodeURIComponent(id)}`, { credentials: 'same-origin', signal });
+    if (!response.ok) throw new Error('Audio metadata unavailable');
+    return response.json();
+  },
+  isCurrent: item => !!activeProfile && audioCardIdentity(get(mediaById).get(item.id)) === audioCardIdentity(item),
+  onMetadata: (requested, metadata) => {
+    const position = itemPositions.get(requested.id);
+    const items = get(liveLibrary), current = items[position];
+    if (!current || audioCardIdentity(current) !== audioCardIdentity(requested)) return;
+    const next = items.slice(); next[position] = mergeAudioCardMetadata(current, metadata);
+    replaceLibrary(next);
+  },
+});
+
+// Called only while a rendered audio card is near the viewport.
+export const observeAudioCard = item => activeProfile ? audioCardMetadata.observe(item) : () => {};
+
 export function resetSessionState() {
   sessionGeneration++;
+  audioCardMetadata.reset();
   libraryRequest++;
   stopLiveUpdates?.();
   stopLiveUpdates = null;

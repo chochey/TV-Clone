@@ -1,22 +1,41 @@
 <script>
   import { posterUrl, backdropUrl } from '../api.js';
-  import { seriesIndex, watchState, enrichItem, dismissFromContinue, AUTO_WATCHED_PERCENT } from '../stores.js';
+  import { seriesIndex, watchState, enrichItem, observeAudioCard, dismissFromContinue, AUTO_WATCHED_PERCENT } from '../stores.js';
   import { episodeCode } from '../format.js';
   import { cardPlayback, seriesSummary, isSeriesItem, isAudioItem, mediaTitle } from '../series-playback.js';
   import { audioPlaybackIssue } from '../audio-playback.js';
+  import { audioPresentation } from '../audio-presentation.js';
   // resume: rendered in the Continue Watching row — show which episode and how
   // much is left, and offer a way to drop it from the row.
   let { item, onopen, onplay, resume = false, wide = false } = $props();
 
   // No poster? Ask OMDb once — the store patch re-renders this card.
-  $effect(() => { if (!posterUrl(item)) enrichItem(item.id); });
+  $effect(() => { if (!isAudioItem(item) && !posterUrl(item)) enrichItem(item.id); });
 
+  let cardElement = $state(null);
+  // Audio tags and covers load on sight, never by walking the full catalog.
+  $effect(() => {
+    const value = item;
+    if (!cardElement || !isAudioItem(value) || audioPlaybackIssue(value)) return;
+    let release = null;
+    if (typeof IntersectionObserver === 'undefined') return observeAudioCard(value);
+    const observer = new IntersectionObserver(entries => {
+      if (entries[0].isIntersecting) release ||= observeAudioCard(value);
+      else { release?.(); release = null; }
+    }, { rootMargin: '160px' });
+    observer.observe(cardElement);
+    return () => { observer.disconnect(); release?.(); };
+  });
+
+  const audio = $derived(isAudioItem(item));
+  const audioInfo = $derived(audio ? audioPresentation(item) : null);
   const current = $derived({ ...item, ...$watchState[item.id] });
   const summary = $derived(item.seriesCard && isSeriesItem(item) ? seriesSummary(item, $seriesIndex, $watchState) : null);
   const watched = $derived(summary ? summary.allWatched : current.watched);
-  const poster = $derived(posterUrl(item));
-  const backdrop = $derived(isAudioItem(item) ? '' : backdropUrl(item));
-  const title = $derived(mediaTitle(item));
+  const poster = $derived(audio ? item.posterUrl || '' : posterUrl(item));
+  const embeddedCover = $derived(audioInfo?.coverUrl || '');
+  const backdrop = $derived(audio ? '' : backdropUrl(item));
+  const title = $derived(audio ? audioInfo.title : mediaTitle(item));
   const playbackIssue = $derived(isAudioItem(item) ? audioPlaybackIssue(item) : '');
   const continueLabel = $derived(isAudioItem(item) ? 'Continue Listening' : 'Continue Watching');
   const year = $derived(item.year || item.omdbYear || '');
@@ -37,23 +56,35 @@
   // 2:3 by object-fit) -> typographic placeholder. Never a broken image.
   let posterFailed = $state(false);
   let backdropFailed = $state(false);
-  $effect(() => { poster; backdrop; posterFailed = false; backdropFailed = false; });
+  let embeddedFailed = $state(false);
+  $effect(() => { poster; backdrop; embeddedCover; posterFailed = false; backdropFailed = false; embeddedFailed = false; });
   const artSrc = $derived(
-    wide && backdrop && !backdropFailed ? backdrop : (poster && !posterFailed ? poster : (backdrop && !backdropFailed ? backdrop : '')),
+    audio ? (poster && !posterFailed ? poster : embeddedCover && !embeddedFailed ? embeddedCover : '')
+      : wide && backdrop && !backdropFailed ? backdrop : (poster && !posterFailed ? poster : (backdrop && !backdropFailed ? backdrop : '')),
   );
   function artError() {
+    if (audio) {
+      if (poster && !posterFailed) posterFailed = true;
+      else embeddedFailed = true;
+      return;
+    }
     if (wide && backdrop && !backdropFailed) backdropFailed = true;
     else if (poster && !posterFailed) posterFailed = true;
     else backdropFailed = true;
   }
 </script>
 
-<div class="card" class:wide role="button" tabindex="0"
+<div class="card" class:wide class:audio bind:this={cardElement} role="button" tabindex="0"
      onclick={() => onopen?.(item)}
      onkeydown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onopen?.(item); } }}>
   <div class="art">
     {#if artSrc}
-      <img src={artSrc} alt={title} loading="lazy" decoding="async" onerror={artError} />
+      <img src={artSrc} alt={audio ? '' : title} loading="lazy" decoding="async" onerror={artError} />
+    {:else if audio}
+      <div class="audio-placeholder" aria-hidden="true">
+        <svg viewBox="0 0 64 64" fill="none"><path d="M12 16c8-3 15-2 20 3 5-5 12-6 20-3v33c-8-3-15-2-20 3-5-5-12-6-20-3V16Z" stroke="currentColor" stroke-width="2.5" stroke-linejoin="round"/><path d="M32 19v33M18 24c3-1 6 0 9 2M18 31c3-1 6 0 9 2M37 26c3-2 6-3 9-2M37 33c3-2 6-3 9-2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        <span>AUDIOBOOK</span>
+      </div>
     {:else}
       <div class="placeholder">
         <span class="ptitle">{title}</span>
@@ -79,7 +110,7 @@
     {/if}
 
     <!-- Always-visible info strip -->
-    <div class="info-strip">
+    {#if !audio}<div class="info-strip">
       <span class="t">{title}</span>
       <span class="y">
         {#if resume && resumeLine}
@@ -90,12 +121,20 @@
           {#if summary && summary.watched}<span class="series-progress">{summary.watched} of {summary.total} watched</span>{/if}
         {/if}
       </span>
-    </div>
+    </div>{/if}
 
     {#if pct > 0 && pct < AUTO_WATCHED_PERCENT}
       <div class="progress"><span style={`width:${pct}%`}></span></div>
     {/if}
   </div>
+  {#if audio}
+    <div class="audio-info">
+      <span class="audio-title" title={title}>{title}</span>
+      {#if audioInfo.artist}<span class="audio-author">{audioInfo.artist}</span>{/if}
+      {#if resume && resumeLine}<span class="audio-resume">{resumeLine}</span>{/if}
+      {#if playbackIssue}<span class="compatibility-label">Compatible copy needed</span>{/if}
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -207,4 +246,24 @@
     background: rgba(0, 0, 0, 0.6);
   }
   .progress span { display: block; height: 100%; background: var(--ink); }
+
+  .audio .art { aspect-ratio: 1; border-radius: 10px; }
+  .audio .art img { object-fit: contain; background: #121019; }
+  .audio .hover-overlay { place-items: center; padding: 0; }
+  .audio-placeholder {
+    height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 10px; color: #dfc7f0; position: relative;
+    background: linear-gradient(145deg, #5a346c, #2b1a3d 65%, #191521);
+  }
+  .audio-placeholder::before { content: ''; position: absolute; inset: 0 auto 0 0; width: 9px; background: #ffffff0b; border-right: 1px solid #ffffff17; }
+  .audio-placeholder svg { width: 48%; max-width: 96px; }
+  .audio-placeholder span { font-size: .58rem; letter-spacing: .18em; color: #d8c2e6; }
+  .audio-info { padding: 10px 1px 2px; }
+  .audio-title { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+    font-size: .92rem; font-weight: 600; line-height: 1.35; color: var(--ink); overflow-wrap: anywhere; }
+  .audio-author { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+    color: var(--ink-soft); font-size: .76rem; line-height: 1.4; margin-top: 4px; }
+  .audio-resume { display: block; color: var(--ink-faint); font-size: .7rem; margin-top: 4px; }
+  .audio .compatibility-label { font-size: .7rem; line-height: 1.4; }
+  @media(max-width:640px) { .audio-title { font-size: .86rem; } .audio-author { font-size: .71rem; } }
 </style>

@@ -249,7 +249,9 @@
   .skip-arrow { font-size:2rem; line-height:1; }
   .settings { display:flex; align-items:center; justify-content:space-between; gap:20px; padding:14px 0; border-top:1px solid #ffffff0d; }
   .speed { display:flex; align-items:center; gap:10px; color:#a99fb4; font-size:.8rem; }
-  select { font:inherit; color:#e2d9ec; background:#ffffff08; border:1px solid #ffffff15; border-radius:8px; min-height:42px; padding:7px 10px; cursor:pointer; max-width:100%; }
+  select { color-scheme:dark; font:inherit; color:#f4f1f7; background:#24202e; border:1px solid #ffffff26; border-radius:8px; min-height:42px; padding:7px 10px; cursor:pointer; max-width:100%; }
+  select option { color:#f4f1f7; background:#24202e; }
+  select option:checked { color:#fff; background:#604480; }
   .volume { display:flex; align-items:center; gap:9px; width:145px; min-width:0; color:#aa9ab9; }
   .volume svg { flex-shrink:0; }
   .chapter-picker { display:flex; flex-direction:column; gap:8px; margin-top:12px; color:#a99fb4; font-size:.8rem; }
