@@ -19,7 +19,7 @@ function fixture({ supported = true, start = 12, item = { id: 'podcast/id', file
 }
 
 test('native audio MIME hints cover common formats and preserve direct playback despite a stale video mode', () => {
-  const types = { mp3: 'audio/mpeg', m4a: 'audio/mp4', flac: 'audio/flac', ogg: 'audio/ogg', opus: 'audio/ogg', wav: 'audio/wav', aac: 'audio/aac' };
+  const types = { mp3: 'audio/mpeg', m4a: 'audio/mp4', m4b: 'audio/mp4', flac: 'audio/flac', ogg: 'audio/ogg', opus: 'audio/ogg', wav: 'audio/wav', aac: 'audio/aac' };
   for (const [extension, mime] of Object.entries(types)) {
     const f = fixture({ item: { id: 'audio', filename: `Track.${extension.toUpperCase()}` } });
     assert.equal(audioMimeType({ filename: `track.${extension}` }), mime);
@@ -37,6 +37,18 @@ test('unsupported native codecs explain the failure without creating a video fal
   assert.equal(f.playCalls, 0);
   assert.equal(f.audio.src, undefined);
   assert.equal(f.jobs.size, 0);
+});
+
+test('Audible formats and explicit playback issues never assign a source or start playback', () => {
+  for (const extension of ['aax', 'AA', 'aaxc']) {
+    const f = fixture({ item: { id: 'book', filename: `Book.${extension}`, streamMode: 'direct' } });
+    assert.match(f.error, /Audible.*unprotected.*MP3.*M4B/);
+    assert.equal(f.playCalls, 0); assert.equal(f.audio.src, undefined);
+    assert.equal(f.audio.checkedType, undefined); assert.equal(f.events.size, 0); assert.equal(f.jobs.size, 0);
+    f.cancel();
+  }
+  const f = fixture({ item: { id: 'book', filename: 'Book.mp3', playbackIssue: 'This copy cannot be played.' } });
+  assert.equal(f.error, 'This copy cannot be played.'); assert.equal(f.audio.src, undefined); assert.equal(f.playCalls, 0);
 });
 
 test('audio resume is applied at metadata and invalid past-end bookmarks restart at zero', () => {

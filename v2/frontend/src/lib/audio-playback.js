@@ -2,7 +2,7 @@ import { AUTO_WATCHED_PERCENT } from './series-playback.js';
 import { startPlayback } from './playback-startup.js';
 
 const AUDIO_TYPES = {
-  mp3: 'audio/mpeg', m4a: 'audio/mp4', flac: 'audio/flac',
+  mp3: 'audio/mpeg', m4a: 'audio/mp4', m4b: 'audio/mp4', flac: 'audio/flac',
   ogg: 'audio/ogg', opus: 'audio/ogg', wav: 'audio/wav', aac: 'audio/aac',
 };
 
@@ -12,6 +12,13 @@ export function audioMimeType(item) {
 }
 
 export const audioStreamUrl = item => `/stream/${encodeURIComponent(item.id)}`;
+
+export function audioPlaybackIssue(item) {
+  if (typeof item?.playbackIssue === 'string' && item.playbackIssue.trim()) return item.playbackIssue;
+  const extension = (item?.filename || '').split('.').pop().toLowerCase();
+  return ['aax', 'aa', 'aaxc'].includes(extension)
+    ? 'Protected Audible files cannot be played here. Add an unprotected MP3, M4A or M4B audiobook.' : '';
+}
 
 export function audioPlaybackError(error) {
   return ({
@@ -41,6 +48,8 @@ export function audioTime(seconds) {
 
 // Native audio only: no HLS session, video engine, sprite, or subtitle work.
 export function startAudioPlayback(audio, item, start, options) {
+  const issue = audioPlaybackIssue(item);
+  if (issue) { options.onError?.(issue); return () => {}; }
   const mime = audioMimeType(item);
   if (mime && audio.canPlayType && !audio.canPlayType(mime)) {
     options.onError?.(`This browser does not support this audio format. Try another browser or a supported copy.`);

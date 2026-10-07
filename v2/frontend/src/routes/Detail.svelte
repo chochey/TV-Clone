@@ -5,6 +5,7 @@
   import { seriesEpisodes, seriesPlayTarget, isSeriesItem, isAudioItem } from '../lib/series-playback.js';
   import { episodeTitle, episodeCode } from '../lib/format.js';
   import { deleteBatchResult } from '../lib/delete-batch-result.js';
+  import { audioPlaybackIssue } from '../lib/audio-playback.js';
 
   let { id, onplay } = $props();
 
@@ -22,6 +23,7 @@
 
   const isShow = $derived(isSeriesItem(m));
   const isAudio = $derived(isAudioItem(m));
+  const playbackIssue = $derived(isAudio ? audioPlaybackIssue(m) : '');
   const title = $derived(isShow ? m.showName : (m.title || m.omdbTitle || ''));
   const poster = $derived(posterUrl(m));
   const year = $derived(m.year || m.omdbYear || '');
@@ -171,10 +173,11 @@
           </div>
           {#if deleteError}<p class="warn" role="alert">{deleteError}</p>{/if}
           {#if plot}<p class="plot">{plot}</p>{/if}
+          {#if playbackIssue}<p class="compatibility" role="status">{playbackIssue}</p>{/if}
           <div class="actions">
             <button class="play" onclick={() => playTarget && onplay?.(playTarget)}>
-              <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
-              {playLabel}
+              {#if playbackIssue}<span aria-hidden="true">ⓘ</span>{:else}<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>{/if}
+              {playbackIssue ? 'Playback info' : playLabel}
             </button>
             {#if !isShow}
               <button class="ghost" onclick={() => toggleWatched(m)}>
@@ -344,6 +347,7 @@
   }
   .metarow .chip::before { content: none !important; }
   .plot { margin: var(--s4) 0 var(--s5); max-width: 68ch; line-height: 1.6; }
+  .compatibility { margin: var(--s4) 0; padding: var(--s3); border: 1px solid #bd9cff; border-radius: var(--r-sm); line-height: 1.6; }
 
   .actions { display: flex; gap: var(--s3); flex-wrap: wrap; }
   .play {

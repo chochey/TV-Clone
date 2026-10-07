@@ -175,7 +175,10 @@ test('an admin can browse and link a named series library with a custom type', a
     },
   });
   await page.goto(`${origin}/system`);
-  await page.getByRole('link', { name: 'Manage libraries', exact: true }).click();
+  await expect(page.getByRole('link', { name: 'Manage libraries', exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Account menu' }).click();
+  await expect(page.locator('#account-menu').getByText('Settings', { exact: true })).toBeVisible();
+  await page.locator('#account-menu').getByRole('button', { name: 'Libraries', exact: true }).click();
   await expect(page).toHaveURL(`${origin}/libraries`);
   await expect(page.getByRole('heading', { name: 'Libraries', exact: true })).toBeVisible();
   const link = page.getByRole('button', { name: 'Link location', exact: true });
@@ -212,8 +215,7 @@ test('an admin can browse and link a named series library with a custom type', a
   await prepareManagerShot();
   await page.screenshot({ path: test.info().outputPath('libraries-manager-phone.png'), fullPage: false });
   await page.setViewportSize(originalViewport);
-  await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('button', { name: 'Libraries', exact: true }).click();
-  await expect(page.getByRole('region', { name: 'Library sections' }).getByRole('link', { name: 'Anime 2 files', exact: true })).toBeVisible();
+  await expect(page.getByRole('navigation', { name: 'Main navigation' }).getByRole('link', { name: 'Anime', exact: true })).toBeVisible();
 });
 
 test('a failed audio library link retains its fields and can be retried', async ({ page }) => {
@@ -231,7 +233,7 @@ test('a failed audio library link retains its fields and can be retried', async 
   await page.getByLabel('Library name', { exact: true }).fill('Podcasts');
   await page.getByRole('combobox', { name: 'Content kind', exact: true }).selectOption('audio');
   await page.getByLabel('Server location', { exact: true }).fill('/virtual/missing');
-  await expect(page.getByText(/Audio: MP3, M4A, AAC, FLAC, WAV, OGG and Opus/)).toBeVisible();
+  await expect(page.getByText(/Audio: MP3, M4A, M4B, AAC, FLAC, WAV, OGG and Opus/)).toBeVisible();
   const link = page.getByRole('button', { name: 'Link location', exact: true });
   await link.click();
   await expect(page.getByRole('alert')).toContainText('Folder not found or not a directory');
@@ -289,7 +291,7 @@ for (const viewport of [{ width: 1280, height: 800 }, { width: 390, height: 844 
     const sections = [
       { id: 'anime-section', label: 'Anime', type: 'custom-anime', mediaKind: 'show', count: 2, available: true },
       ...Array.from({ length: 16 }, (_, n) => ({ id: `extra-${n}`, label: `A long custom section name ${n + 1}`, type: 'custom-extra', mediaKind: 'mixed', count: 0, available: true })),
-      { id: 'podcasts-section', label: 'Podcasts', type: 'custom-podcasts', mediaKind: 'audio', count: 0, available: true },
+      { id: 'books-section', label: 'Audio Books', type: 'custom-audio-books', mediaKind: 'audio', count: 0, available: true },
     ];
     let adminReads = 0;
     await mockApi(page, {
@@ -301,34 +303,178 @@ for (const viewport of [{ width: 1280, height: 800 }, { width: 390, height: 844 
     const navigation = page.getByRole('navigation', { name: 'Main navigation' });
     await expect(navigation.getByRole('link', { name: 'Films', exact: true })).toBeVisible();
     await expect(navigation.getByRole('link', { name: 'Series', exact: true })).toBeVisible();
-    await navigation.getByRole('button', { name: 'Libraries', exact: true }).click();
-    const panel = page.getByRole('region', { name: 'Library sections' });
-    await expect(panel.getByRole('link')).toHaveCount(sections.length);
-    await expect(panel.getByRole('link', { name: 'Anime 2 files', exact: true })).toBeVisible();
-    const empty = panel.getByRole('link', { name: 'Podcasts 0 files', exact: true });
+    await expect(navigation.getByRole('button', { name: 'Libraries', exact: true })).toHaveCount(0);
+    await expect(navigation.getByRole('link')).toHaveCount(sections.length + 3);
+    await expect(navigation.getByRole('link', { name: 'Anime', exact: true })).toBeVisible();
+    const empty = navigation.getByRole('link', { name: 'Audio Books', exact: true });
     await empty.scrollIntoViewIfNeeded();
     await expect(empty).toBeVisible();
-    const bounds = await panel.boundingBox();
+    const bounds = await navigation.boundingBox();
     expect(bounds.x).toBeGreaterThanOrEqual(0); expect(bounds.x + bounds.width).toBeLessThanOrEqual(viewport.width + 1);
     expect(bounds.y).toBeGreaterThanOrEqual(0); expect(bounds.y + bounds.height).toBeLessThanOrEqual(viewport.height + 1);
-    if (viewport.width <= 720) {
-      const tabs = await navigation.boundingBox();
-      expect(bounds.y + bounds.height).toBeLessThanOrEqual(tabs.y + 1);
-    }
+    const emptyBounds = await empty.boundingBox();
+    expect(emptyBounds.x).toBeGreaterThanOrEqual(bounds.x - 1);
+    expect(emptyBounds.x + emptyBounds.width).toBeLessThanOrEqual(bounds.x + bounds.width + 1);
+    expect(await navigation.evaluate(el => getComputedStyle(el).overflowX)).toBe('auto');
     if (viewport.width === 390) {
       await page.evaluate(() => window.scrollTo(0, 0));
       await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
       await page.screenshot({ path: test.info().outputPath('libraries-nav-phone.png'), fullPage: false });
     }
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
-    await expect(panel.getByRole('link', { name: 'Manage libraries', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('link', { name: 'Manage libraries', exact: true })).toHaveCount(0);
     await empty.click();
-    await expect(page).toHaveURL(`${origin}/library/podcasts-section`);
-    await expect(page.getByRole('heading', { name: 'Podcasts', exact: true })).toBeVisible();
+    await expect(page).toHaveURL(`${origin}/library/books-section`);
+    await expect(page.getByRole('heading', { name: 'Audio Books', exact: true })).toBeVisible();
     await expect(page.getByText('No media in this library yet.', { exact: true })).toBeVisible();
     await page.getByRole('button', { name: 'Account menu' }).click();
     await expect(page.locator('#account-menu').getByRole('button', { name: 'Libraries', exact: true })).toHaveCount(0);
     expect(adminReads).toBe(0);
+  });
+}
+
+test('linking and unlinking an empty Audio Books library updates navigation without changing the catalog', async ({ page }) => {
+  let folders = [];
+  await mockApi(page, {
+    '/api/config': route => route.fulfill({ json: folders }),
+    '/api/library/sections': route => route.fulfill({ json: { ok: true, sections: folders.map(folder => ({ id: folder.id, label: folder.label, type: folder.type, mediaKind: folder.mediaKind, count: 0, available: true })) } }),
+    '/api/config/add': route => {
+      const folder = { ...route.request().postDataJSON(), id: 'empty-books', exists: true, fileCount: 0 };
+      folders.push(folder); return route.fulfill({ json: { ok: true, folder } });
+    },
+    '/api/config/remove': route => { folders = []; return route.fulfill({ json: { ok: true, removed: 1 } }); },
+  });
+  await page.goto(`${origin}/libraries`);
+  const navigation = page.getByRole('navigation', { name: 'Main navigation' });
+  await expect(navigation.getByRole('link', { name: 'Audio Books', exact: true })).toHaveCount(0);
+  await page.getByLabel('Library name', { exact: true }).fill('Audio Books');
+  await page.getByRole('combobox', { name: 'Content kind', exact: true }).selectOption('audio');
+  await page.getByLabel('Server location', { exact: true }).fill('/virtual/Audio Books');
+  await page.getByRole('button', { name: 'Link location', exact: true }).click();
+  await expect(page.getByRole('status')).toContainText('Linked Audio Books.');
+  await expect(navigation.getByRole('link', { name: 'Audio Books', exact: true })).toBeVisible();
+  await expect(page).toHaveURL(`${origin}/libraries`);
+  await expect(page.locator('article.location')).toContainText('Audio · 0 files');
+  await page.locator('article.location').getByRole('button', { name: 'Unlink', exact: true }).click();
+  await page.getByRole('region', { name: 'Confirm unlink' }).getByRole('button', { name: 'Unlink location', exact: true }).click();
+  await expect(navigation.getByRole('link', { name: 'Audio Books', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('status')).toContainText('Files remain on disk.');
+});
+
+test('failed section loading has a visible retry that restores direct empty-library navigation', async ({ page }) => {
+  let requests = 0;
+  await mockApi(page, {
+    '/api/library/sections': route => {
+      requests++;
+      return route.fulfill(requests === 1 ? { status: 503, json: { error: 'Storage unavailable' } }
+        : { json: { ok: true, sections: [{ id: 'books', label: 'Audio Books', type: 'audio', mediaKind: 'audio', count: 0, available: true }] } });
+    },
+  });
+  await page.goto(origin);
+  const navigation = page.getByRole('navigation', { name: 'Main navigation' });
+  await navigation.getByRole('button', { name: 'Retry libraries', exact: true }).click();
+  await expect(navigation.getByRole('link', { name: 'Audio Books', exact: true })).toBeVisible();
+  await expect(navigation.getByRole('button', { name: 'Retry libraries', exact: true })).toHaveCount(0);
+});
+
+test('same-count live library refreshes add and remove empty section links', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.EventSource = class {
+      constructor() { this.listeners = new Map(); window.__libraryEvents = this; }
+      addEventListener(name, listener) { this.listeners.set(name, listener); }
+      emit(name) { this.listeners.get(name)?.(); }
+      close() {}
+    };
+  });
+  let sections = [], catalogReads = 0, sectionReads = 0;
+  await mockApi(page, {
+    '/api/library': route => { catalogReads++; return route.fulfill({ json: library }); },
+    '/api/library/sections': route => { sectionReads++; return route.fulfill({ json: { ok: true, sections } }); },
+  });
+  await page.goto(origin);
+  const navigation = page.getByRole('navigation', { name: 'Main navigation' });
+  await expect.poll(() => sectionReads).toBeGreaterThanOrEqual(1);
+  await expect(navigation.getByRole('status')).toHaveCount(0);
+  sections = [{ id: 'empty-books', label: 'Audio Books', type: 'audio', mediaKind: 'audio', count: 0, available: true }];
+  await page.evaluate(() => window.__libraryEvents.emit('library-updated'));
+  await expect(navigation.getByRole('link', { name: 'Audio Books', exact: true })).toBeVisible();
+  expect(catalogReads).toBeGreaterThanOrEqual(2);
+  sections = [];
+  await page.evaluate(() => window.__libraryEvents.emit('library-updated'));
+  await expect(navigation.getByRole('link', { name: 'Audio Books', exact: true })).toHaveCount(0);
+  expect(catalogReads).toBeGreaterThanOrEqual(3);
+});
+
+test('a fresh protected-file response stops audio started from stale compatible metadata', async ({ page }) => {
+  const compact = { id: 'stale-book', title: 'Stale book', filename: 'Stale book.m4b', type: 'audio', mediaKind: 'audio', sectionId: 'books', streamMode: 'direct', subtitles: [], progress: {} };
+  let itemRequest;
+  await mockApi(page, {
+    '/api/library': route => route.fulfill({ json: [compact] }),
+    '/api/library/sections': route => route.fulfill({ json: { ok: true, sections: [{ id: 'books', label: 'Audio Books', type: 'audio', mediaKind: 'audio', count: 1, available: true }] } }),
+    '/api/item/stale-book': route => { itemRequest = route; },
+  });
+  await page.goto(`${origin}/library/books`);
+  await page.locator('.browse .card').hover();
+  await page.getByRole('button', { name: 'Listen to Stale book', exact: true }).click();
+  const player = page.getByRole('dialog', { name: 'Audio player' });
+  await expect(player.locator('audio')).toHaveCount(1);
+  const oldAudio = await player.locator('audio').elementHandle();
+  await expect.poll(() => !!itemRequest).toBe(true);
+  await itemRequest.fulfill({ json: { ...compact, filename: 'Stale book.aax', streamMode: 'unsupported', playbackIssue: 'Protected Audible files cannot be played here. Add an unprotected MP3, M4A or M4B audiobook.' } });
+  await expect(player).toContainText('Compatible audiobook needed');
+  await expect(player.locator('audio')).toHaveCount(0);
+  expect(await oldAudio.evaluate(el => el.getAttribute('src') === null && el.paused)).toBe(true);
+  await expect(player.getByRole('button', { name: 'Retry', exact: true })).toHaveCount(0);
+  await player.getByRole('button', { name: 'Close audio player' }).click();
+});
+
+for (const viewport of [{ width: 1280, height: 800 }, { width: 390, height: 844 }]) {
+  test(`Audible books are listed with playback information and never start a stream at ${viewport.width}px`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await page.addInitScript(() => {
+      window.__audioAttempts = { source: 0, play: 0 };
+      const play = HTMLMediaElement.prototype.play;
+      HTMLMediaElement.prototype.play = function (...args) { if (this.tagName === 'AUDIO') window.__audioAttempts.play++; return play.apply(this, args); };
+      const source = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'src');
+      Object.defineProperty(HTMLMediaElement.prototype, 'src', { ...source, set(value) { if (this.tagName === 'AUDIO') window.__audioAttempts.source++; return source.set.call(this, value); } });
+    });
+    const book = { id: 'audible-book', title: 'The Fellowship of the Ring', filename: 'The Fellowship of the Ring (Unabridged).aax',
+      artist: 'J. R. R. Tolkien', type: 'audio', mediaKind: 'audio', sectionId: 'books', streamMode: 'unsupported', size: 607e6, subtitles: [], progress: {},
+      playbackIssue: 'Protected Audible files cannot be played here. Add an unprotected MP3, M4A or M4B audiobook.' };
+    const forbidden = [];
+    page.on('request', request => { if (/\/(?:stream|hls|backdrop)\/|\/api\/(?:sprites|subtitles|playback-session)/.test(request.url())) forbidden.push(new URL(request.url()).pathname); });
+    await mockApi(page, {
+      '/api/library': route => route.fulfill({ json: [book] }),
+      '/api/library/sections': route => route.fulfill({ json: { ok: true, sections: [{ id: 'books', label: 'Audio Books', type: 'audio', mediaKind: 'audio', count: 1, available: true }] } }),
+      '/api/item/audible-book': route => route.fulfill({ json: book }),
+    });
+    await page.goto(origin);
+    const navigation = page.getByRole('navigation', { name: 'Main navigation' });
+    await expect(navigation.getByRole('button', { name: 'Libraries', exact: true })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Account menu' }).click();
+    await expect(page.locator('#account-menu').getByText('Settings', { exact: true })).toBeVisible();
+    await expect(page.locator('#account-menu').getByRole('button', { name: 'Libraries', exact: true })).toBeVisible();
+    await page.keyboard.press('Escape');
+    await navigation.getByRole('link', { name: 'Audio Books', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Audio Books', exact: true })).toBeVisible();
+    await expect(page.locator('.browse .count')).toHaveText('1');
+    await expect(page.locator('.browse .card')).toContainText('Compatible copy needed');
+    await page.locator('.browse .card').press('Enter');
+    await expect(page.getByRole('heading', { name: book.title, exact: true })).toBeVisible();
+    await expect(page.locator('.detail .compatibility')).toContainText('unprotected MP3, M4A or M4B');
+    await expect(page.locator('.detail').getByRole('button', { name: 'Play', exact: true })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Playback info', exact: true }).click();
+    const player = page.getByRole('dialog', { name: 'Audio player' });
+    await expect(player).toContainText('Compatible audiobook needed');
+    await expect(player).toContainText(book.playbackIssue);
+    await expect(player.locator('audio')).toHaveCount(0);
+    await expect(player.getByRole('button', { name: 'Retry', exact: true })).toHaveCount(0);
+    expect(await page.evaluate(() => window.__audioAttempts)).toEqual({ source: 0, play: 0 });
+    expect(forbidden).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await page.screenshot({ path: test.info().outputPath(`audible-playback-info-${viewport.width}.png`), fullPage: false });
+    await player.getByRole('button', { name: 'Close audio player' }).click();
+    expect(forbidden).toEqual([]);
   });
 }
 

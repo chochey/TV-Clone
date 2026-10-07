@@ -2,7 +2,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { api, posterUrl } from '../api.js';
   import { session, updateWatchState, dismissed, AUTO_WATCHED_PERCENT } from '../stores.js';
-  import { audioProgressPayload, audioResumePosition, audioPlaybackError, startAudioPlayback, audioTime } from '../audio-playback.js';
+  import { audioProgressPayload, audioResumePosition, audioPlaybackError, audioPlaybackIssue, startAudioPlayback, audioTime } from '../audio-playback.js';
 
   let { item, onclose } = $props();
   let audio = $state(null);
@@ -16,6 +16,7 @@
   let full = $state(null);
   const title = $derived(full?.title || item.title || item.filename || 'Audio');
   const artwork = $derived(posterUrl(full) || posterUrl(item));
+  const playbackIssue = $derived(audioPlaybackIssue({ ...item, ...(full || {}) }));
   let ready = $state(false);
   let destroyed = false, sequence = 0, profile = null;
   let cancelStartup = () => {}, timer, previousOverflow = '', teardownSaved = false, resumePoint = 0;
@@ -40,6 +41,7 @@
   function load(start = 0) {
     const attempt = ++sequence;
     cancelStartup(); ready = false; error = ''; notice = 'Loading audio…';
+    if (playbackIssue) { notice = ''; return; }
     resumePoint = start;
     cancelStartup = startAudioPlayback(audio, item, start, {
       isCurrent: () => !destroyed && sequence === attempt,
@@ -53,6 +55,10 @@
       onTimeout: () => { error = 'Audio is taking longer than expected. Retry or check the server connection.'; notice = ''; },
       onError: message => { error = message; notice = ''; },
     });
+  }
+  function stopUnsupportedAudio() {
+    sequence++; cancelStartup(); ready = false; notice = ''; error = '';
+    audio?.pause(); audio?.removeAttribute('src'); audio?.load();
   }
   function seek(seconds) {
     if (!ready || !Number.isFinite(audio.duration)) return;
@@ -74,6 +80,7 @@
     api.item(item.id).then(value => {
       if (destroyed) return;
       full = value;
+      if (audioPlaybackIssue({ ...item, ...(value || {}) })) { stopUnsupportedAudio(); return; }
       if (!ready) resumePoint = audioResumePosition(value?.progress || item.progress);
       if (ready && audio.paused && currentTime === 0) {
         const resume = audioResumePosition(value?.progress);
@@ -104,6 +111,9 @@
     <span class="kind">AUDIO</span>
     <h1>{title}</h1>
     {#if full?.artist || item.artist}<p class="artist">{full?.artist || item.artist}</p>{/if}
+    {#if playbackIssue}
+      <div class="compatibility" role="status"><h2>Compatible audiobook needed</h2><p>{playbackIssue}</p></div>
+    {:else}
     <audio bind:this={audio} controls preload="metadata"
       onloadedmetadata={() => { duration = Number.isFinite(audio.duration) ? audio.duration : 0; }}
       ondurationchange={() => { duration = Number.isFinite(audio.duration) ? audio.duration : 0; }}
@@ -124,6 +134,7 @@
     </div>
     {#if notice && !error}<p class="notice" role="status">{notice}</p>{/if}
     {#if error}<div class="error" role="alert"><p>{error}</p><button class="ghost" onclick={() => load(currentTime)}>Retry</button></div>{/if}
+    {/if}
   </div>
 </div>
 
@@ -143,6 +154,8 @@
   select {color:var(--ink);background:var(--bg-raised);border:1px solid var(--line);border-radius:8px;padding:8px;}
   .error {padding:16px;margin-top:20px;border:1px solid #b06d78;border-radius:12px;}
   .error button {margin-top:12px;}
+  .compatibility {padding:20px;border:1px solid #bd9cff;border-radius:12px;line-height:1.6;}
+  .compatibility h2 {font-size:1rem;margin-bottom:8px;}
   button:focus-visible,select:focus-visible {outline:3px solid #bd9cff;outline-offset:4px;}
   button:disabled {opacity:.5;}
   @media(max-width:480px){.audio-player{padding:16px;}.panel{padding-inline:0;}.extras{gap:10px;}}

@@ -3,6 +3,7 @@
   import { seriesIndex, watchState, enrichItem, dismissFromContinue, AUTO_WATCHED_PERCENT } from '../stores.js';
   import { episodeCode } from '../format.js';
   import { cardPlayback, seriesSummary, isSeriesItem, isAudioItem, mediaTitle } from '../series-playback.js';
+  import { audioPlaybackIssue } from '../audio-playback.js';
   // resume: rendered in the Continue Watching row — show which episode and how
   // much is left, and offer a way to drop it from the row.
   let { item, onopen, onplay, resume = false, wide = false } = $props();
@@ -16,6 +17,7 @@
   const poster = $derived(posterUrl(item));
   const backdrop = $derived(isAudioItem(item) ? '' : backdropUrl(item));
   const title = $derived(mediaTitle(item));
+  const playbackIssue = $derived(isAudioItem(item) ? audioPlaybackIssue(item) : '');
   const continueLabel = $derived(isAudioItem(item) ? 'Continue Listening' : 'Continue Watching');
   const year = $derived(item.year || item.omdbYear || '');
   const rating = $derived(item.imdbRating && item.imdbRating !== 'N/A' ? item.imdbRating : '');
@@ -63,8 +65,8 @@
 
     <!-- Hover: play button -->
     <div class="hover-overlay">
-      <button class="play" onclick={(e) => { e.stopPropagation(); onplay?.(resume ? current : cardPlayback(item, $seriesIndex, $watchState)); }} aria-label={`${isAudioItem(item) ? 'Listen to' : 'Play'} ${title}`}>
-        <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
+      <button class="play" onclick={(e) => { e.stopPropagation(); onplay?.(resume ? current : cardPlayback(item, $seriesIndex, $watchState)); }} aria-label={`${playbackIssue ? 'Playback info for' : isAudioItem(item) ? 'Listen to' : 'Play'} ${title}`}>
+        {#if playbackIssue}<span aria-hidden="true">ⓘ</span>{:else}<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>{/if}
       </button>
     </div>
 
@@ -84,6 +86,7 @@
           {resumeLine}
         {:else}
           {year}{isSeriesItem(item) ? ' · Series' : isAudioItem(item) ? ' · Audio' : ''}{rating ? ` · ★ ${rating}` : ''}
+          {#if playbackIssue}<span class="compatibility-label">Compatible copy needed</span>{/if}
           {#if summary && summary.watched}<span class="series-progress">{summary.watched} of {summary.total} watched</span>{/if}
         {/if}
       </span>
@@ -197,6 +200,7 @@
   }
   .y { display: block; font-size: 0.68rem; color: var(--ink-soft); margin-top: 2px; }
   .series-progress { display: block; margin-top: 3px; }
+  .compatibility-label { display: block; margin-top: 3px; color: #c5a6ff; }
 
   .progress {
     position: absolute; left: 0; right: 0; bottom: 0; height: 3px;

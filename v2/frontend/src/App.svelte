@@ -124,11 +124,9 @@
   let sections = $state([]);
   let sectionsReady = $state(false);
   let sectionsError = $state('');
-  let sectionsOpen = $state(false);
-  let sectionsButton = $state(null);
   let sectionRequest = 0;
+  const customSections = $derived(sections.filter(section => !['movie', 'show'].includes(section.type)));
   const selectedSection = $derived(sections.find(section => section.id === $route.id) || null);
-  const catalogCount = $derived($catalog.length);
   async function refreshSections() {
     const request = ++sectionRequest;
     const profile = $session?.profileId;
@@ -146,13 +144,18 @@
   }
   $effect(() => {
     if (phase !== 'ready') return;
-    catalogCount; $session?.profileId;
+    // This structural store stays stable during playback progress updates.
+    // A same-size scan can still add/remove an empty configured section.
+    $catalog; $session?.profileId;
     untrack(refreshSections);
   });
-  function toggleSections() {
-    sectionsOpen = !sectionsOpen; menuOpen = false; bellOpen = false;
-    if (sectionsOpen) refreshSections();
-  }
+  $effect(() => {
+    if (phase !== 'ready') return;
+    const onVisible = () => { if (document.visibilityState === 'visible') refreshSections(); };
+    const timer = setInterval(refreshSections, 300000);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => { clearInterval(timer); document.removeEventListener('visibilitychange', onVisible); };
+  });
   async function locationsChanged() {
     const results = await Promise.allSettled([loadLibrary($session?.profileId), refreshSections()]);
     if (results.some(result => result.status === 'rejected')) throw new Error('Catalog refresh failed');
@@ -207,13 +210,12 @@
   let searchExpanded = $state(false);
   let searchInput, accountButton;
   async function openMobileSearch() {
-    menuOpen = false; bellOpen = false; sectionsOpen = false; searchExpanded = true;
+    menuOpen = false; bellOpen = false; searchExpanded = true;
     await tick(); searchInput?.focus();
   }
   function dismissPanels(e) {
     if (e.key !== 'Escape') return;
     if (menuOpen) { menuOpen = false; confirmRestart = false; accountButton?.focus(); }
-    if (sectionsOpen) { sectionsOpen = false; sectionsButton?.focus(); }
     bellOpen = false; searchExpanded = false;
   }
 
@@ -248,7 +250,6 @@
     }
   });
   function openBell() {
-    sectionsOpen = false;
     bellOpen = !bellOpen;
     if (bellOpen) markAllRead();
   }
@@ -279,7 +280,6 @@
   function go(path) {
     searchExpanded = false;
     menuOpen = false;
-    sectionsOpen = false;
     confirmRestart = false;
     navigate(path);
   }
@@ -311,7 +311,7 @@
   }
   async function signOut() {
     menuOpen = false;
-    sectionsOpen = false; sectionRequest++;
+    sectionRequest++;
     sections = []; sectionsReady = false; sectionsError = '';
     notifReady = false;
     lastSeenNotifId = null;
@@ -327,7 +327,7 @@
   }
 </script>
 
-<svelte:window bind:scrollY onkeydown={dismissPanels} onclick={() => { menuOpen = false; confirmRestart = false; bellOpen = false; sectionsOpen = false; }} />
+<svelte:window bind:scrollY onkeydown={dismissPanels} onclick={() => { menuOpen = false; confirmRestart = false; bellOpen = false; }} />
 
 {#if phase === 'loading'}
   <div class="splash">
@@ -372,23 +372,11 @@
       <a class:active={$route.name === 'home'} href="/" onclick={(e) => { e.preventDefault(); go('/'); }}>Home</a>
       <a class:active={$route.name === 'movies'} href="/movies" onclick={(e) => { e.preventDefault(); go('/movies'); }}>Films</a>
       <a class:active={$route.name === 'shows'} href="/shows" onclick={(e) => { e.preventDefault(); go('/shows'); }}>Series</a>
-      <div class="libraries-nav">
-        <button class="libraries-toggle" class:active={$route.name === 'section'} aria-expanded={sectionsOpen} aria-controls="library-navigation" bind:this={sectionsButton} onclick={(e) => { e.stopPropagation(); toggleSections(); }}>Libraries</button>
-        {#if sectionsOpen}
-          <div class="library-navigation" id="library-navigation" role="region" aria-label="Library sections" onclick={(e) => e.stopPropagation()}>
-            <div class="meta">Your libraries</div>
-            {#if sectionsError}<p role="alert">{sectionsError} <button class="sections-retry" onclick={refreshSections}>Retry libraries</button></p>{/if}
-            {#if !sectionsReady && !sectionsError}<p role="status">Loading libraries…</p>{/if}
-            {#each sections as section (section.id)}
-              <a class:current={$route.name === 'section' && $route.id === section.id} href={`/library/${encodeURIComponent(section.id)}`} onclick={(e) => { e.preventDefault(); go(`/library/${encodeURIComponent(section.id)}`); }}>
-                <span>{section.label}</span><small>{section.available === false ? 'Unavailable' : `${Number(section.count || 0).toLocaleString()} files`}</small>
-              </a>
-            {/each}
-            {#if sectionsReady && !sections.length}<p>No locations linked yet.</p>{/if}
-            {#if isAdmin}<a class="manage-libraries" href="/libraries" onclick={(e) => { e.preventDefault(); go('/libraries'); }}>Manage libraries</a>{/if}
-          </div>
-        {/if}
-      </div>
+      {#each customSections as section (section.id)}
+        <a class:active={$route.name === 'section' && $route.id === section.id} href={`/library/${encodeURIComponent(section.id)}`} title={section.available === false ? `${section.label} — location unavailable` : section.label} onclick={(e) => { e.preventDefault(); go(`/library/${encodeURIComponent(section.id)}`); }}>{section.label}</a>
+      {/each}
+      {#if sectionsError}<button class="nav-retry" title={sectionsError} onclick={refreshSections}>Retry libraries</button>
+      {:else if !sectionsReady}<span class="nav-status" role="status">Loading libraries…</span>{/if}
       <button class="mobile-search" onclick={openMobileSearch}>Search</button>
     </nav>
     <div class="searchbox" class:open={searchDropOpen} onclick={(e) => e.stopPropagation()}>
@@ -466,7 +454,7 @@
     {/if}
     <div class="usermenu">
       <button class="avatar" aria-label="Account menu" aria-expanded={menuOpen} aria-controls="account-menu" bind:this={accountButton}
-              onclick={(e) => { e.stopPropagation(); sectionsOpen = false; menuOpen = !menuOpen; if (menuOpen) refreshPending(); }}>
+              onclick={(e) => { e.stopPropagation(); menuOpen = !menuOpen; if (menuOpen) refreshPending(); }}>
         {($session?.name || '?').slice(0, 1)}
         {#if pendingCount > 0}<span class="badge">{pendingCount}</span>{/if}
       </button>
@@ -480,7 +468,7 @@
           </button>
           {#if isAdmin || can('canDownload') || can('canLogs') || can('canDashboard') || can('canOrganizer')}
             <div class="divider"></div>
-            <div class="who meta">System</div>
+            <div class="who meta">Settings</div>
             {#if can('canDashboard')}<button onclick={() => go('/system')}>Dashboard</button>{/if}
             {#if isAdmin}<button onclick={() => go('/libraries')}>Libraries</button>{/if}
             {#if isAdmin}<button onclick={() => go('/users')}>Users</button>{/if}
@@ -640,23 +628,11 @@
   .wordmark { display: inline-flex; align-items: baseline; }
   .brandtv { color: var(--ink-soft); }
   .marksub { margin-top: calc(-1 * var(--s4)); letter-spacing: 0.3em; color: var(--ink-faint); }
-  nav { display: flex; align-items: center; gap: var(--s4); margin-left: var(--s4); flex-shrink: 0; }
-  .libraries-toggle { color: var(--ink-soft); font-size: .9rem; font-weight: 500; letter-spacing: .02em; }
-  .libraries-toggle:hover, .libraries-toggle.active { color: var(--ink); }
-  .library-navigation {
-    position: fixed; top: 64px; left: var(--gutter); z-index: 60;
-    width: min(420px, calc(100vw - 2 * var(--gutter))); max-height: min(65dvh, 520px); overflow-y: auto;
-    display: flex; flex-direction: column; gap: var(--s1); padding: var(--s3); border-radius: var(--r-md);
-    background: #17171c; box-shadow: 0 18px 50px rgba(0, 0, 0, .6), 0 0 0 1px var(--line-strong); overscroll-behavior: contain;
-  }
-  .library-navigation .meta, .library-navigation p { padding: var(--s2); }
-  .library-navigation p { color: var(--ink-soft); font-size: .88rem; }
-  .library-navigation a { display: flex; align-items: center; justify-content: space-between; gap: var(--s3); min-height: 44px; padding: 10px; border-radius: var(--r-sm); }
-  .library-navigation a:hover, .library-navigation a.current { background: var(--line); color: var(--ink); }
-  .library-navigation a span { min-width: 0; overflow-wrap: anywhere; }
-  .library-navigation a small { flex-shrink: 0; font-size: .75rem; color: var(--ink-soft); }
-  .library-navigation .manage-libraries { margin-top: var(--s2); border-top: 1px solid var(--line-strong); border-radius: 0; }
-  .sections-retry { text-decoration: underline; }
+  .brand, .bell, .usermenu { flex-shrink: 0; }
+  nav { display: flex; align-items: center; gap: var(--s4); margin-left: var(--s4); flex: 1 1 auto; min-width: 0; max-width: 50%; overflow-x: auto; white-space: nowrap; overscroll-behavior-x: contain; scrollbar-width: thin; }
+  nav > * { flex: 0 0 auto; }
+  .nav-status, .nav-retry { color: var(--ink-soft); font-size: .8rem; padding: 8px 0; }
+  .nav-retry { text-decoration: underline; }
 
   /* Persistent search box that fills the bar between the nav and the icons
      (rather than a narrow pill marooned in the middle). Explicit side
@@ -822,10 +798,11 @@
     color: var(--ink-soft); font-size: 0.9rem; font-weight: 500;
     letter-spacing: 0.02em; transition: color var(--t-fast);
     position: relative;
+    display: inline-flex; align-items: center; min-height: 36px;
   }
   nav a:hover, nav a.active { color: var(--ink); }
   nav a.active::after {
-    content: ''; position: absolute; left: 0; right: 0; bottom: -6px;
+    content: ''; position: absolute; left: 0; right: 0; bottom: 0;
     height: 2px; background: #9e6aff; border-radius: 2px;
   }
   main { position: relative; }
@@ -860,13 +837,10 @@
     .topbar { padding: var(--s3) var(--s4); gap: var(--s2); }
     .brand { margin-right: auto; }
     nav {
-      position: fixed; inset: auto 0 0; margin: 0; gap: 0; display: grid; grid-template-columns: repeat(5, 1fr);
+      position: fixed; inset: auto 0 0; margin: 0; gap: 0; display: flex; max-width: none; width: 100%; overflow-x: auto;
       padding: 5px 8px calc(5px + env(safe-area-inset-bottom)); background: #111116; border-top: 1px solid var(--line-strong);
     }
-    nav > a, .mobile-search, .libraries-toggle { display: grid; place-items: center; min-height: 44px; width: 100%; font-size: .8rem; color: var(--ink-soft); }
-    .libraries-toggle.active { color: #c5a6ff; }
-    .libraries-nav { min-width: 0; }
-    .library-navigation { top: auto; bottom: calc(64px + env(safe-area-inset-bottom)); left: 12px; right: 12px; width: auto; max-height: calc(100dvh - 150px - env(safe-area-inset-bottom)); }
+    nav > a, .mobile-search, .nav-retry, .nav-status { display: grid; place-items: center; min-height: 44px; min-width: 64px; padding: 0 12px; font-size: .8rem; color: var(--ink-soft); }
     nav a.active { color: #c5a6ff; }
     nav a.active::after { bottom: 0; left: 20%; right: 20%; }
     main { padding-bottom: calc(60px + env(safe-area-inset-bottom)); }

@@ -50,7 +50,7 @@
       const result = await api.libraryLocationAdd({ path: location.trim(), label, type: `custom-${slug}`, mediaKind: kind });
       if (!result?.ok) throw new Error(result?.error || 'Location could not be linked.');
       if (closed) return;
-      message = `Linked ${label}. Its section is now available in Libraries.`;
+      message = `Linked ${label}. Its section is now in the main navigation.`;
       name = ''; location = ''; closeBrowser();
       await refreshAfterChange();
     } catch (e2) {
@@ -99,7 +99,7 @@
 </script>
 
 <div class="page">
-  <header><h1 class="display">Libraries</h1><p>Give each location a name, such as Anime or Podcasts. Linked locations appear in Libraries for everyone who can sign in.</p></header>
+  <header><h1 class="display">Libraries</h1><p>Give each location a name, such as Anime or Audio Books. Each custom library appears directly in the main navigation for everyone who can sign in.</p></header>
   {#if message}<p class="success" role="status">{message}</p>{/if}
   {#if actionError}<p class="error" role="alert">{actionError}</p>{/if}
 
@@ -108,7 +108,7 @@
     <p class="hint">Link an existing folder on the server. This does not create or move folders.</p>
     <form onsubmit={add}>
       <div class="fields">
-        <label>Library name<input bind:value={name} placeholder="Anime, Podcasts…" required disabled={busy} /></label>
+        <label>Library name<input bind:value={name} placeholder="Anime, Audio Books…" required disabled={busy} /></label>
         <label>Content kind
           <select bind:value={kind} disabled={busy}>
             <option value="movie">Films</option><option value="show">Series</option><option value="audio">Audio</option><option value="mixed">Mixed media</option>
@@ -116,7 +116,7 @@
         </label>
       </div>
       <label>Server location<input bind:value={location} placeholder="/mnt/media/Anime" required disabled={busy} autocomplete="off" /></label>
-      <p class="hint">{kind === 'audio' ? 'Audio: MP3, M4A, AAC, FLAC, WAV, OGG and Opus. Playback depends on your browser’s format support.' : kind === 'mixed' ? 'Mixed media includes films, series and audio. Episode filenames identify series.' : kind === 'show' ? 'Series are grouped into shows and episodes. Video: MP4, MKV and AVI.' : 'Films are shown as individual titles. Video: MP4, MKV and AVI.'}</p>
+      <p class="hint">{kind === 'audio' ? 'Audio: MP3, M4A, M4B, AAC, FLAC, WAV, OGG and Opus. Playback depends on your browser’s format support. Audible AAX, AA and AAXC books are listed, but need an unprotected MP3 or M4B copy to play.' : kind === 'mixed' ? 'Mixed media includes films, series and audio. Episode filenames identify series. Protected Audible books are listed with a compatibility message.' : kind === 'show' ? 'Series are grouped into shows and episodes. Video: MP4, MKV and AVI.' : 'Films are shown as individual titles. Video: MP4, MKV and AVI.'}</p>
       <div class="actions">
         <button type="button" class="secondary" disabled={busy} onclick={() => browse(location.trim())}>Browse locations</button>
         <button type="submit" class="cta" disabled={busy || !name.trim() || !location.trim()}>{busy ? 'Saving…' : 'Link location'}</button>

@@ -31,7 +31,7 @@ const QBT_BASE = process.env.QBT_URL || 'http://localhost:8080';
 const QBT_USERNAME = process.env.QBT_USER || '';
 const QBT_PASSWORD = process.env.QBT_PASS || '';
 const { VIDEO_EXTENSIONS, AUDIO_EXTENSIONS, isAudioFile, normalizeFolderMediaKind,
-  extensionsForFolder, classifyMediaKind } = require('./lib/library-media');
+  extensionsForFolder, classifyMediaKind, playbackIssueForFile } = require('./lib/library-media');
 const { FolderError, validateFolderPath, normalizeFolder, publicSections, sectionId, overlapsFolder } = require('./lib/library-folders');
 const SUPPORTED_EXT = [...VIDEO_EXTENSIONS, ...AUDIO_EXTENSIONS];
 const SUBTITLE_EXT = ['.srt', '.vtt'];
@@ -375,10 +375,15 @@ function loadLibraryCache() {
         if (!fullPath) continue;
         const folder = config.folders.find(folder => folder.path === item.folderPath) || { type: item.type };
         item.mediaKind = classifyMediaKind(fullPath, folder);
+        item.playbackIssue = playbackIssueForFile(fullPath);
         item.sectionId = item.folderPath ? sectionId(item.folderPath) : undefined;
         if (item.mediaKind !== 'show') { item.showName = null; item.epInfo = null; }
         fileIndex[item.id] = fullPath;
-        item.streamMode = item.mediaKind === 'audio' ? 'direct' : getStreamMode(fullPath);
+        item.streamMode = item.playbackIssue ? 'unsupported' : item.mediaKind === 'audio' ? 'direct' : getStreamMode(fullPath);
+        if (item.mediaKind === 'audio') {
+          item.videoUrl = item.playbackIssue ? null : `/stream/${item.id}`;
+          item.codec = null;
+        }
         if (item.posterUrl) {
           const poster = findPosterInDir(path.dirname(fullPath), path.parse(path.basename(fullPath)).name);
           if (poster) posterIndex[item.id] = poster;
@@ -450,6 +455,7 @@ async function doRescan(trigger) {
       const baseName = path.parse(file).name;
       const { title, year } = parseTitle(file);
       const mediaKind = classifyMediaKind(fullPath, folder);
+      const playbackIssue = playbackIssueForFile(fullPath);
       const type = folder.type && folder.type !== 'auto' ? folder.type : mediaKind;
       const id = hashId(fullPath);
 
@@ -488,8 +494,8 @@ async function doRescan(trigger) {
       // Genres from config
       const genres = config.genres[id] || folder.genres || [];
 
-      const streamMode = mediaKind === 'audio' ? 'direct' : getStreamMode(fullPath);
-      const codec = probeCache[fullPath] || null;
+      const streamMode = playbackIssue ? 'unsupported' : mediaKind === 'audio' ? 'direct' : getStreamMode(fullPath);
+      const codec = mediaKind === 'audio' ? null : probeCache[fullPath] || null;
 
       // Audio tracks from probe cache
       const rawAudioTracks = audioTracksCache[fullPath] || [];
@@ -505,14 +511,14 @@ async function doRescan(trigger) {
         folder: folder.label || path.basename(dirPath),
         folderPath: folder.path,
         posterUrl: posterAbsPath ? `/poster/${id}` : null,
-        videoUrl: `/stream/${id}`,
+        videoUrl: playbackIssue ? null : `/stream/${id}`,
         subtitles: [
           ...subs.map(s => ({ id: s.id, label: s.label, url: `/subtitle/${s.id}`, _absPath: s.absPath, _format: s.format })),
           ...embeddedSubs,
         ],
         audioTracks,
         showName, epInfo, fileSize, addedAt, genres,
-        streamMode, codec,
+        streamMode, playbackIssue, codec,
       });
     }
   }
@@ -962,6 +968,7 @@ app.get('/api/library', requireAuth, (req, res) => {
       fileSize: item.fileSize,
       addedAt: item.addedAt,
       streamMode: item.streamMode,
+      playbackIssue: item.playbackIssue || playbackIssueForFile(item._filePath || item.filename),
       codec: item.codec,
       posterUrl: item.posterUrl,
       genres: item.genres,
@@ -1770,6 +1777,8 @@ const { streamMediaFile } = require('./lib/direct-stream');
 app.get('/stream/:id', requireAuth, ensureLibrary, async (req, res) => {
   const filePath = fileIndex[req.params.id];
   if (!filePath) return res.status(404).send('File not found');
+  const playbackIssue = playbackIssueForFile(filePath);
+  if (playbackIssue) return res.status(415).send(playbackIssue);
   lastPlaybackAt = Date.now(); // pause sprite gen during direct play
   await streamMediaFile(req, res, filePath, { onError: err => recordError('direct-stream', err.message) });
 });
