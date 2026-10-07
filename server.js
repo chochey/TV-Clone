@@ -2403,9 +2403,11 @@ const conversionStorage = require('./lib/conversion-storage')();
 app.get('/api/conversion/plan', requireAdminSession, (req, res) => {
   const includeImageSubs = req.query.includeImageSubs === '1' || req.query.includeImageSubs === 'true';
   const lib = scanLibrary();
+  const seenFiles = new Set();
   const files = lib.map((item) => {
     const filePath = item._filePath;
-    if (!filePath) return null;
+    if (!filePath || seenFiles.has(filePath)) return null;
+    seenFiles.add(filePath);
     const tracks = audioTracksCache[filePath] || [];
     return {
       filePath,
@@ -2472,17 +2474,15 @@ const conversionWorker = require('./lib/conversion-worker')({
   log: (msg) => console.log(`[conversion] ${msg}`),
 });
 
-// Files the queue is allowed to touch. Only the container tier: it is the
-// lossless one (every stream copied, nothing re-encoded), and the only tier
-// whose behaviour has been proven end to end on real library files.
-// Image-subtitle files are excluded for the same reason the planner excludes
-// them — a container change cannot carry PGS/VOBSUB across without OCR.
+// Files the queue is allowed to touch, filtered by the enabled conversion
+// categories. Image-subtitle files remain excluded because these conversions
+// cannot carry PGS/VOBSUB into browser-compatible output without OCR.
 function eligibleContainerFiles(cfg) {
   const out = [];
   const sizes = new Map();
   for (const item of scanLibrary()) {
     const filePath = item._filePath;
-    if (!filePath) continue;
+    if (!filePath || sizes.has(filePath)) continue;
     const tracks = audioTracksCache[filePath] || [];
     const c = classifyFile({
       filePath,
@@ -2521,7 +2521,14 @@ const conversionQueue = require('./lib/conversion-queue')({
   // fs.watch is blind on this box's fuse.mergerfs media mount (see
   // setupOrganizerWatch below), so nothing else would notice these renames.
   onFileComplete: () => { conversionWorker.invalidateOriginals(); invalidateLibrary('conversion-file'); },
-  onBatchComplete: () => invalidateLibrary('conversion-queue'),
+  onBatchComplete: () => {
+    // An earlier scan may have read the last file before its verified rename.
+    // Start a fresh scan after it settles so the final replacement is indexed.
+    (async () => {
+      if (rescanPromise) { try { await rescanPromise; } catch {} }
+      await rescanLibraryAsync('conversion-queue');
+    })().catch(error => console.warn(`[conversion] Final library refresh failed: ${error.message}`));
+  },
   log: (msg) => console.log(`[conversion] ${msg}`),
 });
 
@@ -2531,8 +2538,12 @@ app.get('/api/conversion/status', requireAdminSession, async (_req, res) => {
   catch { res.json({ ok: true, ...status, storage: { warnings: [], current: null, unavailable: true } }); }
 });
 
-app.post('/api/conversion/start', requireAdminSession, (_req, res) => {
-  const r = conversionQueue.start();
+app.post('/api/conversion/start', requireAdminSession, (req, res) => {
+  const all = req.body?.all;
+  if (Object.prototype.hasOwnProperty.call(req.body || {}, 'all') && typeof all !== 'boolean') {
+    return res.status(400).json({ ok: false, error: 'all must be a boolean' });
+  }
+  const r = conversionQueue.start({ all: all === true });
   if (!r.ok) return res.status(409).json({ ok: false, error: r.error });
   res.json({ ok: true, ...r, ...conversionQueue.snapshot() });
 });

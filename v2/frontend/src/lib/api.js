@@ -136,17 +136,14 @@ export const api = {
   scan: () => fetch('/api/scan', opts('POST')).then(json),
   restart: () => fetch('/api/restart', opts('POST')).then(json),
 
-  // Library conversion — phase 1, read-only (MEDIA_CONVERSION_PLAN.md). No
-  // start/stop/status here on purpose: nothing runs yet.
+  // Library conversion settings, preview, and queue controls.
   conversionConfig: () => fetch('/api/conversion/config', opts('GET')).then(json),
   conversionConfigUpdate: (body) => fetch('/api/conversion/config', opts('PUT', body)).then(json),
   conversionPlan: (includeImageSubs = false) =>
     fetch(`/api/conversion/plan${includeImageSubs ? '?includeImageSubs=1' : ''}`, opts('GET')).then(json),
-  // Phase 2 pilot: converts the ten hand-picked files server.js hardcodes as
-  // PILOT_TIER1_FILES. Not a general "convert N files" call — see the
-  // comment above that constant for why the scope is fixed for now.
   conversionStatus: () => fetch('/api/conversion/status', opts('GET')).then(json),
-  conversionStart: () => fetch('/api/conversion/start', opts('POST')).then(json),
+  // Convert all bypasses only the batch file count; other limits still apply.
+  conversionStart: ({ all = false } = {}) => fetch('/api/conversion/start', opts('POST', { all })).then(json),
   conversionPause: () => fetch('/api/conversion/pause', opts('POST')).then(json),
   conversionResume: () => fetch('/api/conversion/resume', opts('POST')).then(json),
   conversionStop: () => fetch('/api/conversion/stop', opts('POST')).then(json),

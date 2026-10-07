@@ -131,6 +131,99 @@ test('a sole surviving retained original can be restored but cannot be deleted',
   await expect(page.locator('.drive-warning')).toContainText('Drive 1: 96% full · 20.00 GB free.');
 });
 
+async function mockConversion(page, { eligible = 1205, statusFailure = false, startFailure = false, holdStatus = false } = {}) {
+  const conversionPlan = structuredClone(plan);
+  conversionPlan.config.enabled = true;
+  conversionPlan.config.retainOriginals = false;
+  conversionPlan.eligibleSelected = eligible;
+  let state = { status: 'idle', total: 0, done: 0, scope: 'batch', storage: { warnings: [] } };
+  const starts = [], writes = [];
+  const updateState = (status) => route => { state = { ...state, status }; return route.fulfill({ json: state }); };
+  await mockApi(page, {
+    '/api/conversion/plan': route => route.fulfill({ json: conversionPlan }),
+    '/api/conversion/originals': route => route.fulfill({ json: { items: [], totalBytes: 0 } }),
+    '/api/conversion/status': route => holdStatus ? undefined : route.fulfill(statusFailure
+      ? { status: 503, json: { error: 'Queue status unavailable' } } : { json: state }),
+    '/api/conversion/start': route => {
+      const body = route.request().postDataJSON(); starts.push(body);
+      if (startFailure) return route.fulfill({ status: 409, json: { error: 'Nothing eligible to convert' } });
+      state = { ...state, status: 'running', scope: body.all ? 'all' : 'batch', total: body.all ? eligible : Math.min(10, eligible), converted: 0, failed: 0 };
+      return route.fulfill({ json: state });
+    },
+    '/api/conversion/config': route => { writes.push(route.request().postDataJSON()); return route.fulfill({ json: { config: conversionPlan.config } }); },
+    '/api/conversion/pause': updateState('paused'),
+    '/api/conversion/resume': updateState('running'),
+    '/api/conversion/stop': updateState('idle'),
+  });
+  return { starts, writes };
+}
+
+test('Convert all can be cancelled and queues all candidates without changing settings', async ({ page }) => {
+  const { starts, writes } = await mockConversion(page);
+  await page.goto(`${origin}/conversion`);
+  const all = page.getByRole('button', { name: 'Convert all (1,205 files)', exact: true });
+  const confirmation = page.getByRole('region', { name: 'Confirm conversion' });
+  await all.click();
+  await expect(confirmation).toContainText('1,205 eligible files');
+  await expect(confirmation).toContainText('Old files are permanently deleted after successful verification.');
+  expect(starts).toEqual([]);
+  await confirmation.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(confirmation).toHaveCount(0); expect(starts).toEqual([]);
+  await all.press('Enter');
+  await confirmation.getByRole('button', { name: 'Confirm Convert all', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Pause', exact: true })).toBeVisible();
+  expect(starts).toEqual([{ all: true }]); expect(writes).toEqual([]);
+  await expect(page.getByText('Convert all — all eligible selected files', { exact: true })).toBeVisible();
+  await expect(page.locator('.progmeta strong')).toHaveText('0 / 1205');
+  await page.getByRole('button', { name: 'Pause', exact: true }).click();
+  await page.getByRole('button', { name: 'Resume', exact: true }).click();
+  await page.getByRole('button', { name: 'Stop', exact: true }).click();
+  await expect(all).toBeEnabled();
+  expect(starts).toEqual([{ all: true }]); expect(writes).toEqual([]);
+});
+
+test('switching Convert all to batch requires the correct confirmation and fits a phone', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const { starts } = await mockConversion(page, { eligible: 6 });
+  await page.goto(`${origin}/conversion`);
+  await page.getByRole('button', { name: 'Convert all (6 files)', exact: true }).click();
+  await page.getByRole('button', { name: 'Convert batch (6 files)', exact: true }).click();
+  const confirmation = page.getByRole('region', { name: 'Confirm conversion' });
+  await expect(confirmation).toContainText('a limited batch');
+  await expect(confirmation.getByRole('button', { name: 'Confirm Convert all', exact: true })).toHaveCount(0);
+  expect(starts).toEqual([]);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+  await confirmation.getByRole('button', { name: 'Confirm batch', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Stop', exact: true })).toBeVisible();
+  expect(starts).toEqual([{ all: false }]);
+  await expect(page.getByText('Limited batch', { exact: true })).toBeVisible();
+});
+
+for (const scenario of [
+  { name: 'there are no candidates', eligible: 0 },
+  { name: 'queue status fails', statusFailure: true },
+  { name: 'queue status has not loaded', holdStatus: true },
+]) {
+  test(`Convert all is disabled when ${scenario.name}`, async ({ page }) => {
+    const { starts } = await mockConversion(page, scenario);
+    await page.goto(`${origin}/conversion`);
+    await expect(page.getByRole('button', { name: /^Convert all \(/ })).toBeDisabled();
+    await expect(page.getByRole('button', { name: /^Convert batch \(/ })).toBeDisabled();
+    if (scenario.statusFailure) await expect(page.getByRole('alert')).toContainText('Queue status unavailable');
+    expect(starts).toEqual([]);
+  });
+}
+
+test('a rejected Convert all request remains visible after a successful status refresh', async ({ page }) => {
+  const { starts } = await mockConversion(page, { startFailure: true });
+  await page.goto(`${origin}/conversion`);
+  await page.getByRole('button', { name: /^Convert all \(/ }).click();
+  await page.getByRole('button', { name: 'Confirm Convert all', exact: true }).click();
+  await expect(page.getByText('Nothing eligible to convert', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: /^Convert all \(/ })).toBeEnabled();
+  expect(starts).toEqual([{ all: true }]);
+});
+
 test('dashboard warns about a physical drive even when pooled space is ample', async ({ page }) => {
   await mockApi(page, {
     '/api/system/stats': route => route.fulfill({ json: { disks: [{ mount: '/mnt/media', source: 'mergerfs', percent: 60, available: 3e12 }, { mount: '/mnt/drive1', source: '/dev/sda1', percent: 96, available: 20e9 }] } }),

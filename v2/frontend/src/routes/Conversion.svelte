@@ -10,8 +10,10 @@
 
   let queue = $state(null);       // live snapshot from /api/conversion/status
   let queueBusy = $state(false);
-  let startArmed = $state(false);
+  let startConfirm = $state(null); // 'all' | 'batch'; never shared across actions
   let queueError = $state('');
+  let statusError = $state('');
+  let statusReady = $state(false);
   let poll = null, statusLoading = false, closed = false;
 
   let cleanupPreview = $state(null);
@@ -23,6 +25,14 @@
   const isActive = $derived(queue?.status === 'running' || queue?.status === 'paused' || queue?.status === 'stopping');
   const pct = $derived(queue?.total ? Math.round((queue.done / queue.total) * 100) : 0);
   const driveWarnings = $derived(queue?.storage?.warnings || data?.disk?.drives || []);
+  const candidateCount = $derived(Number.isFinite(data?.eligibleSelected) ? Math.max(0, Math.floor(data.eligibleSelected)) : 0);
+  const batchCount = $derived(Math.min(candidateCount, Math.max(0, Math.floor(Number(data?.config?.maxFilesPerRun) || 0))));
+  const selectedCategories = $derived([
+    ['container', 'container remux'], ['audio', 'compatible audio'],
+    ['legacy', 'legacy codecs'], ['video', 'HEVC, AV1 and 10-bit H.264'],
+  ].filter(([key]) => data?.config?.tiers?.[key]).map(([, label]) => label));
+  const canStart = $derived(statusReady && queue?.status === 'idle' && data?.config?.enabled && candidateCount > 0 && !saving && !queueBusy && !error);
+  $effect(() => { if (!canStart) startConfirm = null; });
 
   async function loadStatus() {
     if (statusLoading || closed) return;
@@ -30,10 +40,14 @@
     try {
       const next = await api.conversionStatus();
       if (closed) return;
-      const finished = queue?.status !== 'idle' && next.status === 'idle';
+      if (!['idle', 'running', 'paused', 'stopping'].includes(next?.status)) throw new Error('The queue returned an unknown status. Retry before starting conversion.');
+      const finished = queue && queue.status !== 'idle' && next.status === 'idle';
       queue = next;
+      statusReady = true; statusError = '';
       if (finished) { refresh(); loadOriginals(); }
-    } catch (e) { queueError = e.body?.error || 'Failed to read queue status'; }
+    } catch (e) {
+      if (!closed) { statusReady = false; statusError = e.body?.error || e.message || 'Failed to read queue status'; }
+    }
     finally { statusLoading = false; }
   }
 
@@ -46,9 +60,9 @@
   }
   $effect(syncPolling);
 
-  async function queueAction(fn, { arm = false } = {}) {
-    if (arm && !startArmed) { startArmed = true; setTimeout(() => { startArmed = false; }, 5000); return; }
-    startArmed = false;
+  async function queueAction(fn) {
+    if (queueBusy || closed) return;
+    startConfirm = null;
     queueBusy = true; queueError = '';
     try {
       queue = await fn();
@@ -59,6 +73,15 @@
       queueBusy = false;
       loadStatus();
     }
+  }
+
+  function prepareStart(scope) {
+    if (!canStart || (scope === 'batch' && !batchCount)) return;
+    startConfirm = scope;
+  }
+  function startConversion(scope) {
+    if (!canStart || startConfirm !== scope || (scope === 'batch' && !batchCount)) return;
+    return queueAction(() => api.conversionStart({ all: scope === 'all' }));
   }
 
   async function previewCleanup(mode = 'expired', retainedPath = null) {
@@ -130,6 +153,7 @@
 
   async function saveConfig(patch) {
     if (!data) return;
+    startConfirm = null;
     saving = true; saveNote = '';
     try {
       const res = await api.conversionConfigUpdate(patch);
@@ -191,7 +215,7 @@
       <p>Extra audio languages and surround tracks are retained where MP4 supports them; otherwise they are converted to AAC.
         Text subtitles become separate subtitle files. HDR, Dolby Vision and image subtitles are left for review.</p>
       <button class="qbtn" disabled={saving || isActive} onclick={() => saveConfig({tiers:{container:true,audio:true,legacy:true,video:true},cpuCores:2,videoCrf:20,niceness:19,pauseWhilePlaying:true})}>Use recommended settings</button>
-      <p class="hint">This saves settings only. Enable conversion and press Start when you are ready.</p>
+      <p class="hint">This saves settings only. Enable conversion and choose Convert all or Convert batch when you are ready.</p>
     </section>
 
     <section class="card">
@@ -199,7 +223,7 @@
         <div>
           <h2>Enable conversion</h2>
           <p class="hint">
-            Enables the Start button. Conversion never starts just because this is switched on,
+            Enables the conversion controls. Conversion never starts just because this is switched on,
             and it stays stopped after a server restart. Turning it off pauses an active job.
           </p>
         </div>
@@ -399,10 +423,19 @@
         Converts the selected categories, smallest files first. Each output is checked before replacement.
         {data.config.retainOriginals === false ? 'Old files are deleted after verification.' : 'Original files are retained for recovery; cleanup is manual.'}
         A server restart stops the queue;
-        Start rebuilds the list and skips files already compatible.
+        Starting rebuilds the list and skips files already compatible.
       </p>
 
+      <p class="hint">
+        <strong>Convert all</strong> queues every currently eligible file in your selected categories with no file-count batch limit.
+        Selected categories: {selectedCategories.length ? selectedCategories.join('; ') : 'none'}.
+        Already compatible files are skipped; HDR, Dolby Vision, image subtitles and other safety exclusions remain.
+        Your CPU allocation, schedule, pause-while-watching setting, free-space limits and retention settings still apply.
+      </p>
+      {#if isActive}<p class="hint">Run scope: <strong>{queue.scope === 'all' ? 'Convert all — all eligible selected files' : 'Limited batch'}</strong>.</p>{/if}
+
       {#if queueError}<p class="danger">{queueError}</p>{/if}
+      {#if statusError}<p class="danger" role="alert">{statusError} <button class="qbtn" onclick={loadStatus} disabled={queueBusy}>Retry status</button></p>{/if}
 
       {#if queue && queue.total > 0}
         <div class="progwrap">
@@ -437,12 +470,30 @@
         {:else if queue?.status === 'stopping'}
           <button class="qbtn" disabled>Stopping…</button>
         {:else}
-          <button class="qbtn go" class:armed={startArmed}
-                  onclick={() => queueAction(api.conversionStart, { arm: true })} disabled={queueBusy || saving || !data.config.enabled}>
-            {startArmed ? 'Click again to start converting' : `Start (${data.eligibleSelected} candidates)`}
+          <button class="qbtn go" onclick={() => prepareStart('all')} disabled={!canStart}>
+            Convert all ({candidateCount.toLocaleString()} files)
+          </button>
+          <button class="qbtn" onclick={() => prepareStart('batch')} disabled={!canStart || !batchCount}>
+            Convert batch ({batchCount.toLocaleString()} files)
           </button>
         {/if}
       </div>
+      {#if startConfirm && canStart}
+        {@const all = startConfirm === 'all'}
+        <div class="card startconfirm" role="region" aria-label="Confirm conversion">
+          <p>Start {all ? 'Convert all' : 'a limited batch'} for <strong>{(all ? candidateCount : batchCount).toLocaleString()} eligible file{(all ? candidateCount : batchCount) === 1 ? '' : 's'}</strong>
+            in the selected categories?</p>
+          <p class="hint">{all ? 'No file-count batch limit.' : `This batch is limited to ${data.config.maxFilesPerRun} files.`}
+            CPU, schedule, playback pauses and storage safeguards still apply.
+            {data.config.retainOriginals === false ? 'Old files are permanently deleted after successful verification.' : 'Originals are kept for recovery.'}</p>
+          <button class="qbtn go" onclick={() => startConversion(all ? 'all' : 'batch')} disabled={!canStart || queueBusy}>
+            {all ? 'Confirm Convert all' : 'Confirm batch'}
+          </button>
+          <button class="qbtn" onclick={() => { startConfirm = null; }} disabled={queueBusy}>Cancel</button>
+        </div>
+      {/if}
+      {#if !queue && !statusError}<p class="hint" role="status">Checking conversion queue…</p>{/if}
+      {#if candidateCount === 0}<p class="hint">No eligible files in the selected categories.</p>{/if}
       <button class="qbtn" disabled={saving || queueBusy}
               onclick={() => saveConfig({pauseWhilePlaying: !data.config.pauseWhilePlaying})}>
         {data.config.pauseWhilePlaying ? 'Keep converting while watching' : 'Restore automatic pause while watching'}
@@ -452,8 +503,8 @@
       {/if}
       <p class="hint">
         Pause suspends the current job and Resume continues it. Stop cancels the job and removes its temporary output,
-        leaving the original intact. A run is capped at {data.config.maxFilesPerRun} files
-        (<em>Max files per run</em> above); start it again for the next batch.
+        leaving the original intact. Convert batch queues up to {data.config.maxFilesPerRun} files
+        (<em>Max files per run</em> above); Convert all bypasses that file-count limit.
       </p>
 
       {#if queue?.results?.length}
@@ -605,7 +656,7 @@
     color: var(--ink-soft); box-shadow: inset 0 0 0 1px var(--line-strong);
   }
   .qbtn.go { color: #7ed491; box-shadow: inset 0 0 0 1px rgba(126, 212, 145, 0.45); }
-  .qbtn.go.armed { background: #7ed491; color: #10231a; box-shadow: none; }
+  .startconfirm { margin-top: var(--s3); }
   .qbtn.stop { color: #ff6b6b; box-shadow: inset 0 0 0 1px rgba(255, 107, 107, 0.45); }
   .qbtn.danger { color: #ff6b6b; box-shadow: inset 0 0 0 1px rgba(255, 107, 107, 0.45); }
   .qbtn.danger.armed { background: #e5484d; color: #fff; box-shadow: none; }
