@@ -4,6 +4,7 @@ import { loadNotifications, resetNotifications } from './notifications.js';
 
 import { startLiveUpdates } from './live-updates.js';
 import { unpackCatalog } from './catalog-response.js';
+import { isSeriesItem, isAudioItem, mediaKindOf, seriesKey } from './series-playback.js';
 
 export const session = writable(null);     // { loggedIn, profileId, name, role }
 const liveLibrary = writable([]);
@@ -14,8 +15,8 @@ export const mediaById = derived(catalog, items => new Map(items.map(i => [i.id,
 export const seriesIndex = derived(catalog, items => {
   const groups = new Map();
   for (const item of items) {
-    if (!item.showName) continue;
-    const key = item.type + '::' + item.showName;
+    const key = seriesKey(item);
+    if (!key) continue;
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(item);
   }
@@ -65,9 +66,10 @@ export async function loadDismissed() {
 // of it; dismissing only the one on screen would just promote the next episode
 // into the slot, which reads as "the button didn't work".
 export function dismissFromContinue(item) {
-  const ids = item.showName
+  const key = seriesKey(item);
+  const ids = key
     ? get(library)
-      .filter((m) => m.showName === item.showName && m.progress?.percent > 0 && m.progress?.percent < FINISHED_PERCENT)
+      .filter((m) => seriesKey(m) === key && m.progress?.percent > 0 && m.progress?.percent < FINISHED_PERCENT)
       .map((m) => m.id)
     : [item.id];
   dismissed.update((d) => {
@@ -96,7 +98,7 @@ export const continueWatching = derived([watchState, mediaById, dismissed], ([$s
     .sort((a, b) => (b.progress?.updatedAt || 0) - (a.progress?.updatedAt || 0));
   const seen = new Set();
   return inProgress.filter(item => {
-    const key = item.showName ? item.type + '::' + item.showName : item.id;
+    const key = seriesKey(item) || item.id;
     if (seen.has(key)) return false;
     seen.add(key); return true;
   });
@@ -108,8 +110,8 @@ export function collapseShows(items) {
   const seen = new Map();
   const out = [], positions = new Map();
   for (const item of items) {
-    if (item.showName) {
-      const key = item.type + '::' + item.showName;
+    if (isSeriesItem(item)) {
+      const key = seriesKey(item);
       const prev = seen.get(key);
       // Prefer an entry that actually has a poster, then the newest.
       const better = !prev ||
@@ -159,8 +161,9 @@ export const genreClusters = derived(catalog, ($lib) => {
 // in progress = started && not watched; unwatched = not watched).
 const catalogStats = derived(catalog, items => ({
   total: items.length,
-  movies: items.filter(i => i.type === 'movie').length,
-  shows: new Set(items.filter(i => i.showName).map(i => i.showName)).size,
+  movies: items.filter(i => mediaKindOf(i) === 'movie').length,
+  shows: new Set(items.map(seriesKey).filter(Boolean)).size,
+  audio: items.filter(isAudioItem).length,
 }));
 export const libraryStats = derived([catalogStats, watchState], ([$stats, $state]) => {
   const states = Object.values($state);
@@ -176,6 +179,7 @@ export const libraryStats = derived([catalogStats, watchState], ([$stats, $state
 const enrichAttempted = new Set();
 export async function enrichItem(id) {
   if (!id || enrichAttempted.has(id)) return;
+  if (isAudioItem(get(mediaById).get(id))) return;
   enrichAttempted.add(id);
   const generation = sessionGeneration;
   let meta;

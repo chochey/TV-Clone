@@ -37,6 +37,7 @@ async function mockApi(page, overrides = {}) {
     if (pathname === '/api/health') body = { ready: true };
     else if (pathname === '/api/me') body = { loggedIn: true, role: 'admin', profileId: 'test', name: 'Test' };
     else if (pathname === '/api/library') body = library;
+    else if (pathname === '/api/library/sections') body = { ok: true, sections: [] };
     else if (pathname.startsWith('/api/item/')) body = library.find(item => item.id === pathname.split('/').at(-1));
     else if (pathname === '/api/dismissed') body = { continueWatching: {}, recentlyAdded: {} };
     else if (pathname === '/api/requests') body = { requests: [] };
@@ -51,6 +52,181 @@ async function mockApi(page, overrides = {}) {
   });
   await page.route('**/backdrop/**', route => route.fulfill({ status: 404 }));
   await page.route('**/stream/**', route => route.fulfill({ status: 404 }));
+}
+
+test('an admin can browse and link a named series library with a custom type', async ({ page }) => {
+  const folders = [], adds = [], browsed = [];
+  await mockApi(page, {
+    '/api/config': route => route.fulfill({ json: folders }),
+    '/api/library/sections': route => route.fulfill({ json: { ok: true, sections: folders.map(({ id, label, type, mediaKind, fileCount }) => ({ id, label, type, mediaKind, count: fileCount, available: true })) } }),
+    '/api/browse': route => {
+      const requested = new URL(route.request().url()).searchParams.get('path') || '/virtual';
+      browsed.push(requested);
+      return route.fulfill({ json: { current: requested, parent: requested === '/virtual' ? '/' : '/virtual', dirs: requested === '/virtual' ? ['Anime'] : [], videoCount: 2, audioCount: 0, mediaCount: 2 } });
+    },
+    '/api/config/add': route => {
+      const body = route.request().postDataJSON(); adds.push(body);
+      const folder = { ...body, id: 'anime-section', exists: true, fileCount: 2 };
+      folders.push(folder);
+      return route.fulfill({ json: { ok: true, folder } });
+    },
+  });
+  await page.goto(`${origin}/system`);
+  await page.getByRole('link', { name: 'Manage libraries', exact: true }).click();
+  await expect(page).toHaveURL(`${origin}/libraries`);
+  await expect(page.getByRole('heading', { name: 'Libraries', exact: true })).toBeVisible();
+  const link = page.getByRole('button', { name: 'Link location', exact: true });
+  await expect(link).toBeDisabled();
+  await page.getByLabel('Library name', { exact: true }).fill('Anime');
+  await page.getByRole('combobox', { name: 'Content kind', exact: true }).selectOption('show');
+  await page.getByLabel('Server location', { exact: true }).fill('/virtual');
+  await page.getByRole('button', { name: 'Browse locations', exact: true }).click();
+  const browser = page.getByRole('region', { name: 'Browse server locations' });
+  await browser.getByRole('button', { name: '▸ Anime', exact: true }).click();
+  await expect(browser.locator('.path')).toHaveText('/virtual/Anime');
+  await browser.getByRole('button', { name: 'Use this location', exact: true }).click();
+  await expect(browser).toHaveCount(0);
+  await expect(page.getByLabel('Server location', { exact: true })).toHaveValue('/virtual/Anime');
+  expect(browsed).toEqual(['/virtual', '/virtual/Anime']);
+  expect(adds).toEqual([]);
+  await link.click();
+  await expect(page.getByRole('status')).toContainText('Linked Anime.');
+  expect(adds).toEqual([{ path: '/virtual/Anime', label: 'Anime', type: 'custom-anime', mediaKind: 'show' }]);
+  const row = page.locator('article.location').filter({ has: page.getByRole('heading', { name: 'Anime', exact: true }) });
+  await expect(row).toContainText('Connected'); await expect(row).toContainText('Series · 2 files');
+  await expect(page.getByLabel('Library name', { exact: true })).toHaveValue('');
+  const prepareManagerShot = async () => {
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
+    const title = await page.getByRole('heading', { name: 'Libraries', exact: true }).boundingBox();
+    const header = await page.locator('.topbar').boundingBox();
+    expect(title.y).toBeGreaterThanOrEqual(header.y + header.height);
+  };
+  await prepareManagerShot();
+  await page.screenshot({ path: test.info().outputPath('libraries-desktop.png'), fullPage: true });
+  const originalViewport = page.viewportSize();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await prepareManagerShot();
+  await page.screenshot({ path: test.info().outputPath('libraries-manager-phone.png'), fullPage: false });
+  await page.setViewportSize(originalViewport);
+  await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('button', { name: 'Libraries', exact: true }).click();
+  await expect(page.getByRole('region', { name: 'Library sections' }).getByRole('link', { name: 'Anime 2 files', exact: true })).toBeVisible();
+});
+
+test('a failed audio library link retains its fields and can be retried', async ({ page }) => {
+  const adds = [], folders = [];
+  await mockApi(page, {
+    '/api/config': route => route.fulfill({ json: folders }),
+    '/api/config/add': route => {
+      const body = route.request().postDataJSON(); adds.push(body);
+      if (adds.length === 1) return route.fulfill({ status: 404, json: { error: 'Folder not found or not a directory' } });
+      const folder = { ...body, id: 'podcasts-section', exists: true, fileCount: 0 };
+      folders.push(folder); return route.fulfill({ json: { ok: true, folder } });
+    },
+  });
+  await page.goto(`${origin}/libraries`);
+  await page.getByLabel('Library name', { exact: true }).fill('Podcasts');
+  await page.getByRole('combobox', { name: 'Content kind', exact: true }).selectOption('audio');
+  await page.getByLabel('Server location', { exact: true }).fill('/virtual/missing');
+  await expect(page.getByText(/Audio: MP3, M4A, AAC, FLAC, WAV, OGG and Opus/)).toBeVisible();
+  const link = page.getByRole('button', { name: 'Link location', exact: true });
+  await link.click();
+  await expect(page.getByRole('alert')).toContainText('Folder not found or not a directory');
+  await expect(page.getByLabel('Library name', { exact: true })).toHaveValue('Podcasts');
+  await expect(page.getByRole('combobox', { name: 'Content kind', exact: true })).toHaveValue('audio');
+  await expect(page.getByLabel('Server location', { exact: true })).toHaveValue('/virtual/missing');
+  await expect(link).toBeEnabled();
+  await page.getByLabel('Server location', { exact: true }).fill('/virtual/Podcasts');
+  await link.click();
+  await expect(page.getByRole('status')).toContainText('Linked Podcasts.');
+  expect(adds).toEqual([
+    { path: '/virtual/missing', label: 'Podcasts', type: 'custom-podcasts', mediaKind: 'audio' },
+    { path: '/virtual/Podcasts', label: 'Podcasts', type: 'custom-podcasts', mediaKind: 'audio' },
+  ]);
+  await expect(page.getByRole('alert')).toHaveCount(0);
+});
+
+test('unlink requires confirmation, Cancel does nothing, and only removes the location link', async ({ page }) => {
+  let folders = [{ id: 'anime-section', path: '/virtual/Anime', label: 'Anime', type: 'custom-anime', mediaKind: 'show', exists: true, fileCount: 2 }];
+  const writes = [];
+  page.on('request', request => {
+    if (!['GET', 'HEAD'].includes(request.method())) writes.push({ path: new URL(request.url()).pathname, body: request.postDataJSON() });
+  });
+  await mockApi(page, {
+    '/api/config': route => route.fulfill({ json: folders }),
+    '/api/config/remove': route => {
+      const body = route.request().postDataJSON();
+      folders = folders.filter(folder => folder.path !== body.path);
+      return route.fulfill({ json: { ok: true, removed: 1 } });
+    },
+  });
+  await page.goto(origin);
+  await page.getByRole('button', { name: 'Account menu' }).click();
+  await page.locator('#account-menu').getByRole('button', { name: 'Libraries', exact: true }).click();
+  const row = page.locator('article.location');
+  await row.getByRole('button', { name: 'Unlink', exact: true }).click();
+  const confirmation = page.getByRole('region', { name: 'Confirm unlink' });
+  await expect(confirmation).toContainText('No files will be deleted; everything remains at this server location.');
+  expect(writes).toEqual([]);
+  await confirmation.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(confirmation).toHaveCount(0); await expect(row).toHaveCount(1);
+  expect(writes).toEqual([]);
+  await row.getByRole('button', { name: 'Unlink', exact: true }).click();
+  await confirmation.getByRole('button', { name: 'Unlink location', exact: true }).click();
+  await expect(row).toHaveCount(0);
+  await expect(page.getByRole('status')).toContainText('Files remain on disk.');
+  await expect(page.getByText('No locations linked yet.', { exact: true })).toBeVisible();
+  // No media deletion, downloader action or full-config replacement request.
+  expect(writes).toEqual([{ path: '/api/config/remove', body: { path: '/virtual/Anime' } }]);
+});
+
+for (const viewport of [{ width: 1280, height: 800 }, { width: 390, height: 844 }, { width: 600, height: 800 }]) {
+  test(`non-admin custom library navigation includes empty sections at ${viewport.width}px`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    const sections = [
+      { id: 'anime-section', label: 'Anime', type: 'custom-anime', mediaKind: 'show', count: 2, available: true },
+      ...Array.from({ length: 16 }, (_, n) => ({ id: `extra-${n}`, label: `A long custom section name ${n + 1}`, type: 'custom-extra', mediaKind: 'mixed', count: 0, available: true })),
+      { id: 'podcasts-section', label: 'Podcasts', type: 'custom-podcasts', mediaKind: 'audio', count: 0, available: true },
+    ];
+    let adminReads = 0;
+    await mockApi(page, {
+      '/api/me': route => route.fulfill({ json: { loggedIn: true, role: 'user', profileId: 'viewer', name: 'Viewer', permissions: [] } }),
+      '/api/library/sections': route => route.fulfill({ json: { ok: true, sections } }),
+      '/api/config': route => { adminReads++; return route.fulfill({ status: 403, json: { error: 'Admin only' } }); },
+    });
+    await page.goto(origin);
+    const navigation = page.getByRole('navigation', { name: 'Main navigation' });
+    await expect(navigation.getByRole('link', { name: 'Films', exact: true })).toBeVisible();
+    await expect(navigation.getByRole('link', { name: 'Series', exact: true })).toBeVisible();
+    await navigation.getByRole('button', { name: 'Libraries', exact: true }).click();
+    const panel = page.getByRole('region', { name: 'Library sections' });
+    await expect(panel.getByRole('link')).toHaveCount(sections.length);
+    await expect(panel.getByRole('link', { name: 'Anime 2 files', exact: true })).toBeVisible();
+    const empty = panel.getByRole('link', { name: 'Podcasts 0 files', exact: true });
+    await empty.scrollIntoViewIfNeeded();
+    await expect(empty).toBeVisible();
+    const bounds = await panel.boundingBox();
+    expect(bounds.x).toBeGreaterThanOrEqual(0); expect(bounds.x + bounds.width).toBeLessThanOrEqual(viewport.width + 1);
+    expect(bounds.y).toBeGreaterThanOrEqual(0); expect(bounds.y + bounds.height).toBeLessThanOrEqual(viewport.height + 1);
+    if (viewport.width <= 720) {
+      const tabs = await navigation.boundingBox();
+      expect(bounds.y + bounds.height).toBeLessThanOrEqual(tabs.y + 1);
+    }
+    if (viewport.width === 390) {
+      await page.evaluate(() => window.scrollTo(0, 0));
+      await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
+      await page.screenshot({ path: test.info().outputPath('libraries-nav-phone.png'), fullPage: false });
+    }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await expect(panel.getByRole('link', { name: 'Manage libraries', exact: true })).toHaveCount(0);
+    await empty.click();
+    await expect(page).toHaveURL(`${origin}/library/podcasts-section`);
+    await expect(page.getByRole('heading', { name: 'Podcasts', exact: true })).toBeVisible();
+    await expect(page.getByText('No media in this library yet.', { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Account menu' }).click();
+    await expect(page.locator('#account-menu').getByRole('button', { name: 'Libraries', exact: true })).toHaveCount(0);
+    expect(adminReads).toBe(0);
+  });
 }
 
 test('partial show deletion keeps the failed episode and reports the error', async ({ page }) => {

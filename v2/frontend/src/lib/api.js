@@ -31,6 +31,12 @@ export const api = {
     return fetch(`/api/library${q ? '?' + q : ''}`, opts('GET')).then(json);
   },
   item: (id) => fetch(`/api/item/${encodeURIComponent(id)}`, opts('GET')).then(json),
+  librarySections: () => fetch('/api/library/sections', opts('GET')).then(json),
+  libraryLocations: () => fetch('/api/config', opts('GET')).then(json),
+  libraryLocationAdd: (body) => fetch('/api/config/add', opts('POST', body)).then(json),
+  libraryLocationRemove: (path) => fetch('/api/config/remove', opts('POST', { path })).then(json),
+  browseLocations: (path = '') =>
+    fetch(`/api/browse${path ? '?' + new URLSearchParams({ path }) : ''}`, opts('GET')).then(json),
   search: (query, type) => {
     const p = { search: query };
     if (type) p.type = type;

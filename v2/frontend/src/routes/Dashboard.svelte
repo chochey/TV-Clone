@@ -3,6 +3,8 @@
   import { api } from '../lib/api.js';
   import { createRefreshLoop } from '../lib/refresh-loop.js';
   import { physicalDriveWarnings } from '../lib/storage-warnings.js';
+  import { session } from '../lib/stores.js';
+  import { navigate } from '../lib/router.js';
 
   let stats = $state(null);
   let sys = $state(null);
@@ -97,6 +99,9 @@
         <div class="kv"><span>Series</span><strong>{stats.shows}</strong> <em>({stats.episodes?.toLocaleString()} episodes)</em></div>
         <div class="kv"><span>Total size</span><strong>{fmtBytes(stats.totalSize)}</strong></div>
       {:else}<div class="dim">…</div>{/if}
+      {#if $session?.role === 'admin'}
+        <a class="manage" href="/libraries" onclick={(e) => { e.preventDefault(); navigate('/libraries'); }}>Manage libraries</a>
+      {/if}
     </section>
 
     <section class="card">
@@ -188,6 +193,8 @@
   }
   .card.wide { grid-column: 1 / -1; }
   .card h2 { margin-bottom: var(--s1); }
+  .manage { align-self: flex-start; margin-top: var(--s3); padding: 9px 14px; border: 1px solid var(--line-strong); border-radius: var(--r-sm); font-weight: 600; }
+  .manage:hover { background: var(--line); }
   .bignum { font-size: 2rem; font-weight: 800; letter-spacing: -0.02em; }
   .bignum span { font-size: 0.95rem; font-weight: 500; color: var(--ink-soft); margin-left: 6px; }
   .kv { display: flex; align-items: baseline; gap: var(--s2); font-size: 0.92rem; }

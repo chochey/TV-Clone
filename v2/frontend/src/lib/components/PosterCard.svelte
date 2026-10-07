@@ -2,7 +2,7 @@
   import { posterUrl, backdropUrl } from '../api.js';
   import { seriesIndex, watchState, enrichItem, dismissFromContinue, AUTO_WATCHED_PERCENT } from '../stores.js';
   import { episodeCode } from '../format.js';
-  import { cardPlayback, seriesSummary } from '../series-playback.js';
+  import { cardPlayback, seriesSummary, isSeriesItem, isAudioItem, mediaTitle } from '../series-playback.js';
   // resume: rendered in the Continue Watching row — show which episode and how
   // much is left, and offer a way to drop it from the row.
   let { item, onopen, onplay, resume = false, wide = false } = $props();
@@ -11,11 +11,12 @@
   $effect(() => { if (!posterUrl(item)) enrichItem(item.id); });
 
   const current = $derived({ ...item, ...$watchState[item.id] });
-  const summary = $derived(item.seriesCard ? seriesSummary(item, $seriesIndex, $watchState) : null);
+  const summary = $derived(item.seriesCard && isSeriesItem(item) ? seriesSummary(item, $seriesIndex, $watchState) : null);
   const watched = $derived(summary ? summary.allWatched : current.watched);
   const poster = $derived(posterUrl(item));
-  const backdrop = $derived(backdropUrl(item));
-  const title = $derived(item.showName || item.title || item.omdbTitle || 'Untitled');
+  const backdrop = $derived(isAudioItem(item) ? '' : backdropUrl(item));
+  const title = $derived(mediaTitle(item));
+  const continueLabel = $derived(isAudioItem(item) ? 'Continue Listening' : 'Continue Watching');
   const year = $derived(item.year || item.omdbYear || '');
   const rating = $derived(item.imdbRating && item.imdbRating !== 'N/A' ? item.imdbRating : '');
   const pct = $derived(item.seriesCard && !resume ? 0 : current.progress?.percent || 0);
@@ -26,7 +27,7 @@
   });
   // "S3 · E7 · 24 min left" beats repeating "2008 · Series" on a resume card.
   const resumeLine = $derived(
-    [item.epInfo ? episodeCode(item) : '', minsLeft ? `${minsLeft} min left` : '']
+    [isSeriesItem(item) && item.epInfo ? episodeCode(item) : '', minsLeft ? `${minsLeft} min left` : '']
       .filter(Boolean).join(' · '),
   );
 
@@ -58,18 +59,18 @@
       </div>
     {/if}
 
-    {#if watched}<span class="badge watched" title={summary ? 'All available episodes watched' : 'Watched'}>✓</span>{/if}
+    {#if watched}<span class="badge watched" title={summary ? 'All available episodes watched' : isAudioItem(item) ? 'Listened' : 'Watched'}>✓</span>{/if}
 
     <!-- Hover: play button -->
     <div class="hover-overlay">
-      <button class="play" onclick={(e) => { e.stopPropagation(); onplay?.(resume ? current : cardPlayback(item, $seriesIndex, $watchState)); }} aria-label={`Play ${title}`}>
+      <button class="play" onclick={(e) => { e.stopPropagation(); onplay?.(resume ? current : cardPlayback(item, $seriesIndex, $watchState)); }} aria-label={`${isAudioItem(item) ? 'Listen to' : 'Play'} ${title}`}>
         <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
       </button>
     </div>
 
     {#if resume}
-      <button class="dismiss" title="Remove from Continue Watching"
-              aria-label={`Remove ${title} from Continue Watching`}
+      <button class="dismiss" title={`Remove from ${continueLabel}`}
+              aria-label={`Remove ${title} from ${continueLabel}`}
               onclick={(e) => { e.stopPropagation(); dismissFromContinue(item); }}>
         <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
       </button>
@@ -82,7 +83,7 @@
         {#if resume && resumeLine}
           {resumeLine}
         {:else}
-          {year}{item.type === 'show' ? ' · Series' : ''}{rating ? ` · ★ ${rating}` : ''}
+          {year}{isSeriesItem(item) ? ' · Series' : isAudioItem(item) ? ' · Audio' : ''}{rating ? ` · ★ ${rating}` : ''}
           {#if summary && summary.watched}<span class="series-progress">{summary.watched} of {summary.total} watched</span>{/if}
         {/if}
       </span>

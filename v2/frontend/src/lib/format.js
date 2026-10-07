@@ -1,4 +1,5 @@
 // Display helpers for messy library data.
+import { isSeriesItem, seriesKey } from './series-playback.js';
 
 // Episode titles come from filenames ("(auto) Top Gear - 2008 - [11x00] -
 // 2008 04 14 [Ground Force] (Special)"). Strip the noise conservatively;
@@ -35,12 +36,12 @@ export function episodeCode(item) {
 // The episode that follows `item` in its show, or null. Duplicate copies of
 // an episode collapse to the shortest filename (the original file).
 export function nextEpisodeOf(item, lib) {
-  if (!item?.showName || item.type !== 'show' || !item.epInfo) return null;
+  if (!isSeriesItem(item) || !item.epInfo) return null;
   const { season, episode } = item.epInfo;
   if (season == null || episode == null) return null;
   let best = null;
   for (const i of lib) {
-    if (i.type !== 'show' || i.showName !== item.showName) continue;
+    if (seriesKey(i) !== seriesKey(item)) continue;
     const ep = i.epInfo;
     if (!ep || ep.season == null || ep.episode == null) continue;
     if (ep.season < season || (ep.season === season && ep.episode <= episode)) continue;
@@ -56,12 +57,12 @@ export function nextEpisodeOf(item, lib) {
 // The episode that precedes `item` in its show, or null. Mirror of
 // nextEpisodeOf: pick the LATEST episode ordered strictly before this one.
 export function prevEpisodeOf(item, lib) {
-  if (!item?.showName || item.type !== 'show' || !item.epInfo) return null;
+  if (!isSeriesItem(item) || !item.epInfo) return null;
   const { season, episode } = item.epInfo;
   if (season == null || episode == null) return null;
   let best = null;
   for (const i of lib) {
-    if (i.type !== 'show' || i.showName !== item.showName) continue;
+    if (seriesKey(i) !== seriesKey(item)) continue;
     const ep = i.epInfo;
     if (!ep || ep.season == null || ep.episode == null) continue;
     if (ep.season > season || (ep.season === season && ep.episode >= episode)) continue;

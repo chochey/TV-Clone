@@ -43,3 +43,18 @@ test('prev/next are inverse across the boundary', () => {
   const n = nextEpisodeOf(at(1, 2), LIB); // -> s2e1
   assert.equal(prevEpisodeOf(n, LIB).id, 's1e2');
 });
+
+test('custom Anime prev/next crosses seasons without crossing sections or the built-in Series library', () => {
+  const anime = LIB.filter(item => item.showName === 'X').map(item => ({ ...item, type: 'anime', mediaKind: 'show', sectionId: 'anime-one' }));
+  const otherSection = { ...anime[1], id: 'foreign', sectionId: 'anime-two', epInfo: { season: 1, episode: 3 } };
+  const catalog = [...anime, otherSection, ...LIB];
+  assert.equal(nextEpisodeOf(anime[1], catalog).id, 's2e1');
+  assert.equal(prevEpisodeOf(anime[3], catalog).id, 's1e2');
+  assert.equal(nextEpisodeOf(anime[3], catalog), null);
+});
+
+test('custom movies and podcasts with a folder title never acquire episode navigation', () => {
+  const movie = { ...LIB[0], type: 'special-films', mediaKind: 'movie' };
+  const audio = { ...LIB[0], type: 'podcasts', mediaKind: 'audio' };
+  assert.equal(nextEpisodeOf(movie, LIB), null); assert.equal(prevEpisodeOf(audio, LIB), null);
+});

@@ -2,7 +2,7 @@
   import { api, posterUrl, backdropUrl } from '../lib/api.js';
   import { library, updateWatchState, libraryLoaded, session, enrichItem, AUTO_WATCHED_PERCENT } from '../lib/stores.js';
   import { navigate } from '../lib/router.js';
-  import { seriesEpisodes, seriesPlayTarget } from '../lib/series-playback.js';
+  import { seriesEpisodes, seriesPlayTarget, isSeriesItem, isAudioItem } from '../lib/series-playback.js';
   import { episodeTitle, episodeCode } from '../lib/format.js';
   import { deleteBatchResult } from '../lib/delete-batch-result.js';
 
@@ -20,7 +20,8 @@
   });
   const m = $derived({ ...(item || {}), ...(full || {}) });
 
-  const isShow = $derived(m.type === 'show' && !!m.showName);
+  const isShow = $derived(isSeriesItem(m));
+  const isAudio = $derived(isAudioItem(m));
   const title = $derived(isShow ? m.showName : (m.title || m.omdbTitle || ''));
   const poster = $derived(posterUrl(m));
   const year = $derived(m.year || m.omdbYear || '');
@@ -33,7 +34,7 @@
     const raw = m.runtime;
     if (!raw || raw === 'N/A') return '';
     const mins = parseInt(String(raw), 10);
-    return Number.isFinite(mins) && mins < 5 ? '' : raw;
+    return !isAudio && Number.isFinite(mins) && mins < 5 ? '' : raw;
   });
   const rated = $derived(m.rated && m.rated !== 'N/A' ? m.rated : '');
   const genres = $derived((m.genre || (m.genres || []).join(', ') || '').split(',').map((g) => g.trim()).filter(Boolean));
@@ -67,12 +68,14 @@
   const artItem = $derived(isShow ? (nextUp || item) : item);
   let backdropSrc = $state('');
   $effect(() => {
-    const url = artItem?.id ? backdropUrl(artItem) : '';
+    const url = !isAudio && artItem?.id ? backdropUrl(artItem) : '';
     backdropSrc = '';
     if (!url) return;
+    let alive = true;
     const img = new Image();
-    img.onload = () => { backdropSrc = url; };
+    img.onload = () => { if (alive) backdropSrc = url; };
     img.src = url;
+    return () => { alive = false; };
   });
   let posterFailed = $state(false);
   $effect(() => { poster; posterFailed = false; });
@@ -157,7 +160,7 @@
         </div>
 
         <div class="info">
-          <span class="kicker meta">{isShow ? 'Series' : 'Film'}{year ? ` · ${year}` : ''}</span>
+          <span class="kicker meta">{isShow ? 'Series' : isAudio ? 'Audio' : 'Film'}{year ? ` · ${year}` : ''}</span>
           <h1 class="display">{title}</h1>
           <div class="metarow">
             {#if runtime}<span>{runtime}</span>{/if}
@@ -175,7 +178,7 @@
             </button>
             {#if !isShow}
               <button class="ghost" onclick={() => toggleWatched(m)}>
-                {m.watched ? '✓ Watched' : 'Mark Watched'}
+                {m.watched ? (isAudio ? '✓ Listened' : '✓ Watched') : (isAudio ? 'Mark Listened' : 'Mark Watched')}
               </button>
             {/if}
             {#if $session?.role === 'admin'}
@@ -241,7 +244,7 @@
     <div class="modal-backdrop" onclick={() => { if (!deleting) showDeleteConfirm = false; }}
          onkeydown={(ev) => ev.key === 'Escape' && !deleting && (showDeleteConfirm = false)}>
       <div class="modal" onclick={(ev) => ev.stopPropagation()}>
-        <h2>Delete {isShow ? 'Show' : 'Movie'}</h2>
+        <h2>Delete {isShow ? 'Show' : isAudio ? 'Audio file' : 'Movie'}</h2>
         <p>Permanently delete <strong>{title}</strong>{isShow ? ` (${deleteCount} episode${deleteCount !== 1 ? 's' : ''})` : ''} from the server?</p>
         <p class="warn">This removes the file{deleteCount > 1 ? 's' : ''} from disk. This cannot be undone.</p>
         <div class="modal-actions">

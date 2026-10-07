@@ -30,7 +30,10 @@ const OMDB_BASE_URL = 'https://www.omdbapi.com/';
 const QBT_BASE = process.env.QBT_URL || 'http://localhost:8080';
 const QBT_USERNAME = process.env.QBT_USER || '';
 const QBT_PASSWORD = process.env.QBT_PASS || '';
-const SUPPORTED_EXT = ['.mp4', '.mkv', '.avi'];
+const { VIDEO_EXTENSIONS, AUDIO_EXTENSIONS, isAudioFile, normalizeFolderMediaKind,
+  extensionsForFolder, classifyMediaKind } = require('./lib/library-media');
+const { FolderError, validateFolderPath, normalizeFolder, publicSections, sectionId, overlapsFolder } = require('./lib/library-folders');
+const SUPPORTED_EXT = [...VIDEO_EXTENSIONS, ...AUDIO_EXTENSIONS];
 const SUBTITLE_EXT = ['.srt', '.vtt'];
 const POSTER_EXT = ['.jpg', '.jpeg', '.png', '.webp'];
 
@@ -269,7 +272,7 @@ async function backgroundProbe() {
   const subTasks = [];
   for (const item of lib) {
     const fp = fileIndex[item.id];
-    if (!fp) continue;
+    if (!fp || item.mediaKind === 'audio' || isAudioFile(fp)) continue;
     if (!probeCache[fp] || !audioProbeCache[fp] || !audioTracksCache[fp]) codecTasks.push(fp);
     if (!subProbeCache[fp] && path.extname(fp).toLowerCase() !== '.mp4') subTasks.push(fp);
   }
@@ -314,7 +317,8 @@ const { parseYearFromName, stripYearFromName, omdbCacheKey,
 // or not at all. Applied as a top layer over getOmdbForItem output.
 const metadataOverrides = require('./lib/metadata-overrides')({ DATA_DIR, loadJSON, saveJSON });
 function getMetadataForItem(item) {
-  return metadataOverrides.apply(item.id, getOmdbForItem(item));
+  const audio = item.mediaKind === 'audio' || isAudioFile(item._filePath || item.filename);
+  return metadataOverrides.apply(item.id, audio ? null : getOmdbForItem({ ...item, type: item.mediaKind || item.type }));
 }
 
 
@@ -323,17 +327,17 @@ const SKIP_DIRS = new Set(['featurettes','extras','behind the scenes','deleted s
 
 // Async walk: every readdir yields to the event loop, so a full-library
 // walk over slow mergerfs never stalls HLS segment delivery.
-async function walkDirAsync(dir, collected, lookup) {
+async function walkDirAsync(dir, collected, lookup, extensions = SUPPORTED_EXT) {
   const entries = await lookup.readDir(dir);
   for (const entry of entries) {
     if (entry.name.startsWith('.')) continue;
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       if (SKIP_DIRS.has(entry.name.toLowerCase())) continue;
-      await walkDirAsync(full, collected, lookup);
+      await walkDirAsync(full, collected, lookup, extensions);
     } else if (entry.isFile()) {
       const ext = path.extname(entry.name).toLowerCase();
-      if (SUPPORTED_EXT.includes(ext)) collected.push(full);
+      if (extensions.includes(ext)) collected.push(full);
     }
   }
 }
@@ -369,8 +373,12 @@ function loadLibraryCache() {
       for (const item of libraryCache) {
         const fullPath = item._filePath;
         if (!fullPath) continue;
+        const folder = config.folders.find(folder => folder.path === item.folderPath) || { type: item.type };
+        item.mediaKind = classifyMediaKind(fullPath, folder);
+        item.sectionId = item.folderPath ? sectionId(item.folderPath) : undefined;
+        if (item.mediaKind !== 'show') { item.showName = null; item.epInfo = null; }
         fileIndex[item.id] = fullPath;
-        item.streamMode = getStreamMode(fullPath);
+        item.streamMode = item.mediaKind === 'audio' ? 'direct' : getStreamMode(fullPath);
         if (item.posterUrl) {
           const poster = findPosterInDir(path.dirname(fullPath), path.parse(path.basename(fullPath)).name);
           if (poster) posterIndex[item.id] = poster;
@@ -434,14 +442,15 @@ async function doRescan(trigger) {
     if (!dirPath) continue;
 
     const videoPaths = [];
-    await walkDirAsync(dirPath, videoPaths, lookup);
+    await walkDirAsync(dirPath, videoPaths, lookup, extensionsForFolder(folder));
 
     for (const fullPath of videoPaths) {
       const file = path.basename(fullPath);
       const fileDir = path.dirname(fullPath);
       const baseName = path.parse(file).name;
       const { title, year } = parseTitle(file);
-      const type = detectType(file, folder.type);
+      const mediaKind = classifyMediaKind(fullPath, folder);
+      const type = folder.type && folder.type !== 'auto' ? folder.type : mediaKind;
       const id = hashId(fullPath);
 
       let fileSize, addedAt;
@@ -461,16 +470,15 @@ async function doRescan(trigger) {
       }
 
       // Embedded subtitles (from probe cache)
-      const embeddedSubs = embeddedTracks(id, subProbeCache[fullPath]);
+      const embeddedSubs = mediaKind === 'audio' ? [] : embeddedTracks(id, subProbeCache[fullPath]);
 
       // Episode info for shows and custom types with episode patterns
-      const isShowLike = type === 'show' || (type !== 'movie' && hasEpisodePattern(file));
-      const isCustomGroupable = type !== 'movie' && type !== 'show';
+      const isShowLike = mediaKind === 'show';
       const epInfo = isShowLike ? parseEpisodeInfo(file) : null;
       // Show name: use the top-level folder name under the library root
       // e.g. /mnt/media/TV/Firefly (2002)/ep.mp4 → "Firefly (2002)"
       let showName = null;
-      if (isShowLike || isCustomGroupable) {
+      if (isShowLike) {
         const relPath = path.relative(dirPath, fullPath);
         const topFolder = relPath.split(path.sep)[0];
         // If the file is directly in the library root, fall back to filename parsing
@@ -480,7 +488,7 @@ async function doRescan(trigger) {
       // Genres from config
       const genres = config.genres[id] || folder.genres || [];
 
-      const streamMode = getStreamMode(fullPath);
+      const streamMode = mediaKind === 'audio' ? 'direct' : getStreamMode(fullPath);
       const codec = probeCache[fullPath] || null;
 
       // Audio tracks from probe cache
@@ -493,7 +501,7 @@ async function doRescan(trigger) {
       });
 
       library.push({
-        id, _filePath: fullPath, title, year, type, filename: file,
+        id, _filePath: fullPath, title, year, type, mediaKind, sectionId: sectionId(dirPath), filename: file,
         folder: folder.label || path.basename(dirPath),
         folderPath: folder.path,
         posterUrl: posterAbsPath ? `/poster/${id}` : null,
@@ -946,6 +954,8 @@ app.get('/api/library', requireAuth, (req, res) => {
       title: item.title,
       year: item.year,
       type: item.type,
+      mediaKind: item.mediaKind || classifyMediaKind(item.filename, { type: item.type }),
+      sectionId: item.sectionId,
       showName: item.showName,
       epInfo: item.epInfo,
       filename: item.filename,
@@ -979,6 +989,7 @@ app.get('/api/library', requireAuth, (req, res) => {
   // --- Filtering ---
   const typeFilter = req.query.type;
   if (typeFilter) result = result.filter(i => i.type === typeFilter);
+  if (req.query.section) result = result.filter(i => i.sectionId === req.query.section);
 
   const watchFilter = req.query.filter;
   if (watchFilter === 'watched') result = result.filter(i => i.watched);
@@ -1045,8 +1056,8 @@ app.get('/api/item/:id', requireAuth, async (req, res) => {
   const profileId = getRequestProfile(req);
   if (!profileId) return res.status(403).json({ error: 'Cannot access other profiles' });
   const profileData = loadProfileData(profileId);
-  const { _filePath, ...safeItem } = item;
-  const embedded = await probeSubtitlesAsync(fileIndex[item.id]);
+  const { _filePath, folderPath, ...safeItem } = item;
+  const embedded = item.mediaKind === 'audio' || isAudioFile(fileIndex[item.id]) ? [] : await probeSubtitlesAsync(fileIndex[item.id]);
   safeItem.subtitles = [...(item.subtitles || []).filter(s => !s.embedded), ...embeddedTracks(item.id, embedded)];
   // Strip internal fields from subtitles
   if (safeItem.subtitles) {
@@ -1262,7 +1273,8 @@ async function backgroundDetectIntros(library) {
     // Collect show names (dedupe) that have >= 2 episodes and no entry yet.
     const showEpCount = new Map();
     for (const item of library) {
-      if (item.type !== 'show' || !item.showName) continue;
+      if (item.mediaKind === 'audio' || isAudioFile(item._filePath || item.filename)
+          || (item.mediaKind !== 'show' && item.type !== 'show') || !item.showName) continue;
       showEpCount.set(item.showName, (showEpCount.get(item.showName) || 0) + 1);
     }
     const candidates = [];
@@ -1419,8 +1431,10 @@ function deleteMediaItem(id) {
   // Sweep the folder if nothing of value (video/subtitle/other media) remains.
   try {
     const parentDir = path.dirname(filePath);
-    if (parentDir && parentDir !== path.dirname(parentDir)) {
+    const isLibraryRoot = config.folders.some(folder => folder.path && path.resolve(folder.path) === path.resolve(parentDir));
+    if (parentDir && parentDir !== path.dirname(parentDir) && !isLibraryRoot) {
       const MEDIA_EXT = new Set([
+        ...AUDIO_EXTENSIONS,
         '.mkv', '.mp4', '.avi', '.m4v', '.webm', '.mov', '.mpg', '.mpeg', '.ts', '.wmv', '.flv',
         '.srt', '.sub', '.ass', '.idx', '.ssa', '.vtt',
       ]);
@@ -1565,9 +1579,10 @@ app.get('/api/metadata/:id', requireAuth, async (req, res) => {
   const lib = scanLibrary();
   const item = lib.find(i => i.id === req.params.id);
   if (!item) return res.status(404).json({ error: 'Item not found' });
+  if (item.mediaKind === 'audio' || isAudioFile(item._filePath || item.filename)) return res.json({ found: false });
 
   let searchTitle, searchYear, itemType;
-  if (item.type === 'show' && item.showName) {
+  if ((item.mediaKind === 'show' || item.type === 'show') && item.showName) {
     searchYear = parseYearFromName(item.showName);
     searchTitle = stripYearFromName(item.showName);
     itemType = 'show';
@@ -1649,85 +1664,101 @@ app.get('/api/stats', requireAuth, (_req, res) => {
 // ── Config APIs (folders) ────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════
 
+const folderPathOptions = { privatePaths: [__dirname, '/home/blue/.ssh', '/home/blue/.codex'] };
+const folderStore = require('./lib/library-folder-store')({
+  getConfig: () => config,
+  persist: next => saveJSONStrict(CONFIG_FILE, next),
+  onChange: () => {
+    try { setupWatchers(); } catch (error) { console.warn(`[library] Watcher refresh failed: ${error.message}`); }
+    try { notifyClients('library-updated'); } catch {}
+    (async () => {
+      if (rescanPromise) { try { await rescanPromise; } catch {} }
+      await rescanLibraryAsync('library-folders');
+    })().catch(error => console.warn(`[library] Refresh failed: ${error.message}`));
+  },
+});
+app.get('/api/library/sections', requireAuth, async (_req, res) => {
+  const sections = publicSections(config.folders, scanLibrary());
+  await Promise.all(sections.map(async (section, index) => {
+    try {
+      const folder = config.folders.filter(folder => typeof folder.path === 'string' && folder.path)[index];
+      section.available = (await fs.promises.stat(folder.path)).isDirectory();
+    } catch { section.available = false; }
+  }));
+  res.json({ ok: true, sections });
+});
+
 app.get('/api/config', requireAdmin, (_req, res) => {
   const lib = scanLibrary();
   const result = config.folders.map(f => {
     let exists = false;
     try { exists = fs.existsSync(f.path) && fs.statSync(f.path).isDirectory(); } catch {}
     const fileCount = lib.filter(item => item.folderPath === f.path).length;
-    return { ...f, exists, fileCount };
+    return { ...f, id: sectionId(f.path), mediaKind: normalizeFolderMediaKind(f), exists, fileCount };
   });
   res.json(result);
 });
 
-app.post('/api/config', requireAdmin, (req, res) => {
+app.post('/api/config', requireAdmin, async (req, res) => {
   const { folders } = req.body;
   if (!Array.isArray(folders)) return res.status(400).json({ error: 'folders must be an array' });
-  config.folders = folders.map(f => ({
-    path: String(f.path || '').trim(),
-    type: String(f.type || 'auto').trim().toLowerCase() || 'auto',
-    label: String(f.label || '').trim() || path.basename(String(f.path || '')),
-    genres: Array.isArray(f.genres) ? f.genres : [],
-  })).filter(f => f.path.length > 0);
-  saveJSON(CONFIG_FILE, config);
-  invalidateLibrary();
+  try {
+    await folderStore.update(() => {
+      const updated = folders.map(folder => normalizeFolder(folder, folderPathOptions));
+      if (updated.some((folder, index) => overlapsFolder(folder.path, updated.slice(0, index)))) {
+        throw new FolderError('This location overlaps an existing library; choose a separate folder', 409);
+      }
+      return updated;
+    });
+  } catch (error) { return res.status(error.status || 500).json({ error: error instanceof FolderError ? error.message : 'Could not save library locations' }); }
   res.json({ ok: true });
 });
 
-app.post('/api/config/add', requireAdmin, (req, res) => {
-  const { path: folderPath, type, label, genres } = req.body;
-  const cleanPath = String(folderPath || '').trim();
-  if (!cleanPath) return res.status(400).json({ error: 'Path is required' });
-  if (config.folders.some(f => f.path === cleanPath)) return res.status(409).json({ error: 'Folder already linked' });
-  let exists = false;
-  try { exists = fs.existsSync(cleanPath) && fs.statSync(cleanPath).isDirectory(); } catch {}
-  if (!exists) return res.status(404).json({ error: 'Folder not found or not a directory' });
-
-  const entry = {
-    path: cleanPath,
-    type: String(type || 'auto').trim().toLowerCase() || 'auto',
-    label: String(label || '').trim() || path.basename(cleanPath),
-    genres: Array.isArray(genres) ? genres : [],
-  };
-  config.folders.push(entry);
-  saveJSON(CONFIG_FILE, config);
-  invalidateLibrary();
-  notifyClients('library-updated');
-  res.json({ ok: true, folder: entry });
+app.post('/api/config/add', requireAdmin, async (req, res) => {
+  let entry;
+  try { entry = normalizeFolder(req.body, folderPathOptions); }
+  catch (error) { return res.status(error.status || 400).json({ error: error.message }); }
+  try {
+    await folderStore.update(current => {
+      if (overlapsFolder(entry.path, current)) throw new FolderError('This location overlaps an existing library; choose a separate folder', 409);
+      return [...current, entry];
+    });
+  } catch (error) { return res.status(error.status || 500).json({ error: error instanceof FolderError ? error.message : 'Could not save library location' }); }
+  res.json({ ok: true, folder: { ...entry, id: sectionId(entry.path) } });
 });
 
-app.post('/api/config/remove', requireAdmin, (req, res) => {
-  const before = config.folders.length;
-  config.folders = config.folders.filter(f => f.path !== req.body.path);
-  saveJSON(CONFIG_FILE, config);
-  invalidateLibrary();
-  notifyClients('library-updated');
-  res.json({ ok: true, removed: before - config.folders.length });
+app.post('/api/config/remove', requireAdmin, async (req, res) => {
+  if (typeof req.body?.path !== 'string' || !req.body.path.trim()) return res.status(400).json({ error: 'Path is required' });
+  let removed = 0;
+  try {
+    await folderStore.update(current => {
+      const next = current.filter(folder => folder.path !== req.body.path);
+      removed = current.length - next.length;
+      return next;
+    });
+  } catch { return res.status(500).json({ error: 'Could not save library locations' }); }
+  res.json({ ok: true, removed });
 });
 
 app.get('/api/browse', requireAdmin, (req, res) => {
-  let dirPath = req.query.path || os.homedir();
-  if (dirPath.startsWith('~')) dirPath = path.join(os.homedir(), dirPath.slice(1));
-  const resolved = path.resolve(dirPath);
-  // Block access to sensitive system directories
-  const blocked = ['/etc', '/proc', '/sys', '/dev', '/boot', '/root', '/var/log', '/var/run'];
-  if (blocked.some(b => resolved === b || resolved.startsWith(b + '/'))) {
-    return res.status(403).json({ error: 'Access to system directories is not allowed' });
-  }
+  let resolved;
+  try { resolved = validateFolderPath(req.query.path === undefined ? '/mnt/media' : req.query.path, { ...folderPathOptions, allowPrivateAncestors: true }); }
+  catch (error) { return res.status(error.status || 400).json({ error: error.message }); }
   try {
     if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) {
       return res.status(404).json({ error: 'Not a valid directory' });
     }
     const entries = fs.readdirSync(resolved, { withFileTypes: true });
     const dirs = [];
-    let videoCount = 0;
+    let videoCount = 0, audioCount = 0;
     for (const entry of entries) {
       if (entry.name.startsWith('.')) continue;
       if (entry.isDirectory()) dirs.push(entry.name);
-      else if (SUPPORTED_EXT.includes(path.extname(entry.name).toLowerCase())) videoCount++;
+      else if (isAudioFile(entry.name)) audioCount++;
+      else if (VIDEO_EXTENSIONS.includes(path.extname(entry.name).toLowerCase())) videoCount++;
     }
     dirs.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
-    res.json({ current: resolved, parent: path.dirname(resolved), dirs, videoCount });
+    res.json({ current: resolved, parent: path.dirname(resolved), dirs, videoCount, audioCount, mediaCount: videoCount + audioCount });
   } catch { res.status(403).json({ error: 'Cannot read directory' }); }
 });
 
@@ -1756,6 +1787,7 @@ const backdrop = require('./lib/backdrop')({ DATA_DIR, probeDurationAsync: probe
 app.get('/backdrop/:id', requireAuth, ensureLibrary, async (req, res) => {
   const filePath = fileIndex[req.params.id];
   if (!filePath) return res.status(404).send('Not found');
+  if (isAudioFile(filePath)) return res.status(404).send('Audio does not have a video backdrop');
   try {
     const p = await backdrop.getBackdrop(req.params.id, filePath);
     if (!p) return res.status(404).send('No backdrop available');
@@ -2004,6 +2036,7 @@ function generateXstackLayout(count, cols, rows) {
 }
 
 async function startSpriteGen(id, filePath, title) {
+  if (isAudioFile(filePath)) return null;
   const thumbId = getThumbId(filePath);
   const existing = spriteJobs[id];
   if (existing && existing.thumbId === thumbId) {
@@ -2118,7 +2151,7 @@ function queueAllSpriteGen() {
   let skippedCorrupted = 0;
   for (const item of lib) {
     const filePath = fileIndex[item.id];
-    if (!filePath) continue;
+    if (!filePath || item.mediaKind === 'audio' || isAudioFile(filePath)) continue;
     // Skip files already known to be corrupted
     if (corruptedFiles[item.id]) { skippedCorrupted++; alreadyDone++; continue; }
     const thumbId = getThumbId(filePath);
@@ -2205,7 +2238,7 @@ app.get('/api/sprites/progress', requireAuth, (_req, res) => {
         let t = 0, c = 0;
         for (const item of lib) {
           const filePath = fileIndex[item.id];
-          if (!filePath) continue;
+          if (!filePath || item.mediaKind === 'audio' || isAudioFile(filePath)) continue;
           t++;
           if (corruptedFiles[item.id]) { c++; continue; }
           if (fs.existsSync(spriteFilePath(getThumbId(filePath), 0))) c++;
@@ -2406,7 +2439,7 @@ app.get('/api/conversion/plan', requireAdminSession, (req, res) => {
   const seenFiles = new Set();
   const files = lib.map((item) => {
     const filePath = item._filePath;
-    if (!filePath || seenFiles.has(filePath)) return null;
+    if (!filePath || item.mediaKind === 'audio' || isAudioFile(filePath) || seenFiles.has(filePath)) return null;
     seenFiles.add(filePath);
     const tracks = audioTracksCache[filePath] || [];
     return {
@@ -2482,7 +2515,7 @@ function eligibleContainerFiles(cfg) {
   const sizes = new Map();
   for (const item of scanLibrary()) {
     const filePath = item._filePath;
-    if (!filePath || sizes.has(filePath)) continue;
+    if (!filePath || item.mediaKind === 'audio' || isAudioFile(filePath) || sizes.has(filePath)) continue;
     const tracks = audioTracksCache[filePath] || [];
     const c = classifyFile({
       filePath,
@@ -2640,6 +2673,7 @@ app.get('/api/reliability/status', requirePermission('canDashboard'), async (_re
 app.post('/api/sprites/:id/generate', requireAuth, ensureLibrary, async (req, res) => {
   const filePath = fileIndex[req.params.id];
   if (!filePath || !fs.existsSync(filePath)) return res.status(404).send('Not found');
+  if (isAudioFile(filePath)) return res.status(415).send('Audio does not use video thumbnails');
   const thumbId = getThumbId(filePath);
   const duration = await probeDurationAsync(filePath);
   const totalFrames = spriteFrameCount(duration);
@@ -2848,6 +2882,7 @@ app.get('/hls/:id/:playbackId/master.m3u8', requireAuth, ensureLibrary, async (r
   if (!validPlaybackId(id)) return res.status(400).send('Invalid playback session');
   const filePath = fileIndex[mediaId];
   if (!filePath || !fs.existsSync(filePath)) return res.status(404).send('File not found');
+  if (isAudioFile(filePath)) return res.status(415).send('Use direct audio playback');
   const startTime = Number(req.query.start || 0);
   const audioTrack = req.query.audio !== undefined ? Number(req.query.audio) : null;
   if (!Number.isFinite(startTime) || startTime < 0 ||
@@ -3404,9 +3439,12 @@ app.post('/api/scan', requirePermission('canScan'), async (_req, res) => {
     // Background probe new files
     await backgroundProbe();
     // Background OMDB fetch
-    await backgroundOmdbFetch(library);
+    await backgroundOmdbFetch(library.filter(item => item.mediaKind !== 'audio' && !isAudioFile(item._filePath))
+      .map(item => ({ ...item, type: item.mediaKind || item.type })));
     // Background intro detection for shows with >= 2 episodes and no segments yet
-    if (process.env.AUTO_DETECT_INTROS !== '0') await backgroundDetectIntros(library);
+    if (process.env.AUTO_DETECT_INTROS !== '0') await backgroundDetectIntros(library
+      .filter(item => item.mediaKind !== 'audio' && !isAudioFile(item._filePath))
+      .map(item => ({ ...item, type: item.mediaKind || item.type })));
     // Re-scan to pick up new metadata
     await rescanLibraryAsync('post-probe');
     // Metadata may have changed even when file ids didn't, so always poke.

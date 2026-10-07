@@ -10,6 +10,7 @@
   import { createPauseBookmark } from '../pause-resume.js';
   import { forcedEnglishSubtitle } from '../subtitle-selection.js';
   import { episodeCode, episodeTitle } from '../format.js';
+  import { isSeriesItem } from '../series-playback.js';
   import { hevcMaxLevel, demoteHevc, isFirefoxDesktopLinux } from '../hevc-probe.js';
 
   // Remounted per item via {#key} in App — `item` is static for this mount.
@@ -29,8 +30,9 @@
   // flashes garbage even while paused (same Ranch episode is clean in Brave
   // and in Firefox on Windows). A 1px radius takes it off that plane.
   const forceCompositorLayer = isFirefoxDesktopLinux();
-  const title = $derived(item.showName || item.title || '');
-  const subline = $derived(item.showName ? `${episodeCode(item)} — ${episodeTitle(item)}` : (item.year || ''));
+  const isSeries = $derived(isSeriesItem(item));
+  const title = $derived(isSeries ? item.showName : (item.title || ''));
+  const subline = $derived(isSeries ? `${episodeCode(item)} — ${episodeTitle(item)}` : (item.year || ''));
 
   let video = $state(null);
   let full = $state(null);        // /api/item record: subtitles, offset, audioTracks
@@ -130,7 +132,7 @@
   const showUpnext = $derived(nearEnd && !!next);
   // Finishing the last episode used to just dump you back on whatever page was
   // behind the player with no explanation. Say so instead.
-  const showFinale = $derived(nearEnd && !next && !!item.showName);
+  const showFinale = $derived(nearEnd && !next && isSeries);
 
   function goNext() {
     if (advanced) return;

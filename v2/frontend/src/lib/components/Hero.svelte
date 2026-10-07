@@ -1,13 +1,13 @@
 <script>
   import { posterUrl, backdropUrl } from '../api.js';
   import { seriesIndex, watchState, enrichItem, AUTO_WATCHED_PERCENT } from '../stores.js';
-  import { cardPlayback } from '../series-playback.js';
+  import { cardPlayback, isSeriesItem, isAudioItem, mediaTitle } from '../series-playback.js';
   let { item, onopen, onplay, home = false } = $props();
 
   $effect(() => { if (!posterUrl(item)) enrichItem(item.id); });
 
   const poster = $derived(posterUrl(item));
-  const title = $derived(item.showName || item.title || item.omdbTitle || '');
+  const title = $derived(mediaTitle(item));
   const year = $derived(item.year || item.omdbYear || '');
   const rating = $derived(item.imdbRating && item.imdbRating !== 'N/A' ? item.imdbRating : '');
   const runtime = $derived(item.runtime && item.runtime !== 'N/A' ? item.runtime : '');
@@ -21,12 +21,14 @@
   // carries the frame as an ambient color wash — never a stretched poster.
   let backdropSrc = $state('');
   $effect(() => {
-    const url = backdropUrl(item);
+    const url = isAudioItem(item) ? '' : backdropUrl(item);
     backdropSrc = '';
     if (!url) return;
+    let alive = true;
     const img = new Image();
-    img.onload = () => { backdropSrc = url; };
+    img.onload = () => { if (alive) backdropSrc = url; };
     img.src = url;
+    return () => { alive = false; };
   });
 </script>
 
@@ -46,7 +48,7 @@
     <h1 class="display">{title}</h1>
     <div class="metarow">
       {#if year}<span>{year}</span>{/if}
-      {#if item.type === 'show'}<span>Series</span>{/if}
+      {#if isSeriesItem(item)}<span>Series</span>{:else if isAudioItem(item)}<span>Audio</span>{/if}
       {#if runtime}<span>{runtime}</span>{/if}
       {#if rating}<span class="star">★ {rating}</span>{/if}
       {#if genres.length}<span>{genres.join(', ')}</span>{/if}
@@ -55,7 +57,7 @@
     <div class="actions">
       <button class="play" onclick={() => onplay?.(playTarget)}>
         <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
-        {resuming ? 'Resume' : 'Play'}
+        {resuming ? 'Resume' : isAudioItem(item) ? 'Listen' : 'Play'}
       </button>
       <button class="ghost" onclick={() => onopen?.(item)}>More Info</button>
     </div>

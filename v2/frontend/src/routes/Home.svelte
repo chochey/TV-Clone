@@ -5,16 +5,20 @@
   import { posterUrl } from '../lib/api.js';
   import { navigate } from '../lib/router.js';
   import { moods, moodMatches, discoveryPool, nextPick } from '../lib/home-discovery.js';
+  import { mediaKindOf, isAudioItem } from '../lib/series-playback.js';
   let { onopen, onplay } = $props();
-  const featured = $derived($continueWatching[0] || $recentlyAdded[0] || null);
-  const movies = $derived($catalog.filter(i => i.type === 'movie'));
+  const featured = $derived($continueWatching.find(i => !isAudioItem(i)) || $recentlyAdded.find(i => !isAudioItem(i)) || null);
+  const movies = $derived($catalog.filter(i => mediaKindOf(i) === 'movie'));
   const pool = $derived(discoveryPool(movies.map(i => ({ ...i, ...$watchState[i.id] })), featured?.id));
   let pickId = $state('');
   let pickFailed = $state(false);
   const pick = $derived(pool.find(i => i.id === pickId) || pool[0] || null);
   $effect(() => { pick?.id; pickFailed = false; });
   let mood = $state('');
-  const moodItems = $derived(mood ? collapseShows(moodMatches($catalog, mood)).slice(0,40) : []);
+  const moodItems = $derived(mood ? collapseShows(moodMatches($catalog.filter(i => !isAudioItem(i)), mood)).slice(0,40) : []);
+  const continueTitle = $derived($continueWatching.some(isAudioItem)
+    ? ($continueWatching.every(isAudioItem) ? 'Continue listening' : 'Continue watching and listening')
+    : 'Continue watching');
   function shuffle() { pickId = nextPick(pool, pick?.id)?.id || ''; }
   function surprise() {
     const choice = nextPick(pool, pick?.id);
@@ -63,7 +67,7 @@
     </div>
   {/if}
   <div class="rows">
-    <Row title="Continue watching" items={$continueWatching} {onopen} {onplay} resume wide />
+    <Row title={continueTitle} items={$continueWatching} {onopen} {onplay} resume wide />
     <Row title="Fresh on your shelf" items={$recentlyAdded} {onopen} {onplay} size="lg" />
     {#each $genreClusters as cluster (cluster.name)}
       <Row title={cluster.name} items={cluster.items} {onopen} {onplay} />

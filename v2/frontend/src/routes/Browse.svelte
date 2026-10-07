@@ -1,8 +1,9 @@
 <script>
   import PosterCard from '../lib/components/PosterCard.svelte';
   import { catalog, collapseShows } from '../lib/stores.js';
+  import { mediaKindOf, isSeriesItem } from '../lib/series-playback.js';
 
-  let { kind, onopen, onplay } = $props(); // kind: 'movie' | 'show'
+  let { kind, sectionId = '', section = null, sectionsReady = true, sectionError = '', onretry, onopen, onplay } = $props();
 
   const PAGE = 60;
   let sort = $state('added');
@@ -10,12 +11,13 @@
   let shown = $state(PAGE);
   let sentinel = $state(null);
 
-  const heading = $derived(kind === 'movie' ? 'Films' : 'Series');
+  const heading = $derived(sectionId ? (section?.label || 'Library') : kind === 'movie' ? 'Films' : 'Series');
 
   // One card per title: movies as-is, shows collapsed to a representative.
   const pool = $derived.by(() => {
-    const of = $catalog.filter((i) => i.type === kind);
-    return kind === 'show' ? collapseShows(of) : of;
+    const of = $catalog.filter((i) => sectionId ? i.sectionId === sectionId
+      : mediaKindOf(i) === kind);
+    return collapseShows(of);
   });
 
   const genreOptions = $derived.by(() => {
@@ -32,7 +34,7 @@
   });
 
   function displayTitle(i) {
-    return (i.showName || i.title || i.omdbTitle || '').replace(/^\(auto\)\s*/i, '');
+    return ((isSeriesItem(i) ? i.showName : '') || i.title || i.omdbTitle || '').replace(/^\(auto\)\s*/i, '');
   }
   function ratingOf(i) {
     const r = parseFloat(i.imdbRating);
@@ -62,7 +64,8 @@
   });
 
   // Reset pagination when the view changes.
-  $effect(() => { kind; sort; genre; shown = PAGE; });
+  $effect(() => { kind; sectionId; sort; genre; shown = PAGE; });
+  $effect(() => { kind; sectionId; genre = ''; });
 
   // Grow the grid as the sentinel scrolls into view.
   $effect(() => {
@@ -95,6 +98,16 @@
     </div>
   </header>
 
+  {#if sectionId && sectionError}
+    <p class="notice" role="alert">{sectionError} <button onclick={onretry}>Retry libraries</button></p>
+  {:else if sectionId && !sectionsReady}
+    <p class="notice" role="status">Loading library…</p>
+  {:else if sectionId && !section}
+    <p class="notice" role="status">This location is no longer linked.</p>
+  {:else if sectionId && section.available === false}
+    <p class="notice" role="status">This location is unavailable. Check its storage connection.</p>
+  {/if}
+
   <div class="grid">
     {#each items.slice(0, shown) as item (item.id)}
       <PosterCard {item} {onopen} {onplay} />
@@ -104,8 +117,8 @@
   {#if shown < items.length}
     <div class="sentinel" bind:this={sentinel}></div>
   {/if}
-  {#if !items.length}
-    <p class="empty">Nothing here{genre ? ` under “${genre}”` : ''}.</p>
+  {#if !items.length && (!sectionId || section)}
+    <p class="empty">{genre ? `Nothing here under “${genre}”.` : sectionId ? 'No media in this library yet.' : 'Nothing here.'}</p>
   {/if}
 </div>
 
@@ -132,6 +145,8 @@
   }
   .sentinel { height: 1px; }
   .empty { color: var(--ink-faint); padding: var(--s6) 0; text-align: center; }
+  .notice { color: var(--ink-soft); margin-bottom: var(--s4); }
+  .notice button { text-decoration: underline; margin-left: var(--s2); }
 
   @media (max-width: 640px) {
     .grid { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: var(--s3) var(--s2); }

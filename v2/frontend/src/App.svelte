@@ -1,5 +1,5 @@
 <script>
-  import { onMount, tick } from 'svelte';
+  import { onMount, tick, untrack } from 'svelte';
   import { api } from './lib/api.js';
   import { library, catalog, session, loadLibrary, resetSessionState, searchQuery, collapseShows } from './lib/stores.js';
   import { searchLibrary } from './lib/search.js';
@@ -13,6 +13,7 @@
   import History from './routes/History.svelte';
   import Requests from './routes/Requests.svelte';
   import Dashboard from './routes/Dashboard.svelte';
+  import Libraries from './routes/Libraries.svelte';
   import Downloads from './routes/Downloads.svelte';
   import Organizer from './routes/Organizer.svelte';
   import Conversion from './routes/Conversion.svelte';
@@ -22,6 +23,8 @@
   import Episodes from './routes/Episodes.svelte';
   import Stats from './routes/Stats.svelte';
   import Player from './lib/components/Player.svelte';
+  import AudioPlayer from './lib/components/AudioPlayer.svelte';
+  import { isAudioItem, isSeriesItem } from './lib/series-playback.js';
   import { notifications, unreadCount, markAllRead, clearNotifications, setNotificationsEnabled, loadNotifications } from './lib/notifications.js';
 
   let phase = $state('loading'); // loading | login | ready
@@ -116,6 +119,45 @@
     playing = item;
   }
 
+  // Section summaries contain labels/counts only. Server paths stay in the
+  // administrator's manager, and empty locations remain navigable.
+  let sections = $state([]);
+  let sectionsReady = $state(false);
+  let sectionsError = $state('');
+  let sectionsOpen = $state(false);
+  let sectionsButton = $state(null);
+  let sectionRequest = 0;
+  const selectedSection = $derived(sections.find(section => section.id === $route.id) || null);
+  const catalogCount = $derived($catalog.length);
+  async function refreshSections() {
+    const request = ++sectionRequest;
+    const profile = $session?.profileId;
+    if (!profile) return;
+    try {
+      const data = await api.librarySections();
+      if (!data?.ok || !Array.isArray(data.sections)) throw new Error('Invalid library sections');
+      if (request !== sectionRequest || $session?.profileId !== profile) return;
+      sections = data.sections; sectionsReady = true; sectionsError = '';
+    } catch {
+      if (request === sectionRequest && $session?.profileId === profile) {
+        sectionsError = 'Library sections could not be loaded.';
+      }
+    }
+  }
+  $effect(() => {
+    if (phase !== 'ready') return;
+    catalogCount; $session?.profileId;
+    untrack(refreshSections);
+  });
+  function toggleSections() {
+    sectionsOpen = !sectionsOpen; menuOpen = false; bellOpen = false;
+    if (sectionsOpen) refreshSections();
+  }
+  async function locationsChanged() {
+    const results = await Promise.allSettled([loadLibrary($session?.profileId), refreshSections()]);
+    if (results.some(result => result.status === 'rejected')) throw new Error('Catalog refresh failed');
+  }
+
   // ── Header live search: results drop down as you type, no page jump ───
   let searchFocused = $state(false);
   const searchPool = $derived(collapseShows($catalog));
@@ -165,12 +207,13 @@
   let searchExpanded = $state(false);
   let searchInput, accountButton;
   async function openMobileSearch() {
-    menuOpen = false; bellOpen = false; searchExpanded = true;
+    menuOpen = false; bellOpen = false; sectionsOpen = false; searchExpanded = true;
     await tick(); searchInput?.focus();
   }
   function dismissPanels(e) {
     if (e.key !== 'Escape') return;
     if (menuOpen) { menuOpen = false; confirmRestart = false; accountButton?.focus(); }
+    if (sectionsOpen) { sectionsOpen = false; sectionsButton?.focus(); }
     bellOpen = false; searchExpanded = false;
   }
 
@@ -205,6 +248,7 @@
     }
   });
   function openBell() {
+    sectionsOpen = false;
     bellOpen = !bellOpen;
     if (bellOpen) markAllRead();
   }
@@ -235,6 +279,7 @@
   function go(path) {
     searchExpanded = false;
     menuOpen = false;
+    sectionsOpen = false;
     confirmRestart = false;
     navigate(path);
   }
@@ -266,6 +311,8 @@
   }
   async function signOut() {
     menuOpen = false;
+    sectionsOpen = false; sectionRequest++;
+    sections = []; sectionsReady = false; sectionsError = '';
     notifReady = false;
     lastSeenNotifId = null;
     playing = null;
@@ -280,7 +327,7 @@
   }
 </script>
 
-<svelte:window bind:scrollY onkeydown={dismissPanels} onclick={() => { menuOpen = false; confirmRestart = false; bellOpen = false; }} />
+<svelte:window bind:scrollY onkeydown={dismissPanels} onclick={() => { menuOpen = false; confirmRestart = false; bellOpen = false; sectionsOpen = false; }} />
 
 {#if phase === 'loading'}
   <div class="splash">
@@ -325,13 +372,30 @@
       <a class:active={$route.name === 'home'} href="/" onclick={(e) => { e.preventDefault(); go('/'); }}>Home</a>
       <a class:active={$route.name === 'movies'} href="/movies" onclick={(e) => { e.preventDefault(); go('/movies'); }}>Films</a>
       <a class:active={$route.name === 'shows'} href="/shows" onclick={(e) => { e.preventDefault(); go('/shows'); }}>Series</a>
+      <div class="libraries-nav">
+        <button class="libraries-toggle" class:active={$route.name === 'section'} aria-expanded={sectionsOpen} aria-controls="library-navigation" bind:this={sectionsButton} onclick={(e) => { e.stopPropagation(); toggleSections(); }}>Libraries</button>
+        {#if sectionsOpen}
+          <div class="library-navigation" id="library-navigation" role="region" aria-label="Library sections" onclick={(e) => e.stopPropagation()}>
+            <div class="meta">Your libraries</div>
+            {#if sectionsError}<p role="alert">{sectionsError} <button class="sections-retry" onclick={refreshSections}>Retry libraries</button></p>{/if}
+            {#if !sectionsReady && !sectionsError}<p role="status">Loading libraries…</p>{/if}
+            {#each sections as section (section.id)}
+              <a class:current={$route.name === 'section' && $route.id === section.id} href={`/library/${encodeURIComponent(section.id)}`} onclick={(e) => { e.preventDefault(); go(`/library/${encodeURIComponent(section.id)}`); }}>
+                <span>{section.label}</span><small>{section.available === false ? 'Unavailable' : `${Number(section.count || 0).toLocaleString()} files`}</small>
+              </a>
+            {/each}
+            {#if sectionsReady && !sections.length}<p>No locations linked yet.</p>{/if}
+            {#if isAdmin}<a class="manage-libraries" href="/libraries" onclick={(e) => { e.preventDefault(); go('/libraries'); }}>Manage libraries</a>{/if}
+          </div>
+        {/if}
+      </div>
       <button class="mobile-search" onclick={openMobileSearch}>Search</button>
     </nav>
     <div class="searchbox" class:open={searchDropOpen} onclick={(e) => e.stopPropagation()}>
       <svg class="sicon" viewBox="0 0 24 24" width="17" height="17" fill="currentColor" aria-hidden="true"><path d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"/></svg>
       <input
-        class="searchinput" type="search" placeholder="Search films and series" enterkeyhint="search"
-        aria-label="Search films and series" bind:this={searchInput}
+        class="searchinput" type="search" placeholder="Search your library" enterkeyhint="search"
+        aria-label="Search your library" bind:this={searchInput}
         autocomplete="off" spellcheck="false"
         bind:value={$searchQuery}
         onfocus={() => { searchFocused = true; }}
@@ -348,7 +412,7 @@
       {#if searchDropOpen}
         <div class="search-drop" role="listbox">
           {#each searchSuggestions as item, i (item.id)}
-            {@const t = item.showName || item.title || item.omdbTitle || 'Untitled'}
+            {@const t = (isSeriesItem(item) ? item.showName : '') || item.title || item.omdbTitle || 'Untitled'}
             <button class="sresult" class:hi={i === searchHighlight} onclick={() => pickResult(item)}>
               {#if posterUrl(item)}
                 <img src={posterUrl(item)} alt="" loading="lazy" />
@@ -357,7 +421,7 @@
               {/if}
               <span class="sr-text">
                 <span class="sr-title">{t}</span>
-                <span class="sr-meta">{(item.year || item.omdbYear || '')}{item.type === 'show' ? ' · Series' : ' · Film'}</span>
+                <span class="sr-meta">{(item.year || item.omdbYear || '')} · {isAudioItem(item) ? 'Audio' : isSeriesItem(item) ? 'Series' : 'Film'}</span>
               </span>
             </button>
           {/each}
@@ -402,7 +466,7 @@
     {/if}
     <div class="usermenu">
       <button class="avatar" aria-label="Account menu" aria-expanded={menuOpen} aria-controls="account-menu" bind:this={accountButton}
-              onclick={(e) => { e.stopPropagation(); menuOpen = !menuOpen; if (menuOpen) refreshPending(); }}>
+              onclick={(e) => { e.stopPropagation(); sectionsOpen = false; menuOpen = !menuOpen; if (menuOpen) refreshPending(); }}>
         {($session?.name || '?').slice(0, 1)}
         {#if pendingCount > 0}<span class="badge">{pendingCount}</span>{/if}
       </button>
@@ -418,6 +482,7 @@
             <div class="divider"></div>
             <div class="who meta">System</div>
             {#if can('canDashboard')}<button onclick={() => go('/system')}>Dashboard</button>{/if}
+            {#if isAdmin}<button onclick={() => go('/libraries')}>Libraries</button>{/if}
             {#if isAdmin}<button onclick={() => go('/users')}>Users</button>{/if}
             {#if isAdmin}<button onclick={() => go('/duplicates')}>Duplicates</button>{/if}
             {#if isAdmin}<button onclick={() => go('/conversion')}>Conversion</button>{/if}
@@ -452,6 +517,8 @@
       <Browse kind="movie" onopen={openItem} onplay={playItem} />
     {:else if $route.name === 'shows'}
       <Browse kind="show" onopen={openItem} onplay={playItem} />
+    {:else if $route.name === 'section'}
+      <Browse sectionId={$route.id} section={selectedSection} {sectionsReady} sectionError={sectionsError} onretry={refreshSections} onopen={openItem} onplay={playItem} />
     {:else if $route.name === 'search'}
       <Search onopen={openItem} onplay={playItem} />
     {:else if $route.name === 'history'}
@@ -462,6 +529,8 @@
       <Requests />
     {:else if $route.name === 'system' && can('canDashboard')}
       <Dashboard />
+    {:else if $route.name === 'libraries' && isAdmin}
+      <Libraries onchange={locationsChanged} />
     {:else if $route.name === 'downloads' && can('canDownload')}
       <Downloads />
     {:else if $route.name === 'organizer' && can('canOrganizer')}
@@ -484,6 +553,9 @@
 
 {#if playing}
   {#key playing.id}
+    {#if isAudioItem(playing)}
+      <AudioPlayer item={playing} onclose={() => { playing = null; }} />
+    {:else}
     <Player
       item={playing}
       next={playingNext}
@@ -492,6 +564,7 @@
       onnext={(n) => { playing = n; }}
       onprev={(p) => { playing = p; }}
     />
+    {/if}
   {/key}
 {/if}
 
@@ -567,7 +640,23 @@
   .wordmark { display: inline-flex; align-items: baseline; }
   .brandtv { color: var(--ink-soft); }
   .marksub { margin-top: calc(-1 * var(--s4)); letter-spacing: 0.3em; color: var(--ink-faint); }
-  nav { display: flex; gap: var(--s5); margin-left: var(--s4); }
+  nav { display: flex; align-items: center; gap: var(--s4); margin-left: var(--s4); flex-shrink: 0; }
+  .libraries-toggle { color: var(--ink-soft); font-size: .9rem; font-weight: 500; letter-spacing: .02em; }
+  .libraries-toggle:hover, .libraries-toggle.active { color: var(--ink); }
+  .library-navigation {
+    position: fixed; top: 64px; left: var(--gutter); z-index: 60;
+    width: min(420px, calc(100vw - 2 * var(--gutter))); max-height: min(65dvh, 520px); overflow-y: auto;
+    display: flex; flex-direction: column; gap: var(--s1); padding: var(--s3); border-radius: var(--r-md);
+    background: #17171c; box-shadow: 0 18px 50px rgba(0, 0, 0, .6), 0 0 0 1px var(--line-strong); overscroll-behavior: contain;
+  }
+  .library-navigation .meta, .library-navigation p { padding: var(--s2); }
+  .library-navigation p { color: var(--ink-soft); font-size: .88rem; }
+  .library-navigation a { display: flex; align-items: center; justify-content: space-between; gap: var(--s3); min-height: 44px; padding: 10px; border-radius: var(--r-sm); }
+  .library-navigation a:hover, .library-navigation a.current { background: var(--line); color: var(--ink); }
+  .library-navigation a span { min-width: 0; overflow-wrap: anywhere; }
+  .library-navigation a small { flex-shrink: 0; font-size: .75rem; color: var(--ink-soft); }
+  .library-navigation .manage-libraries { margin-top: var(--s2); border-top: 1px solid var(--line-strong); border-radius: 0; }
+  .sections-retry { text-decoration: underline; }
 
   /* Persistent search box that fills the bar between the nav and the icons
      (rather than a narrow pill marooned in the middle). Explicit side
@@ -765,18 +854,19 @@
     .searchbox { margin: 0 var(--s3); }
     .bell { margin-left: var(--s3); }
   }
-  /* Phones: even trimmed, brand + 3 nav links + icons leave no room for a
-     usable search. Hand the row to search — the thing that was requested —
-     and drop the text nav. Home is the logo; Films/Series are a tap into
-     search results. Tablets and up keep the nav alongside the box. */
-  @media (max-width: 560px) {
+  /* Narrow screens use a bottom bar so library access and search stay
+     visible without squeezing the account controls off the screen. */
+  @media (max-width: 720px) {
     .topbar { padding: var(--s3) var(--s4); gap: var(--s2); }
     .brand { margin-right: auto; }
     nav {
-      position: fixed; inset: auto 0 0; margin: 0; gap: 0; display: grid; grid-template-columns: repeat(4, 1fr);
+      position: fixed; inset: auto 0 0; margin: 0; gap: 0; display: grid; grid-template-columns: repeat(5, 1fr);
       padding: 5px 8px calc(5px + env(safe-area-inset-bottom)); background: #111116; border-top: 1px solid var(--line-strong);
     }
-    nav a, .mobile-search { display: grid; place-items: center; min-height: 44px; font-size: .86rem; color: var(--ink-soft); }
+    nav > a, .mobile-search, .libraries-toggle { display: grid; place-items: center; min-height: 44px; width: 100%; font-size: .8rem; color: var(--ink-soft); }
+    .libraries-toggle.active { color: #c5a6ff; }
+    .libraries-nav { min-width: 0; }
+    .library-navigation { top: auto; bottom: calc(64px + env(safe-area-inset-bottom)); left: 12px; right: 12px; width: auto; max-height: calc(100dvh - 150px - env(safe-area-inset-bottom)); }
     nav a.active { color: #c5a6ff; }
     nav a.active::after { bottom: 0; left: 20%; right: 20%; }
     main { padding-bottom: calc(60px + env(safe-area-inset-bottom)); }
