@@ -74,6 +74,15 @@
   }
 </script>
 
+{#snippet audioDetails()}
+  <div class="audio-info">
+    <span class="audio-title" title={title}>{title}</span>
+    {#if audioInfo.artist}<span class="audio-author">{audioInfo.artist}</span>{/if}
+    {#if resume && resumeLine}<span class="audio-resume">{resumeLine}</span>{/if}
+    {#if playbackIssue}<span class="compatibility-label">Compatible copy needed</span>{/if}
+  </div>
+{/snippet}
+
 <div class="card" class:wide class:audio bind:this={cardElement} role="button" tabindex="0"
      onclick={() => onopen?.(item)}
      onkeydown={(e) => { if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onopen?.(item); } }}>
@@ -97,7 +106,9 @@
     <!-- Hover: play button -->
     <div class="hover-overlay">
       <button class="play" onclick={(e) => { e.stopPropagation(); onplay?.(resume ? current : cardPlayback(item, $seriesIndex, $watchState)); }} aria-label={`${playbackIssue ? 'Playback info for' : isAudioItem(item) ? 'Listen to' : 'Play'} ${title}`}>
-        {#if playbackIssue}<span aria-hidden="true">ⓘ</span>{:else}<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>{/if}
+        {#if playbackIssue}<span aria-hidden="true">ⓘ</span>
+        {:else if audio && wide}<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 13v-1a8 8 0 0 1 16 0v1"/><rect x="3" y="12" width="4" height="8" rx="2"/><rect x="17" y="12" width="4" height="8" rx="2"/></svg>
+        {:else}<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>{/if}
       </button>
     </div>
 
@@ -123,18 +134,13 @@
       </span>
     </div>{/if}
 
+    {#if audio && wide}{@render audioDetails()}{/if}
+
     {#if pct > 0 && pct < AUTO_WATCHED_PERCENT}
       <div class="progress"><span style={`width:${pct}%`}></span></div>
     {/if}
   </div>
-  {#if audio}
-    <div class="audio-info">
-      <span class="audio-title" title={title}>{title}</span>
-      {#if audioInfo.artist}<span class="audio-author">{audioInfo.artist}</span>{/if}
-      {#if resume && resumeLine}<span class="audio-resume">{resumeLine}</span>{/if}
-      {#if playbackIssue}<span class="compatibility-label">Compatible copy needed</span>{/if}
-    </div>
-  {/if}
+  {#if audio && !wide}{@render audioDetails()}{/if}
 </div>
 
 <style>
@@ -265,5 +271,32 @@
     color: var(--ink-soft); font-size: .76rem; line-height: 1.4; margin-top: 4px; }
   .audio-resume { display: block; color: var(--ink-faint); font-size: .7rem; margin-top: 4px; }
   .audio .compatibility-label { font-size: .7rem; line-height: 1.4; }
+  .audio.wide .art {
+    aspect-ratio: 16 / 8; border-radius: 11px;
+    background: linear-gradient(135deg, #3b284a, #251b31 65%, #17131f);
+  }
+  .audio.wide .art img, .audio.wide .audio-placeholder {
+    position: absolute; left: 12px; top: 12px;
+    width: calc(39% - 18px); height: calc(100% - 24px);
+    border-radius: 6px; box-shadow: 0 0 0 1px #ffffff16;
+  }
+  .audio.wide .art img { object-fit: contain; }
+  .audio.wide .audio-placeholder { gap: 6px; }
+  .audio.wide .audio-placeholder svg { width: 54%; }
+  .audio.wide .audio-placeholder span { font-size: .45rem; letter-spacing: .12em; }
+  .audio.wide .audio-info {
+    position: absolute; left: 39%; right: 0; top: 0; bottom: 0;
+    padding: 12px 13px 12px 0;
+    display: flex; flex-direction: column; justify-content: center; gap: 4px;
+  }
+  .audio.wide .audio-title { font-size: clamp(.82rem, 1.1vw, .98rem); line-height: 1.25; }
+  .audio.wide .audio-author { -webkit-line-clamp: 1; margin: 0; font-size: .72rem; line-height: 1.3; }
+  .audio.wide .audio-resume { margin: 0; font-size: .68rem; line-height: 1.3; }
+  .audio.wide .compatibility-label { margin: 0; font-size: .65rem; line-height: 1.3; }
+  .audio.wide .hover-overlay {
+    display: grid; opacity: 1; inset: auto auto 9px 9px;
+    width: 36px; height: 36px; padding: 0; place-items: center; z-index: 1;
+  }
+  .audio.wide .play { transform: none; }
   @media(max-width:640px) { .audio-title { font-size: .86rem; } .audio-author { font-size: .71rem; } }
 </style>

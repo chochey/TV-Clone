@@ -629,30 +629,27 @@
   .brandtv { color: var(--ink-soft); }
   .marksub { margin-top: calc(-1 * var(--s4)); letter-spacing: 0.3em; color: var(--ink-faint); }
   .brand, .bell, .usermenu { flex-shrink: 0; }
-  nav { display: flex; align-items: center; gap: var(--s4); margin-left: var(--s4); flex: 1 1 auto; min-width: 0; max-width: 50%; overflow-x: auto; white-space: nowrap; overscroll-behavior-x: contain; scrollbar-width: thin; }
+  nav { display: flex; align-items: center; gap: var(--s4); margin: 0 var(--s4); flex: 0 1 auto; min-width: 0; max-width: 50%; overflow-x: auto; white-space: nowrap; overscroll-behavior-x: contain; scrollbar-width: thin; }
   nav > * { flex: 0 0 auto; }
   .nav-status, .nav-retry { color: var(--ink-soft); font-size: .8rem; padding: 8px 0; }
   .nav-retry { text-decoration: underline; }
 
-  /* Persistent search box that fills the bar between the nav and the icons
-     (rather than a narrow pill marooned in the middle). Explicit side
-     margins (not `auto`) so flex-grow actually expands the box — auto
-     margins absorb the free space first and leave it crushed to the icon. */
+  /* Keep search readable without stretching across a wide desktop header. */
   .searchbox {
     position: relative;
-    flex: 1; min-width: 0; margin: 0 var(--s5);
+    flex: 0 1 360px; width: 360px; min-width: 200px; max-width: 360px;
+    margin: 0 var(--s4) 0 auto;
     display: flex; align-items: center; gap: 8px;
     background: rgba(242, 242, 244, 0.08);
     box-shadow: inset 0 0 0 1px var(--line);
-    border-radius: 99px; padding: 0 14px;
+    height: 40px; border-radius: 12px; padding: 0 12px;
     transition: box-shadow var(--t-fast), background var(--t-fast);
   }
   .searchbox:focus-within {
     background: rgba(242, 242, 244, 0.12);
     box-shadow: inset 0 0 0 1px var(--line-strong);
   }
-  /* Square off the bottom while the results panel is attached below. */
-  .searchbox.open { border-radius: 20px; }
+  .searchbox.open { box-shadow: inset 0 0 0 1px var(--line-strong); }
   .sicon { color: var(--ink-faint); flex: 0 0 auto; }
   .searchinput {
     flex: 1; min-width: 0;
@@ -660,7 +657,7 @@
     color: var(--ink); font-size: 0.9rem; font-weight: 500;
     padding: 9px 0;
   }
-  .searchinput::placeholder { color: var(--ink-faint); }
+  .searchinput::placeholder { color: var(--ink-soft); }
   .searchinput::-webkit-search-cancel-button { -webkit-appearance: none; }
   .sclear {
     flex: 0 0 auto; display: grid; place-items: center;
@@ -671,12 +668,8 @@
 
   /* Live-results dropdown — matches appear here as you type, no page jump. */
   .search-drop {
-    /* Anchored under the box's left edge. The box sits ~560px in from the
-       left on desktop, so cap the width to the space remaining to the
-       viewport's right edge — never runs off-screen, up to a 680px ceiling.
-       (Narrower screens fall through to the fixed rule below.) */
-    position: absolute; top: calc(100% + 8px); left: 0;
-    width: min(680px, calc(100vw - 580px)); max-height: min(70vh, 560px); overflow-y: auto;
+    position: absolute; top: calc(100% + 8px); right: 0;
+    width: min(440px, calc(100vw - 32px)); max-height: min(70vh, 560px); overflow-y: auto;
     background: rgba(17, 17, 22, 0.98); backdrop-filter: blur(16px);
     border-radius: var(--r-md); padding: var(--s2);
     box-shadow: 0 18px 50px rgba(0, 0, 0, 0.6), 0 0 0 1px var(--line-strong);
@@ -697,13 +690,11 @@
   .sr-meta { font-size: 0.75rem; color: var(--ink-faint); }
   .see-all { justify-content: center; color: var(--ink-soft); font-size: 0.82rem; font-weight: 600; padding: 10px; }
   .see-all:hover { color: var(--ink); }
-  @media (max-width: 980px) {
-    /* The box isn't wide enough here for the left-anchored panel to stay on
-       screen, so pin the panel across the viewport under the bar instead. */
-    .search-drop { position: fixed; left: var(--s4); right: var(--s4); top: 54px; width: auto; max-width: 640px; }
+  @media (max-width: 720px) {
+    .search-drop { position: fixed; left: var(--s4); right: var(--s4); top: 60px; width: auto; }
   }
 
-  .bell { position: relative; margin-left: var(--s5); }
+  .bell { position: relative; margin-left: 0; }
   .bellbtn {
     position: relative;
     width: 34px; height: 34px; border-radius: 99px;
@@ -827,9 +818,8 @@
      well below desktop widths, instead of the box crushing to its icon. */
   @media (max-width: 900px) {
     .brand { letter-spacing: 0.2em; font-size: 0.92rem; }
-    nav { gap: var(--s3); margin-left: var(--s3); }
-    .searchbox { margin: 0 var(--s3); }
-    .bell { margin-left: var(--s3); }
+    nav { gap: var(--s3); margin: 0 var(--s3); }
+    .searchbox { flex-basis: 240px; min-width: 160px; margin: 0 var(--s3) 0 auto; }
   }
   /* Narrow screens use a bottom bar so library access and search stay
      visible without squeezing the account controls off the screen. */
@@ -847,7 +837,7 @@
     .searchbox { display: none; }
     .searching .searchbox {
       display: flex; position: absolute; left: var(--s4); right: var(--s4); top: 8px;
-      margin: 0; max-width: none; padding: 0 12px; min-height: 44px; background: #202027; z-index: 2;
+      margin: 0; width: auto; max-width: none; padding: 0 12px; min-height: 44px; background: #202027; z-index: 2;
     }
     .searching .brand, .searching .bell, .searching .usermenu { visibility: hidden; }
     .search-close { display: grid; place-items: center; min-width: 44px; min-height: 44px; }

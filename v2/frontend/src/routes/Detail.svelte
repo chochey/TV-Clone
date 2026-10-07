@@ -6,6 +6,8 @@
   import { episodeTitle, episodeCode } from '../lib/format.js';
   import { deleteBatchResult } from '../lib/delete-batch-result.js';
   import { audioPlaybackIssue } from '../lib/audio-playback.js';
+  import { audioPresentation } from '../lib/audio-presentation.js';
+  import { mergeAudioDetail, audioDetailArtwork, audioDetailDuration } from '../lib/audio-detail.js';
 
   let { id, onplay } = $props();
 
@@ -19,13 +21,20 @@
     api.item(id).then((d) => { if (alive) full = d; }).catch(() => {});
     return () => { alive = false; };
   });
-  const m = $derived({ ...(item || {}), ...(full || {}) });
+  const m = $derived(mergeAudioDetail(item, full));
 
   const isShow = $derived(isSeriesItem(m));
   const isAudio = $derived(isAudioItem(m));
+  const audio = $derived(audioPresentation(m));
   const playbackIssue = $derived(isAudio ? audioPlaybackIssue(m) : '');
-  const title = $derived(isShow ? m.showName : (m.title || m.omdbTitle || ''));
-  const poster = $derived(posterUrl(m));
+  const title = $derived(isShow ? m.showName : isAudio ? audio.title : (m.title || m.omdbTitle || ''));
+  const artwork = $derived(isAudio ? audioDetailArtwork(m) : [posterUrl(m)].filter(Boolean));
+  const artworkKey = $derived(`${id}\n${artwork.join('\n')}`);
+  let artworkIndex = $state(0);
+  $effect(() => { artworkKey; artworkIndex = 0; });
+  const poster = $derived(artwork[artworkIndex] || '');
+  const audioDuration = $derived(audioDetailDuration(audio.duration));
+  const chapterCount = $derived(Array.isArray(m.audioMetadata?.chapters) ? m.audioMetadata.chapters.length : 0);
   const year = $derived(m.year || m.omdbYear || '');
   const rating = $derived(m.imdbRating && m.imdbRating !== 'N/A' ? m.imdbRating : '');
   // OMDb reports a per-episode runtime for some series and gets it badly wrong
@@ -79,14 +88,12 @@
     img.src = url;
     return () => { alive = false; };
   });
-  let posterFailed = $state(false);
-  $effect(() => { poster; posterFailed = false; });
-  $effect(() => { if (item && !posterUrl(item)) enrichItem(item.id); });
+  $effect(() => { if (item && !isAudio && !posterUrl(item)) enrichItem(item.id); });
 
   const playTarget = $derived(isShow ? nextUp : m);
   const resuming = $derived(playTarget?.progress?.percent > 0 && playTarget?.progress?.percent < AUTO_WATCHED_PERCENT);
   const playLabel = $derived(
-    (resuming ? 'Resume' : 'Play') + (isShow && playTarget?.epInfo ? ` ${episodeCode(playTarget)}` : ''),
+    (isAudio ? (resuming ? 'Resume listening' : 'Listen') : (resuming ? 'Resume' : 'Play')) + (isShow && playTarget?.epInfo ? ` ${episodeCode(playTarget)}` : ''),
   );
 
   async function toggleWatched(target) {
@@ -134,12 +141,12 @@
     <div class="void"><div class="spinner"></div></div>
   {/if}
 {:else}
-  <div class="detail">
+  <div class="detail" class:audio-detail={isAudio}>
     <div class="stage">
       <!-- Ambient wash is the FALLBACK for a missing backdrop. Once the real
            backdrop loads it covers this completely, so painting a 64px blur
            underneath is invisible work on every title page. -->
-      {#if poster && !posterFailed && !backdropSrc}
+      {#if poster && !backdropSrc}
         <div class="ambient" style={`background-image:url(${poster})`}></div>
       {/if}
       {#if backdropSrc}
@@ -154,22 +161,34 @@
 
       <div class="cols">
         <div class="posterwrap">
-          {#if poster && !posterFailed}
-            <img class="poster" src={poster} alt={title} onerror={() => { posterFailed = true; }} />
+          {#if poster}
+            <img class="poster" src={poster} alt={title} onerror={() => { artworkIndex += 1; }} />
+          {:else if isAudio}
+            <div class="poster book-placeholder" aria-label="Audiobook cover unavailable">
+              <svg viewBox="0 0 80 80" aria-hidden="true"><path d="M40 20c-8-6-20-8-30-5v42c10-3 22-1 30 5 8-6 20-8 30-5V15c-10-3-22-1-30 5Zm0 0v42"/><path d="M18 26c5-1 10 0 15 2m-15 9c5-1 10 0 15 2m14-11c5-2 10-3 15-2m-15 13c5-2 10-3 15-2"/></svg>
+              <span>Audiobook</span>
+            </div>
           {:else}
             <div class="poster pph"><span>{title}</span></div>
           {/if}
         </div>
 
         <div class="info">
-          <span class="kicker meta">{isShow ? 'Series' : isAudio ? 'Audio' : 'Film'}{year ? ` · ${year}` : ''}</span>
+          <span class="kicker meta">{isShow ? 'Series' : isAudio ? 'Audiobook' : 'Film'}{!isAudio && year ? ` · ${year}` : ''}</span>
           <h1 class="display">{title}</h1>
+          {#if isAudio && audio.artist}<p class="audio-author">{audio.artist}</p>{/if}
+          {#if isAudio && audio.album}<p class="audio-album">{audio.album}</p>{/if}
           <div class="metarow">
-            {#if runtime}<span>{runtime}</span>{/if}
-            {#if rating}<span class="star">★ {rating}</span>{/if}
-            {#if rated}<span class="chip">{rated}</span>{/if}
-            {#if isShow && seasons.length}<span>{seasons.length} season{seasons.length > 1 ? 's' : ''}</span>{/if}
-            {#if genres.length}<span>{genres.slice(0, 4).join(', ')}</span>{/if}
+            {#if isAudio}
+              {#if audioDuration}<span class="audio-duration">{audioDuration}</span>{/if}
+              {#if chapterCount}<span class="audio-chapters">{chapterCount} chapter{chapterCount === 1 ? '' : 's'}</span>{/if}
+            {:else}
+              {#if runtime}<span>{runtime}</span>{/if}
+              {#if rating}<span class="star">★ {rating}</span>{/if}
+              {#if rated}<span class="chip">{rated}</span>{/if}
+              {#if isShow && seasons.length}<span>{seasons.length} season{seasons.length > 1 ? 's' : ''}</span>{/if}
+              {#if genres.length}<span>{genres.slice(0, 4).join(', ')}</span>{/if}
+            {/if}
           </div>
           {#if deleteError}<p class="warn" role="alert">{deleteError}</p>{/if}
           {#if plot}<p class="plot">{plot}</p>{/if}
@@ -329,6 +348,17 @@
     color: var(--ink-soft); font-weight: 600;
   }
 
+  .audio-detail .cols { grid-template-columns: minmax(190px, 280px) minmax(0, 1fr); align-items: center; margin-top: clamp(28px, 8vh, 100px); }
+  .audio-detail .poster { display: block; aspect-ratio: 1; object-fit: contain; background: var(--bg-sunken); }
+  .audio-detail .info { min-width: 0; }
+  .audio-detail h1 { font-size: clamp(1.8rem, 3.4vw, 3.1rem); overflow-wrap: anywhere; margin-bottom: var(--s3); }
+  .audio-author { font-size: clamp(1rem, 1.6vw, 1.25rem); color: var(--ink); margin: 0 0 var(--s2); overflow-wrap: anywhere; }
+  .audio-album { color: var(--ink-soft); margin: 0 0 var(--s3); overflow-wrap: anywhere; }
+  .audio-detail .metarow { margin: var(--s3) 0 var(--s5); }
+  .book-placeholder { display: flex !important; flex-direction: column; align-items: center; justify-content: center; gap: var(--s3); color: #d4c7ee; background: linear-gradient(145deg, #44315b, #201b2c) !important; }
+  .book-placeholder svg { width: 42%; fill: none; stroke: currentColor; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
+  .book-placeholder span { font-size: 0.8rem; letter-spacing: 0.12em; text-transform: uppercase; }
+
   .kicker { color: var(--ink-soft); }
   h1 {
     font-size: clamp(2.2rem, 4.6vw, 4rem);
@@ -465,5 +495,13 @@
   @media (max-width: 900px) {
     .cols { grid-template-columns: 1fr; margin-top: 26vh; }
     .posterwrap { display: none; }
+    .audio-detail .posterwrap { display: block; }
+    .audio-detail .cols { grid-template-columns: 210px minmax(0, 1fr); gap: var(--s4); margin-top: var(--s4); }
+  }
+  @media (max-width: 640px) {
+    .audio-detail .cols { grid-template-columns: minmax(0, 1fr); gap: var(--s5); }
+    .audio-detail .posterwrap { width: min(62vw, 260px); margin: 0 auto; }
+    .audio-detail .actions { gap: var(--s2); }
+    .audio-detail .play, .audio-detail .ghost { flex: 1 1 auto; justify-content: center; padding: 13px 18px; }
   }
 </style>
