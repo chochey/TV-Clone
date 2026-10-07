@@ -54,6 +54,109 @@ async function mockApi(page, overrides = {}) {
   await page.route('**/stream/**', route => route.fulfill({ status: 404 }));
 }
 
+const download = (hash, name, overrides = {}) => ({
+  hash, name, progress: 1, state: 'stoppedUP', size: 2e9, dlspeed: 0, upspeed: 0, eta: 0,
+  importStatus: { label: 'Downloaded — awaiting import', readyToHide: false }, ...overrides,
+});
+async function mockDownloads(page, rows) {
+  const activity = { reads: 0, writes: [] };
+  page.on('request', request => {
+    if (request.url().startsWith(`${origin}/api/`) && !['GET', 'HEAD'].includes(request.method())) {
+      activity.writes.push({ method: request.method(), path: new URL(request.url()).pathname });
+    }
+  });
+  await mockApi(page, {
+    '/api/qbt/torrents': route => { activity.reads++; return route.fulfill({ json: rows() }); },
+    '/api/qbt/search/plugins': route => route.fulfill({ json: [{ name: 'test-site', fullName: 'Test site', enabled: true }] }),
+    '/api/vpn/status': route => route.fulfill({ json: { configured: false } }),
+  });
+  return activity;
+}
+async function downloadScreenshot(page, filename, viewport) {
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(0);
+  const title = await page.getByRole('heading', { name: 'Downloads', exact: true }).boundingBox();
+  const header = await page.locator('.topbar').boundingBox();
+  expect(title.y).toBeGreaterThanOrEqual(header.y + header.height);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+  for (const element of await page.locator('.row, .add input, .add button, .searchbar input, .searchbar select, .searchbar button, .download-options label').all()) {
+    const bounds = await element.boundingBox();
+    expect(bounds.x).toBeGreaterThanOrEqual(0);
+    expect(bounds.x + bounds.width).toBeLessThanOrEqual(viewport.width + 1);
+  }
+  await page.screenshot({ path: test.info().outputPath(filename), fullPage: viewport.width > 720 });
+}
+
+for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }]) {
+  test(`verified imports automatically hide downloads without mutating the downloader at ${viewport.width}px`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    let imported = false;
+    const releaseName = 'Example Season 01 — a long release name with 1080p video';
+    const pending = download('pending', releaseName);
+    const active = download('active', 'Example next episode', { progress: .42, state: 'downloading', dlspeed: 3e6 });
+    const activity = await mockDownloads(page, () => [active, {
+      ...pending, importStatus: imported ? { label: 'Imported to library', readyToHide: true, detail: 'Files moved and present in the library scan.' } : pending.importStatus,
+    }]);
+    await page.goto(`${origin}/downloads`);
+    const completed = page.locator('details.completed');
+    const pendingRow = page.locator('.row').filter({ has: page.getByText(releaseName, { exact: true }) });
+    await expect(completed).toHaveAttribute('open', '');
+    await expect(completed.locator('summary')).toHaveText('Downloaded — awaiting import (1)');
+    await expect(pendingRow).toBeVisible();
+    await expect(page.getByRole('checkbox', { name: /^Show imported downloads/ })).toHaveCount(0);
+    await downloadScreenshot(page, `downloads-pending-${viewport.width}.png`, viewport);
+    expect(activity.writes).toEqual([]);
+
+    // Change only the next GET response. The page's five-second refresh must
+    // remove the row without invoking any downloader action or list deletion.
+    imported = true;
+    await expect(pendingRow).toHaveCount(0, { timeout: 8000 });
+    expect(activity.reads).toBeGreaterThanOrEqual(2);
+    await expect(completed).toHaveCount(0);
+    const show = page.getByRole('checkbox', { name: 'Show imported downloads (1)', exact: true });
+    await expect(show).not.toBeChecked();
+    await expect(page.getByText('Example next episode', { exact: true })).toBeVisible();
+    await downloadScreenshot(page, `downloads-cleared-${viewport.width}.png`, viewport);
+    await show.check();
+    const importedSection = page.getByRole('region', { name: 'Imported downloads' });
+    await expect(importedSection.getByText(releaseName, { exact: true })).toBeVisible();
+    await expect(importedSection).toContainText('Imported to library');
+    await downloadScreenshot(page, `downloads-imported-${viewport.width}.png`, viewport);
+    expect(activity.writes).toEqual([]);
+
+    // A fresh page uses the durable backend receipt, while the optional view
+    // starts unchecked again. No browser-local dismiss or downloader mutation.
+    await page.reload();
+    await expect(show).not.toBeChecked();
+    await expect(pendingRow).toHaveCount(0);
+    await expect(importedSection).toHaveCount(0);
+    await expect(page.getByText('Example next episode', { exact: true })).toBeVisible();
+    expect(activity.writes).toEqual([]);
+  });
+}
+
+test('partial imports, unverified labels, review items and downloader errors stay visible', async ({ page }) => {
+  const rows = [
+    download('partial', 'Partially imported season pack', { importStatus: { label: 'Partially imported', readyToHide: false, detail: 'Only some episodes are present in the library.' } }),
+    download('label-only', 'Unverified imported label', { importStatus: { label: 'Imported to library' } }),
+    download('review', 'A release needing review', { reviewReason: 'Existing copy retained for comparison', importStatus: { label: 'Needs review', readyToHide: true } }),
+    download('error', 'Downloader error release', { state: 'error', importStatus: { label: 'Imported to library', readyToHide: true } }),
+    download('missing', 'Missing downloaded files', { state: 'missingFiles', importStatus: { label: 'Imported to library', readyToHide: true } }),
+    download('checking', 'Files still being checked', { state: 'checkingUP', importStatus: { label: 'Imported to library', readyToHide: true } }),
+    download('incomplete', 'An incomplete download', { progress: .75, state: 'downloading', importStatus: { label: 'Imported to library', readyToHide: true } }),
+  ];
+  const activity = await mockDownloads(page, () => rows);
+  await page.goto(`${origin}/downloads`);
+  await expect(page.locator('.row')).toHaveCount(rows.length);
+  await expect(page.locator('details.completed')).toHaveAttribute('open', '');
+  await expect(page.locator('details.completed summary')).toHaveText('Downloaded — awaiting import (2)');
+  await expect(page.getByRole('checkbox', { name: /^Show imported downloads/ })).toHaveCount(0);
+  await expect.poll(() => activity.reads, { timeout: 8000 }).toBeGreaterThanOrEqual(2);
+  for (const row of rows) await expect(page.getByText(row.name, { exact: true })).toBeVisible();
+  await expect(page.getByText('Existing copy retained for comparison', { exact: true })).toBeVisible();
+  expect(activity.writes).toEqual([]);
+});
+
 test('an admin can browse and link a named series library with a custom type', async ({ page }) => {
   const folders = [], adds = [], browsed = [];
   await mockApi(page, {

@@ -3099,15 +3099,30 @@ app.get('/api/events', requireAuth, sse.handler);
 // ══════════════════════════════════════════════════════════════════════
 const { qbt, qbtAuth, qbtJson, requireQbt } = require('./lib/qbt')({ QBT_BASE, QBT_USERNAME, QBT_PASSWORD });
 const { torrentHasVideoFile } = require('./lib/video-torrent');
-const { createDownloadStatus } = require('./lib/download-status');
-let downloadStatusCache = { at: 0, version: null, statusFor: null };
+const { createDownloadStatusWithVisibility } = require('./lib/download-status');
+const DOWNLOAD_IMPORT_RECEIPTS_FILE = path.join(DATA_DIR, 'download-import-receipts.json');
+const downloadImportReceipts = require('./lib/download-import-receipts').createDownloadImportReceipts({
+  initial: loadJSON(DOWNLOAD_IMPORT_RECEIPTS_FILE, { entries: [] }),
+  save: data => saveJSONStrict(DOWNLOAD_IMPORT_RECEIPTS_FILE, data),
+});
+let downloadStatusCache = { at: 0, version: null, degraded: null, statusFor: null };
 function currentDownloadStatus() {
   if (!downloadStatusCache.statusFor || Date.now() - downloadStatusCache.at > 5000
-      || downloadStatusCache.version !== libraryVersion) {
-    downloadStatusCache = { at: Date.now(), version: libraryVersion,
-      statusFor: createDownloadStatus(readOrganizerLogLines(), libraryCache || []) };
+      || downloadStatusCache.version !== libraryVersion || downloadStatusCache.degraded !== libraryScanState.degraded) {
+    downloadStatusCache = { at: Date.now(), version: libraryVersion, degraded: libraryScanState.degraded,
+      statusFor: createDownloadStatusWithVisibility(readOrganizerLogLines(), libraryCache || [], {
+        sourceDir: ORGANIZER_SOURCE_DIR, libraryDegraded: libraryScanState.degraded,
+      }) };
   }
   return downloadStatusCache.statusFor;
+}
+
+async function downloadsWithStatus(torrents) {
+  const statusFor = currentDownloadStatus();
+  return downloadImportReceipts.decorate(torrents, {
+    statusFor: statusFor.current, confirmStatus: statusFor,
+    reviewFor: t => downloadReviews.get(t.hash), invalidateProof: statusFor.invalidate,
+  });
 }
 
 // qBittorrent status
@@ -3235,9 +3250,7 @@ app.get('/api/qbt/torrents', requirePermission('canDownload'), requireQbt, async
     const r = await qbt('GET', '/api/v2/torrents/info');
     const torrents = qbtJson(r);
     if (!Array.isArray(torrents)) throw new Error('Downloader returned an invalid torrent list.');
-    const statusFor = currentDownloadStatus();
-    res.json(torrents.map(t => ({ ...t, reviewReason: downloadReviews.get(t.hash) || '',
-      importStatus: statusFor(t) })));
+    res.json(await downloadsWithStatus(torrents));
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -3282,6 +3295,9 @@ if (QBT_USERNAME && QBT_PASSWORD) {
     }
     const live = new Set(torrents.map((t) => t.hash));
     for (const h of videoChecked) if (!live.has(h)) { videoChecked.delete(h); downloadReviews.delete(h); }
+    // Record fully confirmed imports even while no Downloads tab is open.
+    // This only changes visibility bookkeeping; qBittorrent keeps every entry.
+    await downloadsWithStatus(torrents);
     if (reviewChanged) notifyClients('downloads-updated');
 
     const now = notifyLogLib.torrentStates(torrents);

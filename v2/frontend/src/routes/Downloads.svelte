@@ -7,6 +7,7 @@
 
   let torrents = $state(null);
   const groups = $derived(splitDownloads(torrents));
+  let showImported = $state(false);
   let magnet = $state('');
   let busy = $state(false);
   let err = $state('');
@@ -306,17 +307,30 @@
   {:else if !torrents.length}
     <p class="empty">No torrents.</p>
   {:else}
+    <div class="download-options">
+      <p class="meta">Downloads leave this list automatically after their library import is confirmed.</p>
+      {#if groups.imported.length}
+        <label><input type="checkbox" bind:checked={showImported} /> Show imported downloads ({groups.imported.length})</label>
+      {/if}
+    </div>
     {#if groups.active.length}
       {@render downloadRows(groups.active)}
     {:else}
       <p class="empty">No active downloads.</p>
     {/if}
     {#if groups.completed.length}
-      <details class="completed">
-        <summary>Completed ({groups.completed.length})</summary>
-        <p class="meta">Finished downloads move here automatically. Files are kept, and seeding can continue.</p>
+      <details class="completed" open>
+        <summary>Downloaded — awaiting import ({groups.completed.length})</summary>
+        <p class="meta">These downloads stay here until the move and library scan are confirmed.</p>
         {@render downloadRows(groups.completed)}
       </details>
+    {/if}
+    {#if showImported && groups.imported.length}
+      <section class="imported" aria-label="Imported downloads">
+        <h2>Imported downloads</h2>
+        <p class="meta">Already available in your library.</p>
+        {@render downloadRows(groups.imported)}
+      </section>
     {/if}
   {/if}
 </div>
@@ -438,6 +452,11 @@
   .cta:disabled { opacity: 0.4; cursor: default; }
   .err { color: #ff6b6b; font-size: 0.9rem; margin-bottom: var(--s3); }
   .empty { color: var(--ink-faint); padding: var(--s5) 0; }
+  .download-options { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--s3); margin-top: var(--s4); }
+  .download-options label { display: flex; align-items: center; gap: var(--s2); min-height: 44px; color: var(--ink-soft); font-size: .85rem; }
+  .download-options input { width: auto; }
+  .imported { margin-top: var(--s5); }
+  .imported h2 { font-size: 1.1rem; margin-bottom: var(--s2); }
   .spinner {
     width: 30px; height: 30px; margin: var(--s6) auto;
     border: 2px solid var(--line-strong); border-top-color: var(--ink);
