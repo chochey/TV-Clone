@@ -34,6 +34,7 @@ const { VIDEO_EXTENSIONS, AUDIO_EXTENSIONS, isAudioFile, normalizeFolderMediaKin
   extensionsForFolder, classifyMediaKind, playbackIssueForFile } = require('./lib/library-media');
 const { FolderError, validateFolderPath, normalizeFolder, publicSections, sectionId, overlapsFolder } = require('./lib/library-folders');
 const SUPPORTED_EXT = [...VIDEO_EXTENSIONS, ...AUDIO_EXTENSIONS];
+const audioMetadata = require('./lib/audio-metadata')();
 const SUBTITLE_EXT = ['.srt', '.vtt'];
 const POSTER_EXT = ['.jpg', '.jpeg', '.png', '.webp'];
 
@@ -1064,6 +1065,13 @@ app.get('/api/item/:id', requireAuth, async (req, res) => {
   if (!profileId) return res.status(403).json({ error: 'Cannot access other profiles' });
   const profileData = loadProfileData(profileId);
   const { _filePath, folderPath, ...safeItem } = item;
+  if ((item.mediaKind === 'audio' || isAudioFile(fileIndex[item.id])) && !playbackIssueForFile(fileIndex[item.id])) {
+    const metadata = await audioMetadata.get(fileIndex[item.id]);
+    if (metadata) {
+      const { artwork, ...fields } = metadata;
+      safeItem.audioMetadata = { ...fields, coverUrl: artwork ? `/audio-artwork/${item.id}` : null };
+    }
+  }
   const embedded = item.mediaKind === 'audio' || isAudioFile(fileIndex[item.id]) ? [] : await probeSubtitlesAsync(fileIndex[item.id]);
   safeItem.subtitles = [...(item.subtitles || []).filter(s => !s.embedded), ...embeddedTracks(item.id, embedded)];
   // Strip internal fields from subtitles
@@ -1788,6 +1796,16 @@ app.get('/poster/:id', requireAuth, ensureLibrary, (req, res) => {
   if (!p || !fs.existsSync(p)) return res.status(404).send('Not found');
   res.set('Cache-Control', 'public, max-age=2592000');
   res.sendFile(p);
+});
+
+// Embedded audio covers are only resolved from the authenticated library index.
+app.get('/audio-artwork/:id', requireAuth, ensureLibrary, async (req, res) => {
+  const filePath = fileIndex[req.params.id];
+  if (!filePath) return res.status(404).send('Not found');
+  const metadata = await audioMetadata.get(filePath);
+  if (!metadata?.artwork) return res.status(404).send('No audio artwork available');
+  res.set({ 'Content-Type': 'image/jpeg', 'Cache-Control': 'private, no-cache' });
+  res.send(metadata.artwork);
 });
 
 // Landscape backdrop stills extracted from the media files themselves

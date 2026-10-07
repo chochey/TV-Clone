@@ -17,7 +17,7 @@ function wav() {
   body.write('data', 36); body.writeUInt32LE(size, 40); return body;
 }
 
-async function audioApp(page, { failFirst = false } = {}) {
+async function audioApp(page, { failFirst = false, fullItem = audioItem, itemDelayMs = 0 } = {}) {
   const saved = [], forbidden = [], errors = []; let streams = 0;
   page.on('pageerror', error => errors.push(error.message));
   page.on('request', request => {
@@ -26,6 +26,9 @@ async function audioApp(page, { failFirst = false } = {}) {
   await page.route('**/*', route => route.abort());
   await page.route(`${origin}/**`, async route => {
     const url = new URL(route.request().url());
+    if (url.pathname === '/audio-artwork/podcast') {
+      return route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400" viewBox="0 0 400 400"><rect width="400" height="400" fill="#38255d"/><circle cx="270" cy="100" r="150" fill="#7950b2"/><path d="M90 115h210v190H90z" fill="#eee1ff"/><path d="M200 115v190" stroke="#ab82dc" stroke-width="8"/></svg>' });
+    }
     if (url.pathname === '/stream/podcast') {
       if (++streams === 1 && failFirst) return route.fulfill({ status: 404 });
       const body = wav(), range = /^bytes=(\d+)-(\d*)$/.exec(route.request().headers().range || '');
@@ -42,7 +45,10 @@ async function audioApp(page, { failFirst = false } = {}) {
       else if (url.pathname === '/api/me') body = { loggedIn: true, role: 'user', profileId: 'test', name: 'Test' };
       else if (url.pathname === '/api/library') body = [audioItem];
       else if (url.pathname === '/api/library/sections') body = { ok: true, sections: [{ id: 'podcasts', label: 'Podcasts', type: 'custom-podcasts', mediaKind: 'audio', count: 1, available: true }] };
-      else if (url.pathname === '/api/item/podcast') body = audioItem;
+      else if (url.pathname === '/api/item/podcast') {
+        if (itemDelayMs) await new Promise(resolve => setTimeout(resolve, itemDelayMs));
+        body = fullItem;
+      }
       else if (url.pathname === '/api/metadata/podcast') body = { found: false };
       else if (url.pathname === '/api/dismissed') body = { continueWatching: {}, recentlyAdded: {} };
       else if (url.pathname === '/api/notifications') body = { notifications: [] };
@@ -59,6 +65,21 @@ async function audioApp(page, { failFirst = false } = {}) {
   await page.getByRole('button', { name: /^Resume/ }).click();
   return { saved, forbidden, errors };
 }
+
+test('late book metadata does not override a manual rewind and pause', async ({ page }) => {
+  const { errors } = await audioApp(page, { itemDelayMs: 3000,
+    fullItem: { ...audioItem, audioMetadata: { title: 'Delayed metadata title', artist: 'Author' } } });
+  const player = page.getByRole('dialog', { name: 'Audio player' }), audio = page.locator('audio');
+  await expect.poll(() => audio.evaluate(el => !el.paused && el.currentTime >= 8)).toBe(true);
+  await player.getByRole('button', { name: 'Pause audio', exact: true }).click();
+  await player.getByRole('slider', { name: 'Playback position' }).focus();
+  await page.keyboard.press('Home');
+  await expect.poll(() => audio.evaluate(el => el.currentTime)).toBe(0);
+  await expect(player.getByRole('heading', { name: 'Delayed metadata title', exact: true })).toBeVisible();
+  expect(await audio.evaluate(el => ({paused:el.paused,time:el.currentTime}))).toEqual({paused:true,time:0});
+  await player.getByRole('button', { name: 'Close audio player' }).click();
+  expect(errors).toEqual([]);
+});
 
 test('audio resumes, plays, seeks, changes speed and saves without video processing', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
@@ -90,3 +111,64 @@ test('audio failure gives a working retry and clears when playback succeeds', as
   await expect(page.getByRole('alert')).toHaveCount(0);
   expect(forbidden).toEqual([]); expect(errors).toEqual([]);
 });
+
+for (const width of [1280, 390]) {
+  test(`audiobook controls show metadata and support keyboard, chapters and seeking at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    const { saved, forbidden, errors } = await audioApp(page, { fullItem: { ...audioItem, audioMetadata: {
+      title: "Carl's Doomsday Scenario", artist: 'Matt Dinniman', album: 'Dungeon Crawler Carl, Book 2', duration: 60,
+      coverUrl: '/audio-artwork/podcast', chapters: [
+        { title: 'The Auction', start: 0, end: 20 }, { title: 'The Next Room', start: 20, end: 40 },
+        { title: 'A New Floor', start: 40, end: 60 },
+      ],
+    } } });
+    const player = page.getByRole('dialog', { name: 'Audio player' }), audio = page.locator('audio');
+    await expect(player.getByRole('heading', { name: "Carl's Doomsday Scenario", exact: true })).toBeVisible();
+    await expect(player.getByText('Matt Dinniman', { exact: true })).toBeVisible();
+    await expect.poll(() => audio.evaluate(el => !el.paused && el.readyState >= 3)).toBe(true);
+    expect(await audio.evaluate(el => el.controls)).toBe(false);
+    await expect(player.locator('img')).toHaveAttribute('src', '/audio-artwork/podcast');
+    await expect.poll(() => player.locator('img').evaluate(el => el.naturalWidth)).toBeGreaterThan(0);
+
+    await player.getByRole('button', { name: 'Pause audio', exact: true }).click();
+    await expect.poll(() => audio.evaluate(el => el.paused)).toBe(true);
+    const position = player.getByRole('slider', { name: 'Playback position', exact: true });
+    await position.focus(); await position.press('Home');
+    await expect.poll(() => audio.evaluate(el => Math.floor(el.currentTime))).toBe(0);
+    await position.press('ArrowRight');
+    await expect.poll(() => audio.evaluate(el => el.currentTime)).toBeGreaterThan(0);
+    // Range keys must seek rather than also firing global skip shortcuts.
+    expect(await audio.evaluate(el => el.currentTime)).toBeLessThan(5);
+
+    const chapter = player.getByLabel('Chapter', { exact: true });
+    const nextLabel = (await chapter.locator('option').allTextContents()).find(text => text.includes('The Next Room'));
+    await chapter.selectOption({ label: nextLabel });
+    await expect.poll(() => audio.evaluate(el => Math.floor(el.currentTime))).toBe(20);
+    await expect.poll(() => saved.some(value => value.currentTime === 20 && value.profile === 'test')).toBe(true);
+    const volume = player.getByRole('slider', { name: 'Volume', exact: true });
+    await volume.focus(); await volume.press('Home');
+    await expect.poll(() => audio.evaluate(el => el.volume)).toBe(0);
+    await volume.press('End');
+    await expect.poll(() => audio.evaluate(el => el.volume)).toBe(1);
+
+    await player.getByRole('button', { name: 'Play audio', exact: true }).click();
+    await expect.poll(() => audio.evaluate(el => el.paused)).toBe(false);
+    // Space on the Play/Pause button must produce exactly one toggle.
+    await player.getByRole('button', { name: 'Pause audio', exact: true }).press('Space');
+    await expect.poll(() => audio.evaluate(el => el.paused)).toBe(true);
+    await player.getByRole('button', { name: 'Play audio', exact: true }).click();
+    await player.getByLabel('Speed', { exact: true }).selectOption('1.5');
+    expect(await audio.evaluate(el => el.playbackRate)).toBe(1.5);
+
+    const close = player.getByRole('button', { name: 'Close audio player' });
+    await close.focus(); await page.keyboard.press('Shift+Tab');
+    expect(await page.evaluate(() => !!document.activeElement.closest('[role="dialog"]'))).toBe(true);
+    await page.keyboard.press('Tab'); await expect(close).toBeFocused();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: test.info().outputPath(`audiobook-${width}.png`), fullPage: true });
+    await close.click();
+    await expect(player).toHaveCount(0);
+    await expect(page.getByRole('button', { name: /^Resume/ })).toBeFocused();
+    expect(forbidden).toEqual([]); expect(errors).toEqual([]);
+  });
+}
