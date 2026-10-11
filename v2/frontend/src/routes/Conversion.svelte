@@ -22,7 +22,7 @@
   let cleanupError = $state('');
   let cleanupDone = $state('');
 
-  const isActive = $derived(queue?.status === 'running' || queue?.status === 'paused' || queue?.status === 'stopping');
+  const isActive = $derived(['running', 'paused', 'interrupted', 'stopping'].includes(queue?.status));
   const pct = $derived(queue?.total ? Math.round((queue.done / queue.total) * 100) : 0);
   const driveWarnings = $derived(queue?.storage?.warnings || data?.disk?.drives || []);
   const candidateCount = $derived(Number.isFinite(data?.eligibleSelected) ? Math.max(0, Math.floor(data.eligibleSelected)) : 0);
@@ -40,7 +40,7 @@
     try {
       const next = await api.conversionStatus();
       if (closed) return;
-      if (!['idle', 'running', 'paused', 'stopping'].includes(next?.status)) throw new Error('The queue returned an unknown status. Retry before starting conversion.');
+      if (!['idle', 'running', 'paused', 'interrupted', 'stopping'].includes(next?.status)) throw new Error('The queue returned an unknown status. Retry before starting conversion.');
       const finished = queue && queue.status !== 'idle' && next.status === 'idle';
       queue = next;
       statusReady = true; statusError = '';
@@ -54,7 +54,7 @@
   // Poll only while something is happening. A finished queue does not need a
   // request every two seconds for the rest of the session.
   function syncPolling() {
-    const shouldPoll = isActive;
+    const shouldPoll = ['running', 'paused', 'stopping'].includes(queue?.status);
     if (shouldPoll && !poll) poll = setInterval(loadStatus, 2000);
     if (!shouldPoll && poll) { clearInterval(poll); poll = null; }
   }
@@ -422,8 +422,8 @@
       <p class="hint">
         Converts the selected categories, smallest files first. Each output is checked before replacement.
         {data.config.retainOriginals === false ? 'Old files are deleted after verification.' : 'Original files are retained for recovery; cleanup is manual.'}
-        A server restart stops the queue;
-        Starting rebuilds the list and skips files already compatible.
+        Progress and recent history are saved. After a server restart, an interrupted run waits for you to resume it.
+        Resume checks the remaining source files again before continuing.
       </p>
 
       <p class="hint">
@@ -435,14 +435,18 @@
       {#if isActive}<p class="hint">Run scope: <strong>{queue.scope === 'all' ? 'Convert all — all eligible selected files' : 'Limited batch'}</strong>.</p>{/if}
 
       {#if queueError}<p class="danger">{queueError}</p>{/if}
+      {#if queue?.lastError && queue.lastError !== queueError}<p class="danger" role="alert">{queue.lastError}</p>{/if}
       {#if statusError}<p class="danger" role="alert">{statusError} <button class="qbtn" onclick={loadStatus} disabled={queueBusy}>Retry status</button></p>{/if}
+      {#if queue?.status === 'interrupted'}
+        <p class="warn" role="status">This run was interrupted. Nothing starts automatically. Resume checks the remaining files and continues the saved run; Stop ends it.</p>
+      {/if}
 
       {#if queue && queue.total > 0}
         <div class="progwrap">
           <div class="progbar"><span style="width:{pct}%"></span></div>
           <div class="progmeta">
             <strong>{queue.done} / {queue.total}</strong>
-            <span>{queue.converted} converted · {queue.failed} skipped</span>
+            <span>{queue.converted} converted · {queue.failed} need review{queue.skipped ? ` · ${queue.skipped} no longer eligible` : ''}</span>
             {#if queue.bytesBefore > 0}
               <span>{fmtBytes(queue.bytesBefore)} → {fmtBytes(queue.bytesAfter)}</span>
             {/if}
@@ -455,9 +459,18 @@
             {/if}
           {/if}
           {#if queue.waitingReason}
-            <div class="waiting">Paused automatically — {queue.waitingReason}. Resumes on its own.</div>
+            <div class="waiting">Waiting — {queue.waitingReason}.{queue.status === 'running' ? ' Checks again automatically.' : ''}</div>
           {/if}
         </div>
+      {/if}
+      {#if queue?.deferredCount}
+        <details class="hint">
+          <summary>{queue.deferredCount} file{queue.deferredCount === 1 ? '' : 's'} waiting for playback or storage</summary>
+          <p>Other queued files can continue. Waiting files stay queued and are checked again.</p>
+          {#each queue.deferred || [] as file, index (file.id || index)}
+            <p>{file.name} — {file.reason}</p>
+          {/each}
+        </details>
       {/if}
 
       <div class="qcontrols">
@@ -466,6 +479,9 @@
           <button class="qbtn stop" onclick={() => queueAction(api.conversionStop)} disabled={queueBusy}>Stop</button>
         {:else if queue?.status === 'paused'}
           <button class="qbtn go" onclick={() => queueAction(api.conversionResume)} disabled={queueBusy}>Resume</button>
+          <button class="qbtn stop" onclick={() => queueAction(api.conversionStop)} disabled={queueBusy}>Stop</button>
+        {:else if queue?.status === 'interrupted'}
+          <button class="qbtn go" onclick={() => queueAction(api.conversionResume)} disabled={queueBusy || !data.config.enabled}>Resume interrupted run</button>
           <button class="qbtn stop" onclick={() => queueAction(api.conversionStop)} disabled={queueBusy}>Stop</button>
         {:else if queue?.status === 'stopping'}
           <button class="qbtn" disabled>Stopping…</button>
@@ -507,15 +523,26 @@
         (<em>Max files per run</em> above); Convert all bypasses that file-count limit.
       </p>
 
-      {#if queue?.results?.length}
+      {#if queue?.history?.length || queue?.results?.length}
+        <h3>Recent conversion history</h3>
         <div class="pilotlist">
-          {#each queue.results as r (r.name + r.at)}
-            <div class="pilotrow" class:ok={r.ok} class:bad={!r.ok}>
+          {#each queue.history || queue.results as r (String(r.runId || '') + (r.filePath || r.name) + r.at)}
+            <div class="pilotrow" class:ok={r.ok} class:bad={!r.ok && r.outcome !== 'skipped'}>
               <span class="pfile">{r.name}</span>
-              <span class="presult {r.ok && !r.reason ? 'ok' : 'bad'}">{r.reason || (r.ok ? 'converted' : 'failed')}</span>
+              <span class="presult {r.ok && !r.reason ? 'ok' : 'bad'}">{r.reason || (r.ok ? 'converted' : 'needs review')}
+                {r.ok && r.originalDeleted ? ' · original deleted after verification' : r.ok && r.retainedPath ? ' · original retained' : ''}</span>
             </div>
           {/each}
         </div>
+      {/if}
+      {#if queue?.runs?.length}
+        <details class="hint">
+          <summary>Previous runs ({queue.runs.length})</summary>
+          {#each queue.runs as run (run.id)}
+            <p>{new Date(run.startedAt).toLocaleString()} — {run.status === 'complete' ? 'Completed' : 'Stopped'} {run.scope === 'all' ? 'Convert all' : 'batch'}:
+              {run.converted} converted · {run.failed} need review{run.skipped ? ` · ${run.skipped} no longer eligible` : ''}.</p>
+          {/each}
+        </details>
       {/if}
     </section>
 
@@ -648,6 +675,7 @@
   }
   .qstatus.running { color: #7ed491; }
   .qstatus.paused { color: #ffb46b; }
+  .qstatus.interrupted { color: #ffb46b; }
   .qstatus.stopping { color: #ff6b6b; }
 
   .qcontrols { display: flex; gap: var(--s2); flex-wrap: wrap; margin-top: var(--s3); }

@@ -25,6 +25,7 @@
   import Player from './lib/components/Player.svelte';
   import AudioPlayer from './lib/components/AudioPlayer.svelte';
   import { isAudioItem, isSeriesItem } from './lib/series-playback.js';
+  import { loadedAppVersion, createAppUpdateMonitor, canRefreshApp } from './lib/app-updates.js';
   import { notifications, unreadCount, markAllRead, clearNotifications, setNotificationsEnabled, loadNotifications } from './lib/notifications.js';
 
   let phase = $state('loading'); // loading | login | ready
@@ -108,6 +109,7 @@
   }
 
   let playing = $state(null);
+  let audioMinimized = $state(false), updateAvailable = $state(false);
   const playingNext = $derived(playing ? nextEpisodeOf(playing, $library) : null);
   const playingPrev = $derived(playing ? prevEpisodeOf(playing, $library) : null);
 
@@ -116,7 +118,23 @@
     navigate(`/title/${encodeURIComponent(item.id)}`);
   }
   function playItem(item) {
+    audioMinimized = false;
     playing = item;
+  }
+
+  $effect(() => {
+    if (phase !== 'ready') return;
+    const monitor = createAppUpdateMonitor({ initialVersion: loadedAppVersion(document),
+      load: () => api.appVersion(), onUpdate: available => { updateAvailable = available; } });
+    const check = () => { if (document.visibilityState !== 'hidden') monitor.check(); };
+    check();
+    const timer = setInterval(check, 60000);
+    document.addEventListener('visibilitychange', check);
+    window.addEventListener('focus', check);
+    return () => { monitor.stop(); clearInterval(timer); document.removeEventListener('visibilitychange', check); window.removeEventListener('focus', check); };
+  });
+  function refreshApp() {
+    if (canRefreshApp(updateAvailable, !!playing)) window.location.reload();
   }
 
   // Section summaries contain labels/counts only. Server paths stay in the
@@ -206,6 +224,8 @@
   let menuOpen = $state(false);
   let pendingCount = $state(0);
   let scanBusy = $state(false);
+  let scanSnapshot = $state(null);
+  let scanGeneration = 0, scanSubmitting = false;
   let confirmRestart = $state(false);
   let searchExpanded = $state(false);
   let searchInput, accountButton;
@@ -285,17 +305,44 @@
   }
   async function scanLibrary() {
     if (scanBusy) return;
+    scanGeneration++; scanSubmitting = true;
     scanBusy = true;
     menuOpen = false;
     showToast('Library scan started…');
     try {
       const r = await api.scan();
-      await loadLibrary($session?.profileId);
-      showToast(`Scan complete — ${r.count?.toLocaleString?.() || 'library'} files.`);
+      scanSnapshot = r.status || null;
+      showToast(r.queued ? 'Library scan queued…' : 'Library scan started…');
     } catch (e) {
+      scanBusy = false;
       showToast(e.body?.error || 'Scan failed.');
-    } finally { scanBusy = false; }
+    } finally { scanSubmitting = false; }
   }
+  $effect(() => {
+    if (phase !== 'ready' || !can('canScan')) return;
+    const profile = $session?.profileId;
+    let active = true, pending = false;
+    async function poll() {
+      if (pending || scanSubmitting) return;
+      const generation = scanGeneration;
+      pending = true;
+      try {
+        const status = await api.scanStatus();
+        if (!active || $session?.profileId !== profile || generation !== scanGeneration || scanSubmitting) return;
+        const wasBusy = scanBusy;
+        scanSnapshot = status;
+        scanBusy = !!(status.running || status.queued);
+        if (wasBusy && !scanBusy) {
+          showToast(status.error ? `Scan failed: ${status.error}` : status.enriching ? 'Library scan complete. Details are still updating.' : 'Library scan complete.');
+          await loadLibrary(profile);
+        }
+      } catch { /* keep a queued scan visible while the connection recovers */ }
+      finally { pending = false; }
+    }
+    poll();
+    const timer = setInterval(() => { if (scanBusy) poll(); }, 2000);
+    return () => { active = false; clearInterval(timer); };
+  });
   async function restartServer() {
     menuOpen = false;
     confirmRestart = false;
@@ -498,7 +545,8 @@
       {/if}
     </div>
   </header>
-  <main>
+  <main class:with-mini={playing && isAudioItem(playing) && audioMinimized} class:with-update={updateAvailable}>
+    {#if scanBusy}<div class="scan-progress" role="status">{scanSnapshot?.queued ? 'Library scan queued…' : 'Library scan in progress…'}</div>{/if}
     {#if $route.name === 'title'}
       <Detail id={$route.id} onplay={playItem} />
     {:else if $route.name === 'movies'}
@@ -542,7 +590,7 @@
 {#if playing}
   {#key playing.id}
     {#if isAudioItem(playing)}
-      <AudioPlayer item={playing} onclose={() => { playing = null; }} />
+      <AudioPlayer item={playing} minimized={audioMinimized} onminimize={() => { audioMinimized = true; }} onexpand={() => { audioMinimized = false; }} onclose={() => { playing = null; audioMinimized = false; }} />
     {:else}
     <Player
       item={playing}
@@ -556,11 +604,30 @@
   {/key}
 {/if}
 
+{#if phase === 'ready' && updateAvailable}
+  <aside class="update-banner" class:above-mini={playing && isAudioItem(playing) && audioMinimized} role="status">
+    <p><strong>Update available</strong><span>{playing ? 'Close the player when you are ready to refresh.' : 'Refresh to get the latest changes.'}</span></p>
+    <button disabled={!!playing} onclick={refreshApp}>Refresh</button>
+  </aside>
+{/if}
+
 {#if toast}
   <div class="toast" use:portalToFullscreen>{toast}</div>
 {/if}
 
 <style>
+  main.with-mini {padding-bottom:120px;}
+  main.with-update {padding-bottom:140px;}
+  main.with-mini.with-update {padding-bottom:220px;}
+  .scan-progress {position:relative;z-index:4;margin:88px var(--gutter) 0;padding:12px 16px;background:#271b3d;border:1px solid #8f62c04d;border-radius:10px;color:#dac4f4;font-size:.85rem;}
+  .update-banner {position:fixed;z-index:110;right:16px;bottom:16px;display:flex;align-items:center;gap:16px;max-width:min(430px,calc(100vw - 32px));padding:14px 16px;background:#241c32;border:1px solid #a47aca80;border-radius:12px;box-shadow:0 8px 30px #0008;}
+  .update-banner.above-mini {bottom:110px;}
+  .update-banner p {display:flex;flex-direction:column;gap:4px;line-height:1.4;}
+  .update-banner strong {font-size:.88rem;}
+  .update-banner span {color:var(--ink-soft);font-size:.78rem;}
+  .update-banner button {padding:10px 14px;border-radius:8px;background:#bd9cff;color:#21162f;font-weight:700;min-height:44px;}
+  .update-banner button:disabled {opacity:.45;cursor:default;}
+  @media(max-width:720px) {main.with-mini {padding-bottom:calc(160px + env(safe-area-inset-bottom));} main.with-update {padding-bottom:calc(220px + env(safe-area-inset-bottom));} main.with-mini.with-update {padding-bottom:calc(280px + env(safe-area-inset-bottom));} .update-banner {bottom:calc(70px + env(safe-area-inset-bottom));} .update-banner.above-mini {bottom:calc(165px + env(safe-area-inset-bottom));}}
   .splash {
     min-height: 100vh;
     display: flex;

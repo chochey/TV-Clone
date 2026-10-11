@@ -1,11 +1,13 @@
 <script>
   import Hero from '../lib/components/Hero.svelte';
   import Row from '../lib/components/Row.svelte';
+  import PosterCard from '../lib/components/PosterCard.svelte';
   import { continueWatching, recentlyAdded, genreClusters, libraryStats, catalog, watchState, collapseShows } from '../lib/stores.js';
   import { posterUrl } from '../lib/api.js';
   import { navigate } from '../lib/router.js';
   import { moods, moodMatches, discoveryPool, nextPick } from '../lib/home-discovery.js';
   import { mediaKindOf, isAudioItem } from '../lib/series-playback.js';
+  import { continuePreview, filterContinue } from '../lib/continue-preview.js';
   let { onopen, onplay } = $props();
   const featured = $derived($continueWatching.find(i => !isAudioItem(i)) || $recentlyAdded.find(i => !isAudioItem(i)) || null);
   const movies = $derived($catalog.filter(i => mediaKindOf(i) === 'movie'));
@@ -16,9 +18,9 @@
   $effect(() => { pick?.id; pickFailed = false; });
   let mood = $state('');
   const moodItems = $derived(mood ? collapseShows(moodMatches($catalog.filter(i => !isAudioItem(i)), mood)).slice(0,40) : []);
-  const continueTitle = $derived($continueWatching.some(isAudioItem)
-    ? ($continueWatching.every(isAudioItem) ? 'Continue listening' : 'Continue watching and listening')
-    : 'Continue watching');
+  const continued = $derived(continuePreview($continueWatching));
+  let allContinue = $state(false), continueKind = $state('all');
+  const continueItems = $derived(filterContinue(continued.recent, continueKind));
   function shuffle() { pickId = nextPick(pool, pick?.id)?.id || ''; }
   function surprise() {
     const choice = nextPick(pool, pick?.id);
@@ -67,7 +69,26 @@
     </div>
   {/if}
   <div class="rows">
-    <Row title={continueTitle} items={$continueWatching} {onopen} {onplay} resume wide />
+    {#if continued.recent.length}
+      <div class="continue-controls">
+        <p>{allContinue ? 'All your titles in progress' : 'Your 12 most recent titles in progress'}</p>
+        {#if continued.hasMore || allContinue}<button aria-expanded={allContinue} onclick={() => { allContinue = !allContinue; }}>{allContinue ? 'Show recent 12' : `View all (${continued.recent.length})`}</button>{/if}
+      </div>
+      {#if allContinue}
+        <section class="continue-all" aria-label="All in-progress titles">
+          <div class="continue-tabs" aria-label="Filter titles in progress">
+            {#each [['all', 'All'], ['watching', 'Watching'], ['listening', 'Listening']] as [value, label]}
+              <button aria-pressed={continueKind === value} class:selected={continueKind === value} onclick={() => { continueKind = value; }}>{label}</button>
+            {/each}
+          </div>
+          <div class="continue-grid">{#each continueItems as item (item.id)}<PosterCard {item} {onopen} {onplay} resume />{/each}</div>
+          {#if !continueItems.length}<p class="continue-empty">No {continueKind === 'listening' ? 'audiobooks' : 'films or series'} in progress.</p>{/if}
+        </section>
+      {:else}
+        <Row title="Continue watching" items={continued.watching} {onopen} {onplay} resume wide />
+        <Row title="Continue listening" items={continued.listening} {onopen} {onplay} resume wide />
+      {/if}
+    {/if}
     <Row title="Fresh on your shelf" items={$recentlyAdded} {onopen} {onplay} size="lg" />
     {#each $genreClusters as cluster (cluster.name)}
       <Row title={cluster.name} items={cluster.items} {onopen} {onplay} />
@@ -107,6 +128,14 @@
   .mood-result {padding-bottom:12px;}
   .mood-result p,.clear {margin:16px var(--gutter) 0;}
   .clear {color:#c6a7ff;text-decoration:underline;text-underline-offset:4px;}
+  .continue-controls {display:flex;align-items:center;justify-content:space-between;gap:12px;margin:26px var(--gutter) 0;color:var(--ink-soft);font-size:.8rem;}
+  .continue-controls button {color:#cfb2ff;min-height:44px;font-weight:650;white-space:nowrap;}
+  .continue-all {margin:12px var(--gutter) 32px;}
+  .continue-tabs {display:flex;flex-wrap:wrap;gap:8px;margin-bottom:20px;}
+  .continue-tabs button {min-height:44px;padding:9px 16px;background:#ffffff09;border:1px solid var(--line-strong);border-radius:9px;}
+  .continue-tabs .selected {background:#7939f833;color:#e0ccff;border-color:#a879f3;}
+  .continue-grid {display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:24px 16px;}
+  .continue-empty {color:var(--ink-soft);padding:24px 0;}
   footer {display:flex;gap:20px;flex-wrap:wrap;margin:48px var(--gutter) 0;padding-top:24px;border-top:1px solid var(--line);color:var(--ink-soft);font-size:.82rem;}
   footer span {margin-right:auto;}
   button:focus-visible {outline:3px solid #c5a6ff;outline-offset:4px;}

@@ -25,6 +25,13 @@ export const api = {
   login: (username, password) => fetch('/api/login', opts('POST', { username, password })).then(json),
   logout: () => fetch('/api/logout', opts('POST')).then(json).catch(() => ({})),
 
+  appVersion: () => fetch('/api/version', {...opts('GET'),cache:'no-store'}).then(json),
+  audioPreferences: () => fetch('/api/audio/preferences',opts('GET')).then(json),
+  audioPreferencesUpdate: body => fetch('/api/audio/preferences',opts('PUT',body)).then(json),
+  audioBookmarks: id => fetch(`/api/audio/bookmarks/${encodeURIComponent(id)}`,opts('GET')).then(json),
+  audioBookmarkAdd: (id,body) => fetch(`/api/audio/bookmarks/${encodeURIComponent(id)}`,opts('POST',body)).then(json),
+  audioBookmarkRemove: (id,bookmarkId) => fetch(`/api/audio/bookmarks/${encodeURIComponent(id)}/${encodeURIComponent(bookmarkId)}`,opts('DELETE')).then(json),
+  scanStatus: () => fetch('/api/scan/status', {...opts('GET'),cache:'no-store'}).then(json),
   // Library
   library: (params = {}) => {
     const q = new URLSearchParams(params).toString();
@@ -88,6 +95,7 @@ export const api = {
   organizerLogs: (params = {}) =>
     fetch(`/api/organizer/logs?${new URLSearchParams(params)}`, opts('GET')).then(json),
   organizerStatus: () => fetch('/api/organizer/status', opts('GET')).then(json),
+  organizerRetry: id => fetch('/api/organizer/retry',opts('POST',{id})).then(json),
   organizerRestart: () => fetch('/api/organizer/restart', opts('POST')).then(json),
   organizerFixQueue: () => fetch('/api/organizer/fix-queue', opts('GET')).then(json),
   organizerAliasSave: (body) => fetch('/api/organizer/aliases', opts('POST', body)).then(json),

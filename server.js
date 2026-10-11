@@ -89,10 +89,8 @@ const {
   LANG_CODES,
 } = require('./lib/filename-parse');
 
-// Generate opaque file IDs from paths (deterministic but not reversible)
-function hashId(filePath) {
-  return crypto.createHash('sha256').update(filePath).digest('hex').slice(0, 16);
-}
+// All consumers use the same permanent identity, including conversion.
+function hashId(filePath) { return mediaIdentity.idForPath(filePath); }
 
 // VAAPI detection — lazy. The probe takes up to 5s and was blocking startup
 // even for users who never transcode. First call memoizes the result.
@@ -141,6 +139,9 @@ const DEFAULT_CONFIG = {
 };
 
 const { loadJSON, saveJSON, saveJSONStrict, saveJSONSync, saveRaw } = require('./lib/json-store');
+const mediaIdentity = require('./lib/media-identity').createMediaIdentity({
+  file: path.join(DATA_DIR, 'media-identities.json'), save: saveJSONStrict,
+});
 
 // ── Auth module (sessions, admin/cast tokens, password hashing) ───────
 const auth = require('./lib/auth')({
@@ -364,6 +365,7 @@ function loadLibraryCache() {
         return false;
       }
       libraryCache = parsed;
+      mediaIdentity.seed(parsed);
       // Rebuild fileIndex, posterIndex, and subtitleIndex from cache.
       // Also recompute streamMode against the current probe caches so that
       // logic changes (e.g. 10-bit H.264 handling) take effect without a
@@ -428,12 +430,18 @@ let rescanPromise = null; // single-flight: concurrent triggers share one scan
 
 function rescanLibraryAsync(trigger) {
   if (rescanPromise) return rescanPromise;
-  rescanPromise = doRescan(trigger || 'rescan').finally(() => { rescanPromise = null; });
+  rescanPromise = (async () => {
+    for (let attempt=0; ; attempt++) {
+      try { return await doRescan(trigger || 'rescan'); }
+      catch (error) { if (error.code !== 'EIDENTITYRACE' || attempt >= 2) throw error; }
+    }
+  })().finally(() => { rescanPromise = null; });
   return rescanPromise;
 }
 
 async function doRescan(trigger) {
   const _scanStart = Date.now();
+  const identityRevision = mediaIdentity.revision;
   const library = [];
   // Build into locals and swap at the end — requests arriving mid-scan keep
   // resolving against the complete old indexes, never a half-built state.
@@ -443,13 +451,24 @@ async function doRescan(trigger) {
   const previousIndexes = { files: fileIndex, posters: posterIndex, subtitles: subtitleIndex };
   const lookup = createDirectoryLookup();
 
+  const inventory = [];
   for (const folder of config.folders) {
+    if (!folder.path) continue;
+    const paths = [];
+    await walkDirAsync(folder.path, paths, lookup, extensionsForFolder(folder));
+    inventory.push({folder, paths});
+  }
+  mediaIdentity.seed(libraryCache);
+  let identityMovesAllowed = lookup.failures().length === 0;
+  if (config.folders.some(folder => folder.path === '/mnt/media' || folder.path?.startsWith('/mnt/media/'))) {
+    try { if ((await conversionStorage.scanHealth()).degraded) identityMovesAllowed = false; }
+    catch { identityMovesAllowed = false; }
+  }
+  mediaIdentity.begin(inventory.flatMap(entry => entry.paths), {
+    allowMoves:identityMovesAllowed, roots:config.folders.map(folder=>folder.path).filter(Boolean).map(root=>path.resolve(root)),
+  });
+  for (const {folder, paths:videoPaths} of inventory) {
     const dirPath = folder.path;
-    if (!dirPath) continue;
-
-    const videoPaths = [];
-    await walkDirAsync(dirPath, videoPaths, lookup, extensionsForFolder(folder));
-
     for (const fullPath of videoPaths) {
       const file = path.basename(fullPath);
       const fileDir = path.dirname(fullPath);
@@ -458,10 +477,11 @@ async function doRescan(trigger) {
       const mediaKind = classifyMediaKind(fullPath, folder);
       const playbackIssue = playbackIssueForFile(fullPath);
       const type = folder.type && folder.type !== 'auto' ? folder.type : mediaKind;
-      const id = hashId(fullPath);
-
-      let fileSize, addedAt;
-      try { const st = await fs.promises.stat(fullPath); fileSize = st.size; addedAt = st.mtimeMs; }
+      let fileSize, addedAt, id;
+      try {
+        const st = await fs.promises.stat(fullPath); fileSize = st.size; addedAt = st.mtimeMs;
+        id = await mediaIdentity.resolve(fullPath, st);
+      }
       catch (err) { lookup.recordFailure(fullPath, err); continue; }
 
       newFileIndex[id] = fullPath;
@@ -543,9 +563,8 @@ async function doRescan(trigger) {
     previous: libraryCache || [], previousIndexes, failures,
     roots: config.folders.map(folder => folder.path).filter(Boolean) });
   const wasDegraded = libraryScanState.degraded;
-  libraryScanState = { degraded: failures.length > 0, failedLocations: failures, unavailableBranches, retainedCount, lastScanAt: Date.now() };
+  const nextScanState = { degraded: failures.length > 0, failedLocations: failures, unavailableBranches, retainedCount, lastScanAt: Date.now() };
   if (failures.length) console.warn(`  [scan] ${failures.length} unavailable location(s); keeping ${retainedCount} cached media item(s)`);
-  if (wasDegraded !== libraryScanState.degraded) notifyClients('library-updated');
 
   library.sort((a, b) => a.title.localeCompare(b.title, undefined, { numeric: true }));
 
@@ -554,11 +573,22 @@ async function doRescan(trigger) {
   const prev = libraryCache;
   const changed = libraryChanged(prev, library);
 
+  const assertCurrentIdentities = () => {
+    if (mediaIdentity.revision !== identityRevision || library.some(item => !mediaIdentity.isCurrent(item._filePath,item.id))) {
+      throw Object.assign(new Error('Media changed during scan; retrying fresh inventory'),{code:'EIDENTITYRACE'});
+    }
+  };
+  assertCurrentIdentities();
+  // IDs must survive a restart before the new catalog becomes visible.
+  await mediaIdentity.persist();
+  assertCurrentIdentities();
   // Atomic swap
   fileIndex = newFileIndex;
   posterIndex = newPosterIndex;
   subtitleIndex = newSubtitleIndex;
   libraryCache = library;
+  libraryScanState = nextScanState;
+  if (wasDegraded !== libraryScanState.degraded) notifyClients('library-updated');
   if (changed) libraryVersion++;
 
   saveLibraryCache();
@@ -868,6 +898,33 @@ function getRequestProfile(req) {
   }
   return requested || sessionProfileId;
 }
+
+// Listening preferences and bookmarks belong to the signed-in profile.
+const audioProfile = require('./lib/audio-profile');
+function audioProfileRoute(mutator) {
+  return async (req, res) => {
+    const profileId = getRequestProfile(req);
+    if (!profileId) return res.status(403).json({error:'Cannot access other profiles'});
+    if (req.params.id && !scanLibrary().some(item => item.id === req.params.id && item.mediaKind === 'audio')) {
+      return res.status(404).json({error:'Audiobook not found'});
+    }
+    try {
+      const before = loadProfileData(profileId);
+      const next = mutator(before,req);
+      if (next !== before) await saveProfileDataStrict(profileId,next);
+      res.set('Cache-Control','private, no-store');
+      res.json(req.params.id ? {bookmarks:audioProfile.bookmarks(next,req.params.id)} : audioProfile.preferences(next));
+    } catch(error) {
+      const invalid = /speed|bookmark|200/.test(error.message);
+      res.status(invalid ? 400 : 503).json({error:invalid ? error.message : 'Could not save listening settings. Please try again.'});
+    }
+  };
+}
+app.get('/api/audio/preferences',requireAuth,audioProfileRoute(data=>data));
+app.put('/api/audio/preferences',requireAuth,audioProfileRoute((data,req)=>audioProfile.updatePreferences(data,req.body)));
+app.get('/api/audio/bookmarks/:id',requireAuth,ensureLibrary,audioProfileRoute(data=>data));
+app.post('/api/audio/bookmarks/:id',requireAuth,ensureLibrary,audioProfileRoute((data,req)=>audioProfile.addBookmark(data,req.params.id,req.body)));
+app.delete('/api/audio/bookmarks/:id/:bookmarkId',requireAuth,ensureLibrary,audioProfileRoute((data,req)=>audioProfile.removeBookmark(data,req.params.id,req.params.bookmarkId)));
 
 app.put('/api/subtitle-offset/:id', requireAuth, (req, res) => {
   const profileId = getRequestProfile(req);
@@ -2519,7 +2576,7 @@ app.get('/api/conversion/plan', requireAdminSession, (req, res) => {
 // copy and lose to its next unrelated write. Sharing the running instances
 // means there is nothing to race.
 const conversionWorker = require('./lib/conversion-worker')({
-  hashId,
+  hashId, relocateIdentity: mediaIdentity.relocate,
   probeCache, pixFmtCache, audioProbeCache, audioTracksCache, subProbeCache, heightCache, levelCache,
   markDirty, scheduleSaveMediaInfo,
   getActiveTranscodeFilePaths: () => new Set(
@@ -2565,6 +2622,9 @@ function eligibleContainerFiles(cfg) {
 
 const conversionQueue = require('./lib/conversion-queue')({
   worker: conversionWorker,
+  getMediaId: hashId,
+  loadState: () => loadJSON(path.join(DATA_DIR, 'conversion-queue.json'), null),
+  saveState: state => saveJSONStrict(path.join(DATA_DIR, 'conversion-queue.json'), state),
   getConfig: () => conversionConfig.get(),
   getEligibleFiles: eligibleContainerFiles,
   getFileSize: file => { try { return fs.statSync(file).size; } catch { return 0; } },
@@ -2598,30 +2658,30 @@ app.get('/api/conversion/status', requireAdminSession, async (_req, res) => {
   catch { res.json({ ok: true, ...status, storage: { warnings: [], current: null, unavailable: true } }); }
 });
 
-app.post('/api/conversion/start', requireAdminSession, (req, res) => {
+app.post('/api/conversion/start', requireAdminSession, ensureLibrary, async (req, res) => {
   const all = req.body?.all;
   if (Object.prototype.hasOwnProperty.call(req.body || {}, 'all') && typeof all !== 'boolean') {
     return res.status(400).json({ ok: false, error: 'all must be a boolean' });
   }
-  const r = conversionQueue.start({ all: all === true });
+  const r = await conversionQueue.start({ all: all === true });
   if (!r.ok) return res.status(409).json({ ok: false, error: r.error });
   res.json({ ok: true, ...r, ...conversionQueue.snapshot() });
 });
 
-app.post('/api/conversion/pause', requireAdminSession, (_req, res) => {
-  const r = conversionQueue.pause();
+app.post('/api/conversion/pause', requireAdminSession, async (_req, res) => {
+  const r = await conversionQueue.pause();
   if (!r.ok) return res.status(409).json({ ok: false, error: r.error });
   res.json({ ok: true, ...conversionQueue.snapshot() });
 });
 
-app.post('/api/conversion/resume', requireAdminSession, (_req, res) => {
-  const r = conversionQueue.resume();
+app.post('/api/conversion/resume', requireAdminSession, ensureLibrary, async (_req, res) => {
+  const r = await conversionQueue.resume();
   if (!r.ok) return res.status(409).json({ ok: false, error: r.error });
   res.json({ ok: true, ...conversionQueue.snapshot() });
 });
 
-app.post('/api/conversion/stop', requireAdminSession, (_req, res) => {
-  const r = conversionQueue.stop();
+app.post('/api/conversion/stop', requireAdminSession, async (_req, res) => {
+  const r = await conversionQueue.stop();
   if (!r.ok) return res.status(409).json({ ok: false, error: r.error });
   res.json({ ok: true, ...r, ...conversionQueue.snapshot() });
 });
@@ -2668,7 +2728,7 @@ app.get('/api/conversion/originals', requireAdminSession, async (_req, res) => {
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
-app.post('/api/conversion/restore', requireAdminSession, (req, res) => {
+app.post('/api/conversion/restore', requireAdminSession, async (req, res) => {
   if (conversionQueue.status !== 'idle') return res.status(409).json({ok:false,error:'Stop conversion before restoring originals'});
   const retainedPath = String(req.body?.retainedPath || '');
   // Must sit inside a configured library folder AND inside a retention dir —
@@ -2680,7 +2740,7 @@ app.post('/api/conversion/restore', requireAdminSession, (req, res) => {
   if (!inLibrary || !resolved.includes(`${path.sep}.converted-originals${path.sep}`)) {
     return res.status(400).json({ ok: false, error: 'Path is not a retained original inside a library folder' });
   }
-  const result = conversionWorker.restoreOriginal(resolved);
+  const result = await conversionWorker.restoreOriginal(resolved);
   if (!result.ok) return res.status(409).json({ ok: false, error: result.reason });
   console.log(`[conversion] Restored ${path.basename(resolved)}`);
   invalidateLibrary('conversion-restore');
@@ -3422,11 +3482,22 @@ const { setup: setupWatchers } = require('./lib/file-watchers')({
 // Node hop. Hashed assets can cache; the shell (index.html) always
 // revalidates so deploys take effect on a normal refresh.
 const V2_DIST = process.env.V2_DIST || path.join(__dirname, 'v2', 'frontend', 'dist');
+app.get('/api/version', requireAuth, async (_req,res) => {
+  res.set('Cache-Control','private, no-store');
+  try {
+    const html = await fs.promises.readFile(path.join(V2_DIST,'index.html'),'utf8');
+    const assets = [...html.matchAll(/(?:src|href)=["']\/assets\/(index-[^"']+\.(?:js|css))["']/g)].map(match=>match[1]);
+    if (!assets.some(asset=>asset.endsWith('.js'))) return res.status(503).json({error:'Build version unavailable'});
+    res.json({version:[...new Set(assets)].sort().join('|')});
+  } catch { res.status(503).json({error:'Build version unavailable'}); }
+});
 app.get('/hls.min.js', (_req, res) => {
   res.set('Cache-Control', 'public, max-age=86400'); // vendored, rarely changes
   res.sendFile(path.join(__dirname, 'hls.min.js'));
 });
-app.use(express.static(V2_DIST, { index: false, maxAge: '1h' }));
+app.use(express.static(V2_DIST, { index: false, maxAge: '1h', setHeaders: (res,file) => {
+  if (path.basename(file) === 'index.html') res.setHeader('Cache-Control','no-cache');
+} }));
 function sendSpa(_req, res) {
   res.set('Cache-Control', 'no-cache');
   // Security headers for the app shell (same set the retired proxy sent).
@@ -3465,37 +3536,38 @@ function getLocalIP() {
 }
 
 // ── Scan endpoint ───────────────────────────────────────────────────────
-let scanRunning = false;
-app.post('/api/scan', requirePermission('canScan'), async (_req, res) => {
-  if (scanRunning) return res.json({ ok: false, message: 'Scan already in progress' });
-  scanRunning = true;
-  res.json({ ok: true, message: 'Scan started' });
-  try {
-    // Clean stale probe cache entries
+const libraryRefresh = require('./lib/library-refresh')({
+  scan: async () => {
+    // A watcher scan already in flight may predate this requested refresh.
+    if (rescanPromise) { try { await rescanPromise; } catch {} }
     const library = await rescanLibraryAsync('manual-scan');
-    const currentPaths = new Set(library.map(i => fileIndex[i.id]));
+    const currentPaths = new Set(library.map(item => fileIndex[item.id]));
     let stale = 0;
-    for (const key of Object.keys(probeCache)) { if (!currentPaths.has(key)) { delete probeCache[key]; stale++; } }
-    for (const key of Object.keys(subProbeCache)) { if (!currentPaths.has(key)) { delete subProbeCache[key]; stale++; } }
-    if (stale > 0) { markDirty(); saveMediaInfo(); }
-    console.log(`  [scan] Library refreshed: ${library.length} files (cleaned ${stale} stale cache entries)`);
-    // Background probe new files
-    await backgroundProbe();
-    // Background OMDB fetch
-    await backgroundOmdbFetch(library.filter(item => item.mediaKind !== 'audio' && !isAudioFile(item._filePath))
-      .map(item => ({ ...item, type: item.mediaKind || item.type })));
-    // Background intro detection for shows with >= 2 episodes and no segments yet
-    if (process.env.AUTO_DETECT_INTROS !== '0') await backgroundDetectIntros(library
-      .filter(item => item.mediaKind !== 'audio' && !isAudioFile(item._filePath))
-      .map(item => ({ ...item, type: item.mediaKind || item.type })));
-    // Re-scan to pick up new metadata
+    for (const key of Object.keys(probeCache)) if (!currentPaths.has(key)) {delete probeCache[key];stale++;}
+    for (const key of Object.keys(subProbeCache)) if (!currentPaths.has(key)) {delete subProbeCache[key];stale++;}
+    if (stale) {markDirty();saveMediaInfo();}
+    return library;
+  },
+  enrich: async (library,phase) => {
+    phase('Checking media'); await backgroundProbe();
+    const video = library.filter(item => item.mediaKind !== 'audio' && !isAudioFile(item._filePath))
+      .map(item => ({...item,type:item.mediaKind || item.type}));
+    phase('Updating details'); await backgroundOmdbFetch(video);
     await rescanLibraryAsync('post-probe');
-    // Metadata may have changed even when file ids didn't, so always poke.
     notifyClients('library-updated');
-    console.log('  [scan] Complete');
-  } catch (err) { console.error('  [scan] Error:', err.message); }
-  scanRunning = false;
+    if (process.env.AUTO_DETECT_INTROS !== '0') {
+      phase('Finding intros when playback is idle'); await backgroundDetectIntros(video);
+    }
+  },
+  onError: error => console.error('[scan]',error.message),
 });
+app.post('/api/scan',requirePermission('canScan'),(_req,res)=>res.json(libraryRefresh.request()));
+app.get('/api/scan/status',requirePermission('canScan'),(_req,res)=>{
+  res.set('Cache-Control','private, no-store');res.json(libraryRefresh.status());
+});
+// Only duplicate metadata-refresh requests share this lock. They never block
+// inventory refresh or prevent newly imported files from appearing.
+let scanRunning = false;
 
 app.post('/api/metadata/refresh-missing', requirePermission('canScan'), async (req, res) => {
   if (scanRunning) return res.status(409).json({ ok: false, message: 'Scan already in progress' });
@@ -3641,6 +3713,16 @@ app.delete('/api/organizer/aliases/:id', requireAdminSession, (req, res) => {
 // Successful imports can leave advertising or other companion files behind.
 const ORGANIZER_SOURCE_DIR = process.env.ORGANIZER_SOURCE_DIR || '/mnt/media/Share';
 const normName = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+const organizerRetry = require('./lib/organizer-retry')({
+  sourceDir: ORGANIZER_SOURCE_DIR,
+  spoolDir: process.env.ORGANIZER_RETRY_DIR || path.join(DATA_DIR,'organizer-retries'),
+  getReviewQueue: () => organizerTools.parseOrganizerFixQueue(readOrganizerLogLines(),getOrganizerAliases()),
+});
+app.post('/api/organizer/retry',requireAdminSession,async(req,res)=>{
+  try { res.json(await organizerRetry.enqueue(req.body?.id)); }
+  catch(error) { res.status(error.status || 503).json({ok:false,error:error.status ? error.message : 'Could not queue retry'}); }
+});
+
 
 app.get('/api/organizer/fix-queue', requireAdminSession, async (_req, res) => {
   const aliases = getOrganizerAliases();
@@ -3687,7 +3769,7 @@ app.get('/api/organizer/fix-queue', requireAdminSession, async (_req, res) => {
   });
   const active = queue.filter(entry => entry.stillPresent && !entry.resolved);
   const history = queue.filter(entry => !entry.stillPresent || entry.resolved).slice(0, 100);
-  res.json({ ok: true, queue: [...active, ...history], aliases, leftovers, importedLeftovers });
+  res.json({ ok: true, queue: [...active, ...history], aliases, leftovers, importedLeftovers, retries: await organizerRetry.snapshot() });
 });
 
 // ── Episode index: missing-episode report + new-episode tracker ─────────

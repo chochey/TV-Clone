@@ -25,6 +25,14 @@
   let fixBusy = $state({});       // entryId -> saving flag
   let fixDone = $state({});       // entryId -> 'retrying' message
   let fixError = $state({});
+  let fixRetryIds = $state({});
+  const retryPending = (id) => {
+    const requestId = fixRetryIds[id];
+    if (!requestId) return false;
+    const receipt = (fq?.retries || []).find((retry) => retry.requestId === requestId);
+    return !receipt || receipt.status === 'queued' || receipt.status === 'claimed';
+  };
+  const pendingRetry = $derived(Object.keys(fixRetryIds).some(retryPending));
   const hot = $derived((fq?.queue || []).filter((e) => e.stillPresent && !e.resolved));
   const history = $derived((fq?.queue || []).filter((e) => !e.stillPresent || e.resolved));
   const duplicateReview = (entry) => entry.manualReview && /^Movie already exists at /i.test(entry.reason || '');
@@ -34,32 +42,67 @@
       if (!(e.id in fixTo)) fixTo[e.id] = e.suggestedAlias || e.title;
     }
     fq = d;
+    for (const [id, requestId] of Object.entries(fixRetryIds)) {
+      const receipt = (d?.retries || []).find((retry) => retry.requestId === requestId);
+      if (receipt?.status === 'attempted') {
+        fixDone[id] = 'Retry attempted — review status refreshed.';
+        delete fixRetryIds[id];
+      }
+      else if (receipt?.status === 'rejected') {
+        fixDone[id] = '';
+        fixError[id] = 'The source changed or is no longer available. Refresh the review queue before retrying.';
+        delete fixRetryIds[id];
+      }
+    }
   }
   async function loadFixQueue() {
     try { const d = await api.organizerFixQueue(); if (!closed) applyFixQueue(d); }
     catch (e) { if (!closed) actionError = e.body?.error || 'Could not refresh the review queue.'; }
   }
 
-  // Save the alias, then bounce the organizer so it re-scans Share with it.
+  async function queueRetry(entry) {
+    if (closed) return;
+    const result = await api.organizerRetry(entry.id);
+    if (!result?.ok || !result?.requestId) throw new Error('The retry was not queued. Please try again.');
+    if (closed) return;
+    fixRetryIds[entry.id] = result.requestId;
+    fixDone[entry.id] = 'Retry queued — organizer will retry after the current import.';
+    await loadFixQueue();
+    loop.schedule();
+  }
+
+  // Persist the correction first; retry only this release at a safe boundary.
   async function saveFix(entry) {
     const to = (fixTo[entry.id] || '').trim();
-    if (!to || fixBusy[entry.id]) return;
+    if (!to || fixBusy[entry.id] || retryPending(entry.id)) return;
     fixError[entry.id] = '';
     fixBusy[entry.id] = true;
+    let aliasSaved = false;
     try {
       await api.organizerAliasSave({
         from: entry.title,
         to,
         type: entry.type === 'show' ? 'series' : 'movie',
       });
-      await api.organizerRestart();
-      fixDone[entry.id] = 'Alias saved — organizer is retrying…';
-      later(async () => { await loadFixQueue(); if (!closed) fixDone[entry.id] = ''; }, 8000);
+      aliasSaved = true;
+      if (closed) return;
+      await queueRetry(entry);
     } catch (e) {
-      fixError[entry.id] = e.body?.error || 'Failed to save alias. Please try again.';
+      if (!closed) fixError[entry.id] = e.body?.error || (aliasSaved
+        ? 'Alias saved, but the retry could not be queued. Please try again.'
+        : 'Failed to save alias. Please try again.');
     } finally {
-      fixBusy[entry.id] = false;
+      if (!closed) fixBusy[entry.id] = false;
     }
+  }
+
+  async function retryFix(entry) {
+    if (fixBusy[entry.id] || retryPending(entry.id)) return;
+    fixBusy[entry.id] = true;
+    fixError[entry.id] = '';
+    try { await queueRetry(entry); }
+    catch (e) { if (!closed) fixError[entry.id] = e.body?.error || 'Could not queue this release. Please try again.'; }
+    finally { if (!closed) fixBusy[entry.id] = false; }
   }
 
   async function removeAlias(id) {
@@ -90,7 +133,7 @@
       if (!data && failures.includes('logs')) data = { ok: false };
     },
     onError: () => { refreshError = 'Organizer could not refresh. Try again.'; },
-    interval: () => live ? 4000 : 0,
+    interval: () => live || pendingRetry ? 4000 : 0,
   });
   const refresh = () => loop.refresh();
   onDestroy(() => { closed = true; loop.stop(); for (const timer of delayed) clearTimeout(timer); });
@@ -101,7 +144,7 @@
     firstRefresh = false;
     return () => clearTimeout(timer);
   });
-  $effect(() => { live; loop.schedule(); });
+  $effect(() => { live; pendingRetry; loop.schedule(); });
 
   async function restartOrganizer() {
     restarting = true; actionError = '';
@@ -172,11 +215,15 @@
             <span class="rmeta">{duplicateReview(e) ? 'Already in library; new download kept for comparison' : e.reason} · tried {e.count}× · {ago(e.lastSeen)}</span>
           </div>
           {#if fixDone[e.id]}
-            <p class="rdone">{fixDone[e.id]}</p>
-          {:else if duplicateReview(e)}
+            <p class="rdone" role="status">{fixDone[e.id]}</p>
+          {/if}
+          {#if duplicateReview(e)}
             <p class="rmeta">Compare the new download with your library copy before deciding which one to keep.</p>
           {:else if e.manualReview}
-            <p class="rmeta">Files have been kept in Share. Check the file names and any existing copy, then use Restart organizer to retry after correcting them.</p>
+            <p class="rmeta">Files have been kept in Share. Check the file names and any existing copy, then retry this release after correcting them.</p>
+            <button class="rsave" onclick={() => retryFix(e)} disabled={fixBusy[e.id] || retryPending(e.id)}>
+              {fixBusy[e.id] ? 'Queuing…' : retryPending(e.id) ? 'Retry queued' : 'Retry this release'}
+            </button>
           {:else}
             <div class="rfix">
               <input
@@ -184,12 +231,12 @@
                 bind:value={fixTo[e.id]}
                 onkeydown={(ev) => ev.key === 'Enter' && saveFix(e)}
               />
-              <button class="rsave" onclick={() => saveFix(e)} disabled={fixBusy[e.id] || !(fixTo[e.id] || '').trim()}>
-                {fixBusy[e.id] ? 'Saving…' : 'Fix & retry'}
+              <button class="rsave" onclick={() => saveFix(e)} disabled={fixBusy[e.id] || retryPending(e.id) || !(fixTo[e.id] || '').trim()}>
+                {fixBusy[e.id] ? 'Saving…' : retryPending(e.id) ? 'Retry queued' : 'Fix & retry'}
               </button>
-              {#if fixError[e.id]}<p class="err" role="alert">{fixError[e.id]}</p>{/if}
             </div>
           {/if}
+          {#if fixError[e.id]}<p class="err" role="alert">{fixError[e.id]}</p>{/if}
         </div>
       {/each}
 
