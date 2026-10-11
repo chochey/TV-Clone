@@ -634,11 +634,11 @@
   .nav-status, .nav-retry { color: var(--ink-soft); font-size: .8rem; padding: 8px 0; }
   .nav-retry { text-decoration: underline; }
 
-  /* Keep search readable without stretching across a wide desktop header. */
+  /* Let search use the space between library navigation and account controls. */
   .searchbox {
     position: relative;
-    flex: 0 1 360px; width: 360px; min-width: 200px; max-width: 360px;
-    margin: 0 var(--s4) 0 auto;
+    flex: 1 1 200px; width: auto; min-width: 200px;
+    margin: 0 var(--s4) 0 0;
     display: flex; align-items: center; gap: 8px;
     background: rgba(242, 242, 244, 0.08);
     box-shadow: inset 0 0 0 1px var(--line);
@@ -668,8 +668,8 @@
 
   /* Live-results dropdown — matches appear here as you type, no page jump. */
   .search-drop {
-    position: absolute; top: calc(100% + 8px); right: 0;
-    width: min(440px, calc(100vw - 32px)); max-height: min(70vh, 560px); overflow-y: auto;
+    position: absolute; top: calc(100% + 8px); left: 0;
+    width: 100%; max-height: min(70vh, 560px); overflow-y: auto;
     background: rgba(17, 17, 22, 0.98); backdrop-filter: blur(16px);
     border-radius: var(--r-md); padding: var(--s2);
     box-shadow: 0 18px 50px rgba(0, 0, 0, 0.6), 0 0 0 1px var(--line-strong);
@@ -819,7 +819,7 @@
   @media (max-width: 900px) {
     .brand { letter-spacing: 0.2em; font-size: 0.92rem; }
     nav { gap: var(--s3); margin: 0 var(--s3); }
-    .searchbox { flex-basis: 240px; min-width: 160px; margin: 0 var(--s3) 0 auto; }
+    .searchbox { min-width: 160px; margin: 0 var(--s3) 0 0; }
   }
   /* Narrow screens use a bottom bar so library access and search stay
      visible without squeezing the account controls off the screen. */
