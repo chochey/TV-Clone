@@ -16,6 +16,32 @@
   let statusReady = $state(false);
   let poll = null, statusLoading = false, closed = false;
 
+  let review = $state(null);
+  let reviewError = $state('');
+  let reviewBusy = $state(false);
+  let reviewNote = $state('');
+  let reviewWarning = $state('');
+  let reviewLimit = $state(20);
+  let reviewQuery = $state('');
+  let repair = $state(null);
+  let repairStatusReady = $state(false);
+  let repairError = $state('');
+  let applyConfirm = $state('');
+  let previewOpen = $state(false);
+  let selectedRepairId = $state('');
+  let reviewLoading = false, repairLoading = false, reviewPages = 1;
+  const repairActive = $derived(!!repair?.busy || ['running', 'stopping', 'applying'].includes(repair?.status));
+  const repairView = $derived(repairActive ? repair : (repair?.entries || []).find(item => item.reviewId === selectedRepairId) || repair);
+  const reviewMatches = $derived((review?.entries || []).filter(item => !reviewQuery.trim()
+    || `${item.name} ${item.summary}`.toLowerCase().includes(reviewQuery.trim().toLowerCase())));
+  const canReviewAct = $derived(statusReady && repairStatusReady && queue?.status === 'idle'
+    && data?.config?.enabled && !repairActive && !reviewBusy && !queueBusy && !saving && !reviewError);
+  const repairPercent = $derived(Number.isFinite(repairView?.progress?.percent)
+    ? Math.max(0, Math.min(100, Math.round(repairView.progress.percent)))
+    : repairView?.progress?.duration > 0 ? Math.max(0, Math.min(100, Math.round(100 * repairView.progress.seconds / repairView.progress.duration)))
+    : Number.isFinite(repairView?.progress) ? Math.max(0, Math.min(100, Math.round(repairView.progress))) : null);
+  $effect(() => { if (!canReviewAct || repairView?.reviewId !== applyConfirm || !repairView?.candidate?.verified) applyConfirm = ''; });
+
   let cleanupPreview = $state(null);
   let cleanupBusy = $state(false);
   let cleanupMode = $state('expired');
@@ -31,7 +57,7 @@
     ['container', 'container remux'], ['audio', 'compatible audio'],
     ['legacy', 'legacy codecs'], ['video', 'HEVC, AV1 and 10-bit H.264'],
   ].filter(([key]) => data?.config?.tiers?.[key]).map(([, label]) => label));
-  const canStart = $derived(statusReady && queue?.status === 'idle' && data?.config?.enabled && candidateCount > 0 && !saving && !queueBusy && !error);
+  const canStart = $derived(statusReady && queue?.status === 'idle' && data?.config?.enabled && candidateCount > 0 && !saving && !queueBusy && !error && repairStatusReady && !repairActive && !reviewBusy);
   $effect(() => { if (!canStart) startConfirm = null; });
 
   async function loadStatus() {
@@ -44,7 +70,7 @@
       const finished = queue && queue.status !== 'idle' && next.status === 'idle';
       queue = next;
       statusReady = true; statusError = '';
-      if (finished) { refresh(); loadOriginals(); }
+      if (finished) { refresh(); loadOriginals(); loadReview(); }
     } catch (e) {
       if (!closed) { statusReady = false; statusError = e.body?.error || e.message || 'Failed to read queue status'; }
     }
@@ -54,8 +80,8 @@
   // Poll only while something is happening. A finished queue does not need a
   // request every two seconds for the rest of the session.
   function syncPolling() {
-    const shouldPoll = ['running', 'paused', 'stopping'].includes(queue?.status);
-    if (shouldPoll && !poll) poll = setInterval(loadStatus, 2000);
+    const shouldPoll = ['running', 'paused', 'stopping'].includes(queue?.status) || repairActive || reviewBusy;
+    if (shouldPoll && !poll) poll = setInterval(() => { loadStatus(); loadReview(); loadRepairStatus(); }, 2000);
     if (!shouldPoll && poll) { clearInterval(poll); poll = null; }
   }
   $effect(syncPolling);
@@ -66,13 +92,100 @@
     queueBusy = true; queueError = '';
     try {
       queue = await fn();
-      await Promise.all([refresh(), loadOriginals()]);
+      await Promise.all([refresh(), loadOriginals(), loadReview()]);
     } catch (e) {
       queueError = e.body?.error || 'Action failed';
     } finally {
       queueBusy = false;
       loadStatus();
     }
+  }
+
+  async function loadReview(offset = 0) {
+    if (reviewLoading || closed) return;
+    reviewLoading = true;
+    offset = typeof offset === 'number' ? offset : 0;
+    try {
+      const next = await api.conversionReview(offset);
+      if (offset === 0 && reviewPages > 1) {
+        for (let page = 1; page < reviewPages && next.entries?.length < next.total; page++) {
+          const extra = await api.conversionReview(next.entries.length);
+          if (!Array.isArray(extra?.entries) || !extra.entries.length) break;
+          next.entries.push(...extra.entries);
+        }
+      }
+      if (!Array.isArray(next?.entries)) throw new Error('Could not read the files needing review.');
+      next.entries = [...new Map(next.entries.map(item => [item.id, item])).values()];
+      if (!closed) {
+        review = offset > 0 ? { ...next, entries: [...(review?.entries || []), ...next.entries.filter(item => !review?.entries?.some(old => old.id === item.id))] } : next;
+        reviewPages = Math.max(1, Math.ceil(review.entries.length / 100));
+        reviewError = '';
+      }
+    } catch (e) {
+      if (!closed) reviewError = e.body?.error || e.message || 'Could not load files needing review.';
+    } finally { reviewLoading = false; }
+  }
+
+  async function loadRepairStatus() {
+    if (repairLoading || closed) return;
+    repairLoading = true;
+    try {
+      const next = await api.conversionRepairStatus();
+      if (!['idle', 'running', 'stopping', 'applying', 'ready', 'failed', 'cancelled', 'installed', 'interrupted'].includes(next?.status)) throw new Error('Could not read repair status.');
+      if (closed) return;
+      if (!selectedRepairId && (repair?.reviewId !== next.reviewId || !next.candidate)) { previewOpen = false; applyConfirm = ''; }
+      repair = next; repairStatusReady = true; repairError = '';
+    } catch (e) {
+      if (!closed) { repairStatusReady = false; repairError = e.body?.error || e.message || 'Could not read repair status.'; }
+    } finally { repairLoading = false; }
+  }
+
+  async function retryReview(item) {
+    if (!canReviewAct) return;
+    reviewBusy = true; reviewNote = ''; reviewWarning = ''; reviewError = ''; applyConfirm = ''; previewOpen = false;
+    try {
+      queue = await api.conversionRetryReview(item.id);
+      reviewNote = `Retrying ${item.name}. Only this file is queued.`;
+      await Promise.all([loadStatus(), loadReview(), refresh()]);
+    } catch (e) { reviewError = e.body?.error || e.message || 'The file could not be retried.'; }
+    finally { reviewBusy = false; }
+  }
+
+  async function startRepair(item) {
+    if (!canReviewAct) return;
+    reviewBusy = true; reviewNote = ''; reviewWarning = ''; repairError = ''; applyConfirm = ''; previewOpen = false; selectedRepairId = '';
+    try {
+      await api.conversionRepairStart(item.id);
+      await loadRepairStatus();
+    } catch (e) { repairError = e.body?.error || e.message || 'The repair copy could not be started.'; }
+    finally { reviewBusy = false; }
+  }
+
+  async function stopRepair() {
+    if (!repairActive || reviewBusy) return;
+    reviewBusy = true; repairError = ''; applyConfirm = ''; previewOpen = false;
+    try { await api.conversionRepairStop(); await loadRepairStatus(); }
+    catch (e) { repairError = e.body?.error || e.message || 'The repair could not be stopped.'; }
+    finally { reviewBusy = false; }
+  }
+
+  async function applyRepair() {
+    if (!canReviewAct || !repairView?.candidate?.verified || applyConfirm !== repairView.reviewId) return;
+    const id = applyConfirm;
+    reviewBusy = true; repairError = ''; reviewNote = ''; reviewWarning = ''; applyConfirm = ''; previewOpen = false;
+    try {
+      const result = await api.conversionRepairApply(id);
+      selectedRepairId = '';
+      reviewWarning = result?.cleanupWarning || '';
+      reviewNote = reviewWarning ? '' : 'Verified copy added to your library. The original is saved below for recovery.';
+      await Promise.all([loadRepairStatus(), loadReview(), refresh(), loadOriginals(), loadStatus()]);
+    } catch (e) { repairError = e.body?.error || e.message || 'The verified copy could not be added. The original was kept.'; }
+    finally { reviewBusy = false; }
+  }
+
+  function formatReviewTime(value) {
+    const date = new Date(value);
+    return Number.isFinite(date.getTime()) ? date.toLocaleString() : 'Unknown';
   }
 
   function prepareStart(scope) {
@@ -140,7 +253,7 @@
     }
   }
 
-  onMount(() => { refresh(); loadOriginals(); loadStatus(); });
+  onMount(() => { refresh(); loadOriginals(); loadStatus(); loadReview(); loadRepairStatus(); });
   onDestroy(() => { closed = true; if (poll) clearInterval(poll); });
 
   function fmtBytes(b) {
@@ -214,7 +327,7 @@
         Other selected SDR video is re-encoded at its original resolution. Re-encoding can increase file size and changes picture quality.</p>
       <p>Extra audio languages and surround tracks are retained where MP4 supports them; otherwise they are converted to AAC.
         Text subtitles become separate subtitle files. HDR, Dolby Vision and image subtitles are left for review.</p>
-      <button class="qbtn" disabled={saving || isActive} onclick={() => saveConfig({tiers:{container:true,audio:true,legacy:true,video:true},cpuCores:2,videoCrf:20,niceness:19,pauseWhilePlaying:true})}>Use recommended settings</button>
+      <button class="qbtn" disabled={saving || isActive || repairActive} onclick={() => saveConfig({tiers:{container:true,audio:true,legacy:true,video:true},cpuCores:2,videoCrf:20,niceness:19,pauseWhilePlaying:true})}>Use recommended settings</button>
       <p class="hint">This saves settings only. Enable conversion and choose Convert all or Convert batch when you are ready.</p>
     </section>
 
@@ -352,7 +465,7 @@
         </label>
         <label class="field">
           <span>Picture quality</span>
-          <select value={data.config.videoCrf} disabled={saving || isActive} onchange={(e) => commitNumber('videoCrf', e.currentTarget.value)}>
+          <select value={data.config.videoCrf} disabled={saving || isActive || repairActive} onchange={(e) => commitNumber('videoCrf', e.currentTarget.value)}>
             <option value="18">Higher quality · larger files</option><option value="20">Balanced · recommended</option><option value="23">Smaller files</option>
           </select>
         </label>
@@ -368,7 +481,7 @@
         </label>
         <label class="field">
           <span>After conversion</span>
-          <select value={data.config.retainOriginals === false ? 'delete' : 'keep'} disabled={saving || isActive}
+          <select value={data.config.retainOriginals === false ? 'delete' : 'keep'} disabled={saving || isActive || repairActive}
                   onchange={(e) => saveConfig({retainOriginals:e.currentTarget.value === 'keep'})}>
             <option value="delete">Delete old file after verification</option>
             <option value="keep">Keep old file for recovery</option>
@@ -429,10 +542,11 @@
       <p class="hint">
         <strong>Convert all</strong> queues every currently eligible file in your selected categories with no file-count batch limit.
         Selected categories: {selectedCategories.length ? selectedCategories.join('; ') : 'none'}.
-        Already compatible files are skipped; HDR, Dolby Vision, image subtitles and other safety exclusions remain.
+        Already compatible files and unchanged files in Needs review are skipped; HDR, Dolby Vision, image subtitles and other safety exclusions remain.
         Your CPU allocation, schedule, pause-while-watching setting, free-space limits and retention settings still apply.
       </p>
-      {#if isActive}<p class="hint">Run scope: <strong>{queue.scope === 'all' ? 'Convert all — all eligible selected files' : 'Limited batch'}</strong>.</p>{/if}
+      {#if isActive}<p class="hint">Run scope: <strong>{queue.scope === 'all' ? 'Convert all — all eligible selected files' : queue.scope === 'retry' ? 'Retry one reviewed file' : 'Limited batch'}</strong>.</p>{/if}
+      {#if queue?.reviewSuppressed}<p class="hint">{queue.reviewSuppressed} unchanged problem file{queue.reviewSuppressed === 1 ? '' : 's'} skipped. See Needs review below.</p>{/if}
 
       {#if queueError}<p class="danger">{queueError}</p>{/if}
       {#if queue?.lastError && queue.lastError !== queueError}<p class="danger" role="alert">{queue.lastError}</p>{/if}
@@ -497,7 +611,7 @@
       {#if startConfirm && canStart}
         {@const all = startConfirm === 'all'}
         <div class="card startconfirm" role="region" aria-label="Confirm conversion">
-          <p>Start {all ? 'Convert all' : 'a limited batch'} for <strong>{(all ? candidateCount : batchCount).toLocaleString()} eligible file{(all ? candidateCount : batchCount) === 1 ? '' : 's'}</strong>
+          <p>Start {all ? 'Convert all' : 'a limited batch'} for up to <strong>{(all ? candidateCount : batchCount).toLocaleString()} eligible file{(all ? candidateCount : batchCount) === 1 ? '' : 's'}</strong>
             in the selected categories?</p>
           <p class="hint">{all ? 'No file-count batch limit.' : `This batch is limited to ${data.config.maxFilesPerRun} files.`}
             CPU, schedule, playback pauses and storage safeguards still apply.
@@ -546,6 +660,86 @@
       {/if}
     </section>
 
+    <section class="card review-section" aria-labelledby="review-heading">
+      <div class="row spread">
+        <h2 id="review-heading">Needs review</h2>
+        {#if review}<span class="review-count">{review.total ?? review.entries.length} file{(review.total ?? review.entries.length) === 1 ? '' : 's'}</span>{/if}
+      </div>
+      <p class="review-intro">These files are held out of future conversion runs while they remain unchanged. A corrected source file becomes eligible again automatically. Retry one deliberately, or make a separate repair copy to check first.</p>
+      <p class="hint">Repair copies keep the original untouched. A damaged or incomplete source may need a fresh copy; repair cannot recover missing content.</p>
+      {#if reviewError}<p class="danger" role="alert">{reviewError} <button class="qbtn" onclick={loadReview} disabled={reviewBusy}>Reload review list</button></p>{/if}
+      {#if repairError}<p class="danger" role="alert">{repairError} <button class="qbtn" onclick={loadRepairStatus} disabled={reviewBusy}>Refresh repair status</button></p>{/if}
+      {#if reviewNote}<p class="ok" role="status">{reviewNote}</p>{/if}
+      {#if reviewWarning}<p class="warn" role="alert">{reviewWarning}</p>{/if}
+      {#if !repairStatusReady && !repairError}<p class="hint">Checking repair status…</p>{/if}
+      {#if isActive}<p class="warn">Stop the conversion queue above before retrying a file or creating a repair copy. Pausing keeps its current job open.</p>
+      {:else if !data.config.enabled}<p class="hint">Enable conversion above to use retry and repair controls.</p>{/if}
+
+      {#if repairView && repairView.status !== 'idle'}
+        <div class="repair-panel" aria-label="Repair copy">
+          <div class="row spread"><h3>{repairView.status === 'ready' ? 'Repair copy ready to check' : repairView.status === 'installed' ? 'Verified copy added' : repairView.status === 'interrupted' ? 'Repair interrupted' : repairView.status === 'applying' ? 'Adding verified copy' : repairActive ? 'Creating repair copy' : repairView.status === 'cancelled' ? 'Repair cancelled' : 'Repair needs attention'}</h3><span class="qstatus">{repairView.status}</span></div>
+          <p class="review-name">{repairView.name}</p>
+          {#if repairActive}
+            <p class="hint" role="status">{repairView.stage || repairView.progress?.stage || 'Preparing a separate copy…'}{repairPercent !== null ? ` · ${repairPercent}%` : ''}</p>
+            {#if repairPercent !== null}<div class="progbar" role="progressbar" aria-label="Repair progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow={repairPercent}><span style="width:{repairPercent}%"></span></div>{/if}
+            <button class="qbtn stop" onclick={stopRepair} disabled={reviewBusy || repairView.status === 'applying' || repairView.status === 'stopping'}>{repairView.status === 'stopping' ? 'Cancelling…' : 'Cancel repair'}</button>
+          {/if}
+          {#if repairView.error}<p class="danger" role="alert">{repairView.error}</p>{/if}
+          {#if repairView.warnings?.length}<details class="review-details"><summary>Repair details</summary><pre>{Array.isArray(repairView.warnings) ? repairView.warnings.join('\n') : repairView.warnings}</pre></details>{/if}
+          {#if repairView.status === 'cancelled'}<p class="hint">Your original is unchanged. No replacement was added to your library.</p>{/if}
+          {#if repairView.status === 'failed'}<p class="hint">The original has been kept. Check the error above before trying again.</p>{/if}
+          {#if repairView.status === 'interrupted'}<p class="hint">This repair stopped before completion. The original was kept. Create a new repair copy when you are ready; nothing restarts automatically.</p>{/if}
+          {#if repairView.status === 'installed'}<p class="hint">The verified copy is in your library and the original is retained for recovery.</p>{/if}
+          {#if repairView.candidate?.verified && repairView.status === 'ready'}
+            <p class="ok">Technical checks passed. Preview the copy before choosing to use it.</p>
+            <p class="hint">Checks cannot guarantee that every damaged moment is restored. Choosing this copy always saves the original for recovery, even when normal conversion is set to delete old files.</p>
+            <div class="qcontrols">
+              {#if repairView.candidate.previewUrl}<button class="qbtn" onclick={() => { previewOpen = !previewOpen; }}>{previewOpen ? 'Close preview' : 'Preview repair copy'}</button>{/if}
+              <button class="qbtn go" disabled={!canReviewAct} onclick={() => { applyConfirm = repairView.reviewId; }}>Use verified copy…</button>
+            </div>
+            {#if previewOpen && repairView.candidate.previewUrl}
+              <!-- svelte-ignore a11y_media_has_caption (A repair preview uses the user's file; no caption track is available here.) -->
+              <video class="repair-preview" src={repairView.candidate.previewUrl} controls preload="metadata" aria-label="Preview repair copy"></video>{/if}
+            {#if applyConfirm === repairView.reviewId}
+              <div class="card startconfirm" role="region" aria-label="Confirm repair replacement">
+                <p>Use this verified copy of <strong>{repairView.name}</strong> in your library?</p>
+                <p class="hint">Your watch progress stays with the title. The original is saved in Retained originals so you can restore it. It will not be deleted by this action.</p>
+                <div class="qcontrols"><button class="qbtn go" disabled={!canReviewAct} onclick={applyRepair}>Confirm use of verified copy</button><button class="qbtn" disabled={reviewBusy} onclick={() => { applyConfirm = ''; }}>Cancel replacement</button></div>
+              </div>
+            {/if}
+          {/if}
+        </div>
+      {/if}
+
+      {#if !review && !reviewError}<p class="hint">Loading files needing review…</p>
+      {:else if review?.entries.length === 0}<p class="hint">No files are waiting for review.</p>
+      {:else if review?.entries.length}
+        {#if review.entries.length > 5}
+          <label class="review-search"><span>Find a file needing review</span><input type="search" placeholder="Search loaded names or issues" bind:value={reviewQuery} oninput={() => { reviewLimit = 20; }} /></label>
+        {/if}
+        <div class="review-list">
+          {#each reviewMatches.slice(0, reviewLimit) as item (item.id)}
+            <article class="review-item">
+              <h3 class="review-name">{item.name}</h3>
+              <p class="review-summary">{item.summary}</p>
+              <p class="hint">{item.attempts || 1} failed attempt{(item.attempts || 1) === 1 ? '' : 's'} · Last checked {formatReviewTime(item.lastFailedAt)}</p>
+              {#if item.details}<details class="review-details"><summary>Show error details</summary><pre>{typeof item.details === 'string' ? item.details : JSON.stringify(item.details, null, 2)}</pre></details>{/if}
+              <div class="qcontrols">
+                <button class="qbtn" disabled={!canReviewAct} onclick={() => retryReview(item)} aria-label={`Retry only ${item.name}`}>Retry this file</button>
+                <button class="qbtn go" disabled={!canReviewAct} onclick={() => startRepair(item)} aria-label={`Create repair copy for ${item.name}`}>Create repair copy</button>
+                {#if (repair?.entries || []).some(copy => copy.reviewId === item.id && copy.candidate?.verified && copy.status === 'ready')}
+                  <button class="qbtn" disabled={repairActive || reviewBusy} onclick={() => { selectedRepairId = item.id; previewOpen = false; applyConfirm = ''; }} aria-label={`Review saved repair copy for ${item.name}`}>Review saved repair copy</button>
+                {/if}
+              </div>
+            </article>
+          {/each}
+        </div>
+        {#if !reviewMatches.length}<p class="hint">No matching files.</p>{/if}
+        {#if reviewMatches.length > reviewLimit}<button class="qbtn" onclick={() => { reviewLimit += 20; }}>Show more ({reviewMatches.length - reviewLimit} loaded files remaining)</button>{/if}
+        {#if review.entries.length < review.total}<button class="qbtn" disabled={reviewBusy} onclick={() => loadReview(review.entries.length)}>Load more review files ({review.total - review.entries.length} remaining)</button>{/if}
+      {/if}
+    </section>
+
     <section class="card">
       <div class="row spread">
         <h2>Retained originals — the undo window</h2>
@@ -564,18 +758,18 @@
       {#if originalsError}<p class="danger">{originalsError}</p>{/if}
 
       <div class="cleanupbar">
-        <button class="qbtn" onclick={() => previewCleanup()} disabled={cleanupBusy || isActive}>
+        <button class="qbtn" onclick={() => previewCleanup()} disabled={cleanupBusy || isActive || repairActive || reviewBusy}>
           {cleanupBusy && !cleanupPreview ? 'Checking…' : 'Check for expired originals'}
         </button>
         <button class="qbtn danger" onclick={() => previewCleanup('all')}
-                disabled={cleanupBusy || isActive || !originals?.items.length}>Delete all originals…</button>
+                disabled={cleanupBusy || isActive || repairActive || reviewBusy || !originals?.items.length}>Delete all originals…</button>
       </div>
       {#if cleanupPreview}
         <div class="card" role="region" aria-label="Confirm original deletion">
           {#if cleanupPreview.candidates > 0}
             <p>Permanently delete {cleanupPreview.candidates} original file(s) and free {fmtBytes(cleanupPreview.bytes)}?</p>
             <p class="warn">This cannot be undone. Converted files stay in your library, but you will lose the option to restore these originals.</p>
-            <button class="qbtn danger" onclick={runCleanup} disabled={cleanupBusy || isActive}>Confirm permanent deletion</button>
+            <button class="qbtn danger" onclick={runCleanup} disabled={cleanupBusy || isActive || repairActive || reviewBusy}>Confirm permanent deletion</button>
           {:else}
             <p>No originals can be deleted for this selection.</p>
           {/if}
@@ -611,7 +805,7 @@
               {/if}
               {#if canRestore}
                 <button class="restorebtn" class:armed={restoreArmed === o.retainedPath}
-                        onclick={() => restore(o)} disabled={!!restoringPath || cleanupBusy || isActive}>
+                        onclick={() => restore(o)} disabled={!!restoringPath || cleanupBusy || isActive || repairActive || reviewBusy}>
                   {restoringPath === o.retainedPath ? 'Restoring…'
                     : restoreArmed === o.retainedPath ? 'Click again to restore' : 'Restore'}
                 </button>
@@ -620,7 +814,7 @@
               {/if}
               {#if replacementExists}
                 <button class="qbtn danger" onclick={() => previewCleanup('single', o.retainedPath)}
-                        disabled={cleanupBusy || !!restoringPath || isActive}>Delete original…</button>
+                        disabled={cleanupBusy || !!restoringPath || isActive || repairActive || reviewBusy}>Delete original…</button>
               {/if}
             </div>
           {/each}
@@ -647,6 +841,26 @@
 </div>
 
 <style>
+  .review-intro { font-size: .9rem; color: var(--ink-soft); line-height: 1.6; }
+  .review-count { color: #ffcb91; background: #ffb46b15; border-radius: 99px; padding: 4px 10px; font-size: .8rem; white-space: nowrap; }
+  .review-list { margin-top: var(--s3); }
+  .review-item { padding: var(--s3) 0; border-top: 1px solid var(--line); min-width: 0; }
+  .review-name { font-size: .9rem; font-weight: 700; overflow-wrap: anywhere; margin: 6px 0; }
+  .review-summary { font-size: .88rem; color: #ffcb91; line-height: 1.5; margin: 6px 0; }
+  .review-details { color: var(--ink-soft); font-size: .82rem; margin-top: var(--s2); }
+  .review-details summary { cursor: pointer; padding: 5px 0; }
+  .review-details pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: 12px; max-height: 200px; overflow-y: auto; background: #0003; border-radius: var(--r-sm); line-height: 1.5; }
+  .review-search { display: flex; flex-direction: column; gap: 8px; margin-top: var(--s3); color: var(--ink-soft); font-size: .85rem; }
+  .review-search input { width: 100%; box-sizing: border-box; color: var(--ink); background: #0003; border: 1px solid var(--line-strong); border-radius: var(--r-sm); padding: 10px 12px; }
+  .repair-panel { padding: var(--s3); margin: var(--s3) 0; background: #a78bfa0b; border: 1px solid #a78bfa45; border-radius: var(--r-sm); }
+  .repair-panel h3 { font-size: .94rem; }
+  .repair-panel > .qbtn { margin-top: var(--s3); }
+  .repair-panel .row { flex-wrap: wrap; }
+  .repair-preview { width: 100%; aspect-ratio: 16/9; background: #000; margin-top: var(--s3); border-radius: var(--r-sm); }
+  .review-section .qbtn { min-height: 42px; }
+  .review-section .hint { color: var(--ink-soft); }
+  @media (max-width: 540px) { .review-item .qcontrols > .qbtn { flex: 1 1 130px; } .repair-panel { padding: 12px; } }
+
   .page { padding: calc(64px + var(--s5)) var(--gutter) var(--s7); max-width: 900px; margin: 0 auto; }
   header { display: flex; align-items: baseline; gap: var(--s3); margin-bottom: var(--s5); flex-wrap: wrap; }
   h1 { font-size: clamp(1.8rem, 3.4vw, 2.6rem); }
@@ -662,7 +876,6 @@
   }
   .card.notice { background: rgba(126, 212, 145, 0.06); border-color: rgba(126, 212, 145, 0.25); }
   .card.notice p { font-size: 0.88rem; line-height: 1.5; color: var(--ink-soft); }
-  .card.notice strong { color: var(--ink); }
 
   .card.pilot { background: rgba(255, 180, 107, 0.05); border-color: rgba(255, 180, 107, 0.25); }
   .card.pilot code {

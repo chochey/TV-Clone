@@ -2620,7 +2620,11 @@ function eligibleContainerFiles(cfg) {
   return out;
 }
 
+const conversionReview = require('./lib/conversion-review')({
+  file: path.join(DATA_DIR, 'conversion-review.json'), save: saveJSONStrict,
+});
 const conversionQueue = require('./lib/conversion-queue')({
+  review: conversionReview,
   worker: conversionWorker,
   getMediaId: hashId,
   loadState: () => loadJSON(path.join(DATA_DIR, 'conversion-queue.json'), null),
@@ -2652,6 +2656,104 @@ const conversionQueue = require('./lib/conversion-queue')({
   log: (msg) => console.log(`[conversion] ${msg}`),
 });
 
+// Only current library files can be repaired; even an administrator cannot
+// submit a path. Resolve roots again at each boundary to reject symlink escapes.
+async function repairPathAllowed(file, {recovery = false} = {}) {
+  if (typeof file !== 'string' || !path.isAbsolute(file) || path.resolve(file) !== file || isAudioFile(file)) return false;
+  if (!recovery && !scanLibrary().some(item => item._filePath === file && item.mediaKind !== 'audio')) return false;
+  try {
+    const parent = await fs.promises.realpath(path.dirname(file));
+    if (parent !== path.dirname(file)) return false;
+    for (const folder of config.folders) {
+      const root = await fs.promises.realpath(folder.path).catch(() => null);
+      if (root && (parent === root || parent.startsWith(root + path.sep))) return true;
+    }
+  } catch {}
+  return false;
+}
+function repairPlaybackActive(file) {
+  return Object.values(transcodeSessions).some(session => session.filePath === file)
+    || Date.now() - lastPlaybackAt < 60_000;
+}
+function repairFilesChanged(oldPath, newPath, output) {
+  for (const cache of [probeCache,pixFmtCache,audioProbeCache,audioTracksCache,subProbeCache,heightCache,levelCache]) {
+    delete cache[oldPath]; delete cache[newPath];
+  }
+  if (output) {
+    const video = output.streams?.find(s => s.codec_type === 'video' && !s.disposition?.attached_pic);
+    probeCache[newPath] = video?.codec_name; pixFmtCache[newPath] = video?.pix_fmt;
+    heightCache[newPath] = video?.height; levelCache[newPath] = video?.level;
+    audioTracksCache[newPath] = (output.streams || []).filter(s => s.codec_type === 'audio').map(s =>
+      ({index:s.index,codec:s.codec_name,channels:s.channels,lang:s.tags?.language || '',title:s.tags?.title || ''}));
+    audioProbeCache[newPath] = audioTracksCache[newPath][0]?.codec;
+    subProbeCache[newPath] = (output.streams || []).filter(s => s.codec_type === 'subtitle');
+  }
+  markDirty(); scheduleSaveMediaInfo(); conversionWorker.invalidateOriginals(); invalidateLibrary('conversion-repair');
+}
+const conversionRepairInstaller = require('./lib/conversion-repair-install')({
+  file:path.join(DATA_DIR,'conversion-repair-install.json'), save:saveJSONStrict,
+  review:conversionReview, identity:mediaIdentity, isAllowedPath:repairPathAllowed,
+  isPlaybackActive:repairPlaybackActive, onChanged:repairFilesChanged,
+});
+const conversionRepair = require('./lib/conversion-repair')({
+  review:conversionReview, stateFile:path.join(DATA_DIR,'conversion-repair.json'), save:saveJSONStrict,
+  getConfig:()=>conversionConfig.get(), getLimits:()=>conversionConfig.get(),
+  isConversionBusy:()=>conversionQueue.status !== 'idle',
+  isPlaybackActive:repairPlaybackActive, isAllowedPath:repairPathAllowed, storage:conversionStorage,
+  beforeReady:()=>conversionRepairInstaller.recover(),
+});
+// Reserve the control boundary before any async check. Two simultaneous Start
+// requests cannot race a repair through their separate idle checks.
+let conversionControlBusy = false;
+async function conversionControl(operation, {allowRepair = false} = {}) {
+  if (conversionControlBusy) return {ok:false,error:'Another conversion action is in progress'};
+  conversionControlBusy = true;
+  try {
+    await conversionRepair.ready();
+    if (!allowRepair && (conversionRepair.busy || conversionRepairInstaller.busy)) return {ok:false,error:'Finish or stop the repair copy first'};
+    return await operation();
+  } catch(error) {return {ok:false,error:error.message};}
+  finally {conversionControlBusy = false;}
+}
+function publicRepairStatus(status) {
+  const row = item => ({...item,name:item.name || item.sourceName,
+    candidate:(item.previewReady || item.status === 'ready' && item.candidate?.verified) ? {verified:true,previewUrl:`/api/conversion/repair/preview/${item.reviewId}`} : null});
+  return {ok:true,...row(status),entries:(status.entries || []).map(row)};
+}
+app.get('/api/conversion/review', requireAdminSession, async (req,res) => {
+  try {res.json(await conversionReview.snapshot({offset:Number(req.query.offset) || 0,limit:100}));}
+  catch(error) {res.status(503).json({ok:false,error:error.message});}
+});
+app.post('/api/conversion/review/retry', requireAdminSession, ensureLibrary, async (req,res) => {
+  const result = await conversionControl(()=>conversionQueue.retryReview(req.body?.id));
+  res.status(result.ok ? 200 : 409).json(result.ok ? {...result,...conversionQueue.snapshot()} : result);
+});
+app.get('/api/conversion/repair/status', requireAdminSession, async (_req,res) => {
+  try {res.json(publicRepairStatus(await conversionRepair.snapshot()));}
+  catch(error) {res.status(503).json({ok:false,error:error.message});}
+});
+app.post('/api/conversion/repair/start', requireAdminSession, ensureLibrary, async (req,res) => {
+  const result = await conversionControl(()=>conversionRepair.start(req.body?.id));
+  res.status(result.ok ? 200 : 409).json(result);
+});
+app.post('/api/conversion/repair/stop', requireAdminSession, async (_req,res) => {
+  try {const result = await conversionRepair.stop();res.status(result.ok ? 200 : 409).json(result);}
+  catch(error) {res.status(409).json({ok:false,error:error.message});}
+});
+app.post('/api/conversion/repair/apply', requireAdminSession, ensureLibrary, async (req,res) => {
+  const result = await conversionControl(()=>conversionRepair.apply(req.body?.id,conversionRepairInstaller.install));
+  res.status(result.ok ? 200 : 409).json(result);
+});
+app.get('/api/conversion/repair/preview/:id', requireAdminSession, async (req,res) => {
+  try {
+    const candidate = await conversionRepair.preview(req.params.id);
+    res.set({'Cache-Control':'private, no-store','Content-Type':'video/mp4'});
+    // sendFile supports byte ranges for a seekable preview. Hidden generated
+    // paths are resolved internally only after candidate fingerprint checks.
+    res.sendFile(candidate.filePath,{dotfiles:'allow'},error=>{if(error && !res.headersSent)res.status(404).end();});
+  } catch(error) {res.status(409).json({ok:false,error:error.message});}
+});
+
 app.get('/api/conversion/status', requireAdminSession, async (_req, res) => {
   const status = conversionQueue.snapshot();
   try { res.json({ ok: true, ...status, storage: await conversionStorage.snapshot(status.currentPath) }); }
@@ -2663,7 +2765,7 @@ app.post('/api/conversion/start', requireAdminSession, ensureLibrary, async (req
   if (Object.prototype.hasOwnProperty.call(req.body || {}, 'all') && typeof all !== 'boolean') {
     return res.status(400).json({ ok: false, error: 'all must be a boolean' });
   }
-  const r = await conversionQueue.start({ all: all === true });
+  const r = await conversionControl(()=>conversionQueue.start({ all: all === true }));
   if (!r.ok) return res.status(409).json({ ok: false, error: r.error });
   res.json({ ok: true, ...r, ...conversionQueue.snapshot() });
 });
@@ -2675,7 +2777,7 @@ app.post('/api/conversion/pause', requireAdminSession, async (_req, res) => {
 });
 
 app.post('/api/conversion/resume', requireAdminSession, ensureLibrary, async (_req, res) => {
-  const r = await conversionQueue.resume();
+  const r = await conversionControl(()=>conversionQueue.resume());
   if (!r.ok) return res.status(409).json({ ok: false, error: r.error });
   res.json({ ok: true, ...conversionQueue.snapshot() });
 });
@@ -2689,7 +2791,7 @@ app.post('/api/conversion/stop', requireAdminSession, async (_req, res) => {
 // Cleanup — delete retained originals past their keep-days. dryRun first from
 // the UI so the admin sees exactly what would go before anything is deleted.
 app.post('/api/conversion/cleanup', requireAdminSession, async (req, res) => {
-  if (conversionQueue.status !== 'idle') return res.status(409).json({ok:false,error:'Stop conversion before cleaning up originals'});
+  if (conversionQueue.status !== 'idle' || conversionControlBusy || conversionRepair.busy || conversionRepairInstaller.busy) return res.status(409).json({ok:false,error:'Stop conversion and repair before cleaning up originals'});
   const dryRun = req.body?.dryRun !== false;
   try {
     const cfg = conversionConfig.get();
@@ -2703,7 +2805,8 @@ app.post('/api/conversion/cleanup', requireAdminSession, async (req, res) => {
       return res.status(400).json({ok:false,error:'Choose originals and preview them before deleting'});
     }
     const result = await conversionWorker.cleanupExpiredOriginals(roots, cfg.keepOriginalsDays,
-      { dryRun, includeRecent: mode !== 'expired', retainedPaths, canDelete: () => conversionQueue.status === 'idle' });
+      { dryRun, includeRecent: mode !== 'expired', retainedPaths,
+        canDelete: () => conversionQueue.status === 'idle' && !conversionControlBusy && !conversionRepair.busy && !conversionRepairInstaller.busy });
     if (!dryRun && result.deleted.length) {
       console.log(`[conversion] Cleanup deleted ${result.deleted.length} original(s), freed ${(result.bytes / 1e9).toFixed(2)} GB`);
     }
@@ -2729,7 +2832,7 @@ app.get('/api/conversion/originals', requireAdminSession, async (_req, res) => {
 });
 
 app.post('/api/conversion/restore', requireAdminSession, async (req, res) => {
-  if (conversionQueue.status !== 'idle') return res.status(409).json({ok:false,error:'Stop conversion before restoring originals'});
+  if (conversionQueue.status !== 'idle' || conversionControlBusy || conversionRepair.busy || conversionRepairInstaller.busy) return res.status(409).json({ok:false,error:'Stop conversion and repair before restoring originals'});
   const retainedPath = String(req.body?.retainedPath || '');
   // Must sit inside a configured library folder AND inside a retention dir —
   // this endpoint moves files, so a path from the request body is not trusted
@@ -2740,8 +2843,11 @@ app.post('/api/conversion/restore', requireAdminSession, async (req, res) => {
   if (!inLibrary || !resolved.includes(`${path.sep}.converted-originals${path.sep}`)) {
     return res.status(400).json({ ok: false, error: 'Path is not a retained original inside a library folder' });
   }
-  const result = await conversionWorker.restoreOriginal(resolved);
-  if (!result.ok) return res.status(409).json({ ok: false, error: result.reason });
+  const result = await conversionControl(async () => {
+    if (conversionQueue.status !== 'idle') return {ok:false,reason:'Stop conversion before restoring originals'};
+    return conversionWorker.restoreOriginal(resolved);
+  });
+  if (!result.ok) return res.status(409).json({ ok: false, error: result.reason || result.error });
   console.log(`[conversion] Restored ${path.basename(resolved)}`);
   invalidateLibrary('conversion-restore');
   res.json({ ok: true, ...result });
@@ -4075,7 +4181,12 @@ if (ALIAS_PORT) {
   alias.on('error', (e) => console.warn(`  [Startup] Alias port ${ALIAS_PORT} unavailable: ${e.code}`));
 }
 
-app.listen(PORT, '0.0.0.0', () => {
+app.listen(PORT, '0.0.0.0', async () => {
+  // Restore an interrupted, explicitly selected repair before loading the
+  // catalog. A review-state problem disables conversion controls, while the
+  // rest of the media server remains available.
+  try {await conversionRepair.ready();}
+  catch(error) {console.warn(`[conversion] Repair recovery needs attention: ${error.message}`);}
   const ip = getLocalIP();
   console.log('');
   console.log('  ╔══════════════════════════════════════════════╗');

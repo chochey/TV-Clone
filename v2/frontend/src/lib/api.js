@@ -156,6 +156,12 @@ export const api = {
   conversionPlan: (includeImageSubs = false) =>
     fetch(`/api/conversion/plan${includeImageSubs ? '?includeImageSubs=1' : ''}`, opts('GET')).then(json),
   conversionStatus: () => fetch('/api/conversion/status', opts('GET')).then(json),
+  conversionReview: (offset = 0) => fetch(`/api/conversion/review?offset=${offset}`, opts('GET')).then(json),
+  conversionRetryReview: (id) => fetch('/api/conversion/review/retry', opts('POST', { id })).then(json),
+  conversionRepairStatus: () => fetch('/api/conversion/repair/status', opts('GET')).then(json),
+  conversionRepairStart: (id) => fetch('/api/conversion/repair/start', opts('POST', { id })).then(json),
+  conversionRepairStop: () => fetch('/api/conversion/repair/stop', opts('POST')).then(json),
+  conversionRepairApply: (id) => fetch('/api/conversion/repair/apply', opts('POST', { id })).then(json),
   // Convert all bypasses only the batch file count; other limits still apply.
   conversionStart: ({ all = false } = {}) => fetch('/api/conversion/start', opts('POST', { all })).then(json),
   conversionPause: () => fetch('/api/conversion/pause', opts('POST')).then(json),
