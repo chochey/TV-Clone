@@ -7,7 +7,7 @@ export function readAlongDocument(value, itemId) {
     throw new Error('Invalid read-along document');
   }
   const ids = new Set();
-  let previousEnd = 0;
+  let previousEnd = 0, wordCount = 0;
   const chapters = value.chapters.map((chapter, chapterIndex) => {
     if (!finite(chapter.start) || !finite(chapter.end) || chapter.start < previousEnd || chapter.end <= chapter.start || chapter.end > value.duration + 1 || !Array.isArray(chapter.paragraphs)) {
       throw new Error('Invalid read-along chapter');
@@ -21,14 +21,59 @@ export function readAlongDocument(value, itemId) {
       const timed = finite(paragraph.start) && finite(paragraph.end);
       if (timed && (paragraph.start < paragraphEnd || paragraph.end <= paragraph.start || paragraph.end > chapter.end + 0.01)) throw new Error('Invalid paragraph timing');
       if (timed) paragraphEnd = paragraph.end;
+      let words;
+      if (paragraph.words !== undefined) {
+        if (!timed || !Array.isArray(paragraph.words) || !paragraph.words.length || paragraph.words.length > 6000 || (wordCount += paragraph.words.length) > 300000) throw new Error('Invalid word timing');
+        let textEnd = 0, wordEnd = paragraph.start;
+        words = paragraph.words.map(word => {
+          if (!Array.isArray(word) || word.length !== 4) throw new Error('Invalid word timing');
+          const [start, end, from, until] = word;
+          if (!Number.isInteger(start) || !Number.isInteger(end) || start < textEnd || end <= start || end > paragraph.text.length ||
+            !finite(from) || !finite(until) || from < wordEnd || until <= from || until > paragraph.end ||
+            splitsSurrogate(paragraph.text, start) || splitsSurrogate(paragraph.text, end) || !paragraph.text.slice(start, end).trim()) throw new Error('Invalid word timing');
+          textEnd = end; wordEnd = until;
+          return [start, end, from, until];
+        });
+      }
       return { id, text: paragraph.text, start: timed ? paragraph.start : null, end: timed ? paragraph.end : null,
-        page: Number.isInteger(paragraph.page) && paragraph.page > 0 ? paragraph.page : null };
+        page: Number.isInteger(paragraph.page) && paragraph.page > 0 ? paragraph.page : null, ...(words ? { words } : {}) };
     });
     return { id: String(chapter.id ?? chapterIndex), title: String(chapter.title || `Chapter ${chapterIndex + 1}`),
       start: chapter.start, end: chapter.end, paragraphs };
   });
   if (!chapters.length) throw new Error('Empty read-along document');
   return { title: String(value.title || ''), duration: value.duration, chapters };
+}
+
+function splitsSurrogate(text, offset) {
+  return offset > 0 && offset < text.length && /[\uD800-\uDBFF]/.test(text[offset - 1]) && /[\uDC00-\uDFFF]/.test(text[offset]);
+}
+
+// Keep every character, including punctuation and unmatched words. Only the
+// active paragraph needs spans; all other paragraphs stay ordinary text nodes.
+export function readAlongWordParts(paragraph) {
+  if (!paragraph?.words?.length) return [];
+  const parts = [];
+  let end = 0;
+  paragraph.words.forEach(([start, until], word) => {
+    if (start > end) parts.push({ text: paragraph.text.slice(end, start), word: -1 });
+    parts.push({ text: paragraph.text.slice(start, until), word });
+    end = until;
+  });
+  if (end < paragraph.text.length) parts.push({ text: paragraph.text.slice(end), word: -1 });
+  return parts;
+}
+
+export function readAlongWordAt(words, position) {
+  if (!Array.isArray(words) || !finite(position)) return -1;
+  let low = 0, high = words.length - 1;
+  while (low <= high) {
+    const middle = (low + high) >> 1, word = words[middle];
+    if (position < word[2]) high = middle - 1;
+    else if (position >= word[3]) low = middle + 1;
+    else return middle;
+  }
+  return -1;
 }
 
 export function readAlongPosition(document, position) {

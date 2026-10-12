@@ -70,6 +70,17 @@ function shortDocument() {
   }
   return value;
 }
+function wordDocument() {
+  const text = '“Hello,”\t  reader.\nUnmatched text stays. 👋';
+  const words = ['Hello', 'reader', 'stays'].map((word, index) => [text.indexOf(word), text.indexOf(word) + word.length, 1 + index * 2, 2 + index * 2]);
+  return { available: true, version: 1, itemId: 'book', title: 'Fixture audiobook', duration: 60, chapters: [
+    { id: 'words', title: 'Word timing', start: 0, end: 60, paragraphs: [
+      { id: 'words-one', text, start: 1, end: 10, words },
+      { id: 'words-two', text: 'A second synchronized passage.', start: 11, end: 20, words: [[2, 8, 11, 12], [9, 21, 13, 14]] },
+      { id: 'paragraph-only', text: 'This passage still follows at paragraph level.', start: 21, end: 30 },
+    ] },
+  ] };
+}
 async function watchScroll(text) {
   await text.evaluate(element => {
     const scrollTo = element.scrollTo.bind(element);
@@ -271,5 +282,83 @@ test('a long passage on a phone stays stable at large text size and manual brows
   await reader.getByRole('button', { name: 'Resume following' }).click(); await expect.poll(() => activeIsReadable(text)).toBe(true);
   expect(await page.getByRole('dialog', { name: 'Audio player' }).evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
   await reader.screenshot({ path: '/tmp/readalong-phone-stable.png' });
+  expect(state.errors).toEqual([]);
+});
+
+test('spoken words follow seeks with exact text, paragraph fallback and no extra scrolling or layout movement', async ({ page }) => {
+  const state = await fixture(page); state.response = wordDocument(); await position(page, 1.2);
+  await page.getByRole('button', { name: 'Read along', exact: true }).click();
+  const reader = page.getByRole('region', { name: 'Read along', exact: true }), text = reader.getByRole('region', { name: 'Book text' });
+  const spoken = reader.locator('.spoken-current');
+  await expect(spoken).toHaveText('Hello'); await afterPaint(page); await watchScroll(text);
+  expect(await reader.locator('.passage p').first().textContent()).toBe(state.response.chapters[0].paragraphs[0].text);
+  expect(await reader.locator('.spoken-word').count()).toBe(3);
+  const bounds = await reader.locator('.passage p').first().boundingBox(), scroll = await text.evaluate(element => element.scrollTop);
+  await position(page, 3.2); await expect(spoken).toHaveText('reader');
+  await position(page, 2.2); await expect(spoken).toHaveCount(0);
+  await expect(reader.locator('[aria-current="true"]')).toContainText('Hello');
+  await position(page, 5.2); await expect(spoken).toHaveText('stays');
+  await position(page, 1.2); await expect(spoken).toHaveText('Hello'); await afterPaint(page);
+  expect(await reader.locator('.passage p').first().boundingBox()).toEqual(bounds);
+  expect(await text.evaluate(element => element.scrollTop)).toBe(scroll); expect(await scrollCalls(text)).toEqual([]);
+  await reader.getByRole('checkbox', { name: 'Auto-scroll' }).uncheck(); await watchScroll(text);
+  await position(page, 11.2); await expect(spoken).toHaveText('second');
+  expect(await reader.locator('.spoken-word').count()).toBe(2);
+  await position(page, 21.2); await expect(spoken).toHaveCount(0);
+  await expect(reader.locator('[aria-current="true"]')).toContainText('paragraph level');
+  expect(await reader.locator('.spoken-word').count()).toBe(0); expect(await scrollCalls(text)).toEqual([]);
+  expect(state.errors).toEqual([]);
+});
+
+test('word highlighting reads the media clock between timeupdate events and keeps pause, speed and minimization stable', async ({ page }) => {
+  const state = await fixture(page); state.response = wordDocument(); await position(page, 1.2);
+  await page.getByRole('button', { name: 'Read along', exact: true }).click();
+  const reader = page.getByRole('region', { name: 'Read along', exact: true }), audio = page.locator('audio');
+  await expect(reader.locator('.spoken-current')).toHaveText('Hello');
+  await audio.evaluate(media => {
+    window.readerClock = 1.2;
+    Object.defineProperty(media, 'currentTime', { configurable: true, get: () => window.readerClock });
+    media.addEventListener('timeupdate', event => event.stopImmediatePropagation(), true);
+    media.dataset.identity = 'word-clock';
+  });
+  await page.getByRole('button', { name: 'Play audio', exact: true }).click();
+  await page.evaluate(() => window.readerClock = 3.2);
+  await expect(reader.locator('.spoken-current')).toHaveText('reader');
+  await page.getByRole('combobox', { name: 'Speed', exact: true }).selectOption('2');
+  expect(await audio.evaluate(media => media.playbackRate)).toBe(2);
+  await page.evaluate(() => window.readerClock = 5.2);
+  await expect(reader.locator('.spoken-current')).toHaveText('stays');
+  await page.getByRole('button', { name: 'Pause audio', exact: true }).click(); await afterPaint(page);
+  await page.evaluate(() => window.readerClock = 3.2); await afterPaint(page);
+  await expect(reader.locator('.spoken-current')).toHaveText('stays');
+  await audio.evaluate(media => media.dispatchEvent(new Event('seeked')));
+  await expect(reader.locator('.spoken-current')).toHaveText('reader');
+  await page.getByRole('button', { name: 'Play audio', exact: true }).click();
+  await page.getByRole('button', { name: 'Minimize audio player' }).click();
+  await page.evaluate(() => window.readerClock = 1.2); await afterPaint(page);
+  expect(await audio.evaluate(media => media.dataset.identity)).toBe('word-clock'); expect(await audio.evaluate(media => media.paused)).toBe(false);
+  await page.getByRole('button', { name: 'Expand audio player' }).click();
+  await expect(reader.locator('.spoken-current')).toHaveText('Hello');
+  expect(await audio.count()).toBe(1); expect(state.errors).toEqual([]);
+});
+
+test('partial word preparation is explained and refreshing adds chapters without replacing audio', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const state = await fixture(page); state.response = shortDocument();
+  state.response.chapters[0].paragraphs[0].words = [[0, 7, 1, 1.5]];
+  await position(page, 1.2);
+  await page.locator('audio').evaluate(media => media.dataset.identity = 'partial-word-player');
+  await page.getByRole('button', { name: 'Read along', exact: true }).click();
+  const reader = page.getByRole('region', { name: 'Read along', exact: true });
+  await expect(reader.getByText(/Word highlights ready in 1 of 3 chapters/)).toBeVisible();
+  await expect(reader.locator('.spoken-current')).toHaveText('Chapter');
+  for (const chapter of state.response.chapters) chapter.paragraphs[0].words = [[0, 7, chapter.paragraphs[0].start, chapter.paragraphs[0].start + .5]];
+  await reader.getByRole('button', { name: 'Check for updates', exact: true }).click();
+  await expect(reader.locator('.spoken-current')).toHaveText('Chapter');
+  await expect(reader.getByText(/Word highlights ready in/)).toHaveCount(0);
+  expect(await page.locator('audio').evaluate(media => ({ identity: media.dataset.identity, position: media.currentTime, paused: media.paused }))).toEqual({ identity: 'partial-word-player', position: 1.2, paused: true });
+  expect(await reader.locator('.spoken-word').count()).toBe(1); expect(state.requests).toBe(2);
+  const box = await reader.boundingBox(); expect(box.x).toBeGreaterThanOrEqual(0); expect(box.x + box.width).toBeLessThanOrEqual(390);
+  await reader.screenshot({ path: '/tmp/readalong-phone-word.png' });
   expect(state.errors).toEqual([]);
 });

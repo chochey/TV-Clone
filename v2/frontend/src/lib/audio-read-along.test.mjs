@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readAlongDocument, readAlongPosition } from './audio-read-along.js';
+import { readAlongDocument, readAlongPosition, readAlongWordAt, readAlongWordParts } from './audio-read-along.js';
 import { api } from './api.js';
 
 const fixture = () => ({ available: true, version: 1, itemId: 'book', title: 'Book', duration: 120, chapters: [
@@ -51,4 +51,48 @@ test('read along API uses authenticated on-demand endpoint and forwards cancella
     globalThis.fetch = async () => ({ ok: false, status: 503, statusText: 'Unavailable', json: async () => ({ error: 'later' }) });
     await assert.rejects(api.audioReadAlong('book'), error => error.status === 503);
   } finally { globalThis.fetch = original; }
+});
+
+test('word timing follows exact intervals and leaves pauses and unmatched text unhighlighted', () => {
+  const raw = fixture(), paragraph = raw.chapters[0].paragraphs[0];
+  paragraph.words = [[0, 5, 12, 12.25], [6, 13, 12.4, 13.5]];
+  const words = readAlongDocument(raw, 'book').chapters[0].paragraphs[0].words;
+  assert.equal(readAlongWordAt(words, 12), 0);
+  assert.equal(readAlongWordAt(words, 12.249), 0);
+  assert.equal(readAlongWordAt(words, 12.25), -1);
+  assert.equal(readAlongWordAt(words, 12.4), 1);
+  assert.equal(readAlongWordAt(words, 13.499), 1);
+  assert.equal(readAlongWordAt(words, 12.1), 0);
+  for (const time of [0, 11.9, 12.3, 13.5, 20, NaN, Infinity]) assert.equal(readAlongWordAt(words, time), -1);
+  assert.equal(readAlongWordAt(undefined, 12), -1);
+});
+
+test('word spans preserve punctuation, whitespace, Unicode and unmatched text exactly', () => {
+  const raw = fixture(), paragraph = raw.chapters[0].paragraphs[0];
+  paragraph.text = '😀 “Hello,”\t  reader.\n<unmatched> words remain.';
+  paragraph.words = ['Hello', 'reader', 'remain'].map((word, index) => [paragraph.text.indexOf(word), paragraph.text.indexOf(word) + word.length, 12 + index, 12.5 + index]);
+  const parsed = readAlongDocument(raw, 'book').chapters[0].paragraphs[0], parts = readAlongWordParts(parsed);
+  assert.equal(parts.map(part => part.text).join(''), paragraph.text);
+  assert.deepEqual(parts.filter(part => part.word >= 0).map(part => part.text), ['Hello', 'reader', 'remain']);
+  assert.ok(parts.some(part => part.word === -1 && part.text.includes('<unmatched>')));
+  assert.deepEqual(readAlongWordParts({ text: 'Paragraph fallback' }), []);
+  assert.deepEqual(readAlongWordParts({ text: 'Paragraph fallback', words: [] }), []);
+});
+
+test('malformed word ranges cannot split Unicode or extend beyond paragraph text and timing', () => {
+  const invalid = [
+    [[-1, 5, 12, 13]], [[0.5, 5, 12, 13]], [[0, 0, 12, 13]], [[0, 99, 12, 13]], [[0, 5, 12, 12]],
+    [[0, 5, 11, 13]], [[0, 5, 12, 21]], [[0, 5, 12, Infinity]], [[0, 5, 12, 13, 'extra']],
+    [[0, 5, 12, 13], [4, 13, 14, 15]], [[0, 5, 12, 13], [6, 13, 12.5, 15]], [[5, 6, 12, 13]],
+  ];
+  for (const words of invalid) {
+    const raw = fixture(); raw.chapters[0].paragraphs[0].words = words;
+    assert.throws(() => readAlongDocument(raw, 'book'), /Invalid word timing/);
+  }
+  const untimed = fixture(); untimed.chapters[0].paragraphs[1].words = [[0, 5, 20, 21]];
+  assert.throws(() => readAlongDocument(untimed, 'book'), /Invalid word timing/);
+  for (const range of [[0, 1, 12, 13], [1, 2, 12, 13]]) {
+    const raw = fixture(); raw.chapters[0].paragraphs[0].text = '😀 word'; raw.chapters[0].paragraphs[0].words = [range];
+    assert.throws(() => readAlongDocument(raw, 'book'), /Invalid word timing/);
+  }
 });

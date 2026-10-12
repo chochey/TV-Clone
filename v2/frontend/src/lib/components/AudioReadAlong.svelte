@@ -2,19 +2,55 @@
   import { tick } from 'svelte';
   import { api } from '../api.js';
   import { audioTime } from '../audio-playback.js';
-  import { readAlongDocument, readAlongPosition } from '../audio-read-along.js';
+  import { readAlongDocument, readAlongPosition, readAlongWordAt, readAlongWordParts } from '../audio-read-along.js';
 
-  let { itemId, position = 0, ready = false, visible = true, onseek } = $props();
+  let { itemId, position = 0, ready = false, visible = true, audio = null, onseek } = $props();
   let document = $state(null), loading = $state(true), error = $state(''), unavailable = $state(false), retry = $state(0);
   let unavailableMessage = $state('');
   let readingChapter = $state(0), following = $state(true), fontSize = $state(19), scroller = $state(null);
   let autoScroll = $state(true);
+  let narrationTime = $state(0);
   let lastScrolledChapter = -1, lastScrolledParagraph = -1;
-  const active = $derived(readAlongPosition(document, position));
+  const active = $derived(readAlongPosition(document, narrationTime));
   const activeChapter = $derived(active.chapter), activeParagraph = $derived(active.paragraph);
   const chapter = $derived(document?.chapters[readingChapter]);
   const currentParagraph = $derived(activeChapter === readingChapter ? activeParagraph : -1);
   const activeKey = $derived(`${activeChapter}:${activeParagraph}`);
+  const wordChapters = $derived(document?.chapters.filter(entry => entry.paragraphs.some(passage => passage.words?.length)).length || 0);
+  const hasWordTimings = $derived(wordChapters > 0);
+  const wordParagraph = $derived(currentParagraph >= 0 ? chapter?.paragraphs[currentParagraph] : null);
+  const wordParts = $derived(readAlongWordParts(wordParagraph));
+  const currentWord = $derived(readAlongWordAt(wordParagraph?.words, narrationTime));
+
+  $effect(() => { narrationTime = position; });
+
+  $effect(() => {
+    if (!visible || !ready || !audio || !hasWordTimings) return;
+    const media = audio;
+    let frame = 0;
+    const sync = () => { if (Number.isFinite(media.currentTime)) narrationTime = media.currentTime; };
+    const stop = () => { cancelAnimationFrame(frame); frame = 0; sync(); };
+    const update = () => {
+      frame = 0;
+      sync();
+      if (!media.paused && !media.ended && !window.document.hidden) frame = requestAnimationFrame(update);
+    };
+    const start = () => { stop(); if (!media.paused && !media.ended && !window.document.hidden) frame = requestAnimationFrame(update); };
+    // timeupdate is too infrequent for short words. Read the real media clock,
+    // never an estimated timer, and only while this reader is visible.
+    media.addEventListener('play', start); media.addEventListener('playing', start);
+    media.addEventListener('pause', stop); media.addEventListener('ended', stop);
+    media.addEventListener('seeking', sync); media.addEventListener('seeked', sync);
+    window.document.addEventListener('visibilitychange', start);
+    start();
+    return () => {
+      cancelAnimationFrame(frame);
+      media.removeEventListener('play', start); media.removeEventListener('playing', start);
+      media.removeEventListener('pause', stop); media.removeEventListener('ended', stop);
+      media.removeEventListener('seeking', sync); media.removeEventListener('seeked', sync);
+      window.document.removeEventListener('visibilitychange', start);
+    };
+  });
 
   $effect(() => {
     try { autoScroll = localStorage.getItem('tvclone.readAlong.autoScroll') !== 'off'; } catch { /* Storage may be disabled. */ }
@@ -101,7 +137,8 @@
 </script>
 
 <section class="reader" aria-label="Read along">
-  <header class="reader-heading"><div><span class="eyebrow">READ & LISTEN</span><h2>Read along</h2></div><span class="reader-label">Highlights the current paragraph</span></header>
+  <header class="reader-heading"><div><span class="eyebrow">READ & LISTEN</span><h2>Read along</h2></div><span class="reader-label">{wordParagraph?.words?.length ? 'Highlights the spoken word' : 'Highlights the current paragraph'}</span></header>
+  {#if hasWordTimings && wordChapters < document.chapters.length}<div class="word-progress"><span>Word highlights ready in {wordChapters} of {document.chapters.length} chapters. Other passages still highlight by paragraph.</span><button onclick={() => retry++}>Check for updates</button></div>{/if}
   {#if loading}<div class="reader-message" role="status">Loading reading text…</div>
   {:else if error}<div class="reader-message" role="alert"><p>{error}</p><button onclick={() => retry++}>Retry reading text</button></div>
   {:else if unavailable}<div class="reader-message" role="status"><h3>Reading text isn’t ready for this book</h3><p>{unavailableMessage || 'A matching book needs to be added and synchronized before it can follow the narration.'}</p><button onclick={() => retry++}>Check again</button></div>
@@ -128,7 +165,7 @@
       <h3>{chapter.title}</h3>
       {#each chapter.paragraphs as paragraph, index (paragraph.id)}
         <div class="passage" class:current={currentParagraph === index} aria-current={currentParagraph === index ? 'true' : undefined}>
-          <p>{paragraph.text}</p>
+          <p>{#if currentParagraph === index && wordParts.length}{#each wordParts as part}{#if part.word >= 0}<span class="spoken-word" class:spoken-current={currentWord === part.word}>{part.text}</span>{:else}{part.text}{/if}{/each}{:else}{paragraph.text}{/if}</p>
           <div class="passage-info">{#if paragraph.page}<span>Page {paragraph.page}</span>{/if}
             {#if paragraph.start !== null}<button disabled={!ready} onclick={() => { onseek?.(paragraph.start); following = true; }} aria-label={`Listen from this passage at ${audioTime(paragraph.start)}`}>Listen from here <span aria-hidden="true">↗</span></button>
             {:else}<span>Timing unavailable</span>{/if}
@@ -147,6 +184,8 @@
   .eyebrow {font-size:.6rem;letter-spacing:.15em;color:#c8b1ed;font-weight:700;}
   h2 {font-size:1.3rem;margin:5px 0 0;letter-spacing:-.02em;}
   .reader-label {font-size:.72rem;color:#c6b9d6;}
+  .word-progress {display:flex;align-items:center;flex-wrap:wrap;gap:4px 12px;font-size:.72rem;line-height:1.5;color:#cfc1df;margin:0;padding:0 24px 8px;}
+  .word-progress button {font-size:.72rem;border:1px solid #6b5b7d;}
   .reader-toolbar {display:flex;align-items:end;gap:16px;padding:10px 24px;}
   .reader-chapter {display:flex;flex-direction:column;gap:7px;flex:1;min-width:0;font-size:.74rem;color:#cfc1df;}
   select {width:100%;min-width:0;min-height:44px;padding:9px 12px;border:1px solid #6b5b7d;border-radius:8px;font:inherit;color:#f5f0fc;background:#282032;color-scheme:dark;}
@@ -168,6 +207,7 @@
   .passage {padding:13px 14px 6px;margin:0 0 7px;border-left:3px solid transparent;border-radius:4px 9px 9px 4px;}
   .passage.current {background:#362547;border-left-color:#cba6ff;}
   .passage p {font-family:Georgia,'Times New Roman',serif;font-size:var(--reading-size);line-height:1.8;white-space:pre-line;overflow-wrap:anywhere;margin:0;color:#f4eef9;}
+  .spoken-current {color:#251934;background:#f1dfa3;border-radius:3px;box-shadow:0.07em 0 #f1dfa3,-0.07em 0 #f1dfa3;box-decoration-break:clone;-webkit-box-decoration-break:clone;}
   .passage-info {display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:38px;font-size:.65rem;color:#bbaeC8;}
   .passage-info button {margin-left:auto;min-height:36px;font-size:.68rem;}
   .reader-footer {display:flex;align-items:center;justify-content:space-between;gap:8px;border-top:1px solid #ffffff18;padding:10px 14px;font-size:.7rem;color:#c8b9d7;}
@@ -177,7 +217,7 @@
   button:focus-visible,select:focus-visible,input:focus-visible,.reading-text:focus-visible {outline:3px solid #cba6ff;outline-offset:3px;}
   button:disabled {opacity:.4;cursor:default;}
   @media(max-width:640px) {
-    .reader-heading {padding:18px 16px 10px;}.reader-label {display:none;}.reader-toolbar {padding:10px 16px;gap:8px;}
+    .reader-heading {padding:18px 16px 10px;}.reader-label {display:none;}.word-progress {padding:0 16px 8px;}.reader-toolbar {padding:10px 16px;gap:8px;}
     .follow-status {padding:4px 16px;align-items:flex-start;flex-direction:column;min-height:80px;gap:0;}.follow-actions {width:100%;justify-content:space-between;}.timing-note {padding:10px 16px;}.reading-text {height:58dvh;min-height:300px;padding:16px 8px 28px;}
     .reader-footer {padding:8px 6px;gap:2px;}.reader-footer button {font-size:.7rem;padding:8px 6px;}.passage {padding:11px 10px 5px;}
   }

@@ -291,7 +291,7 @@
         {/if}
       </div>
     </div>
-    {#if readAlongOpen}<AudioReadAlong itemId={item.id} {position} {ready} visible={!minimized} onseek={seekTo} />{/if}
+    {#if readAlongOpen}<AudioReadAlong itemId={item.id} {position} {ready} {audio} visible={!minimized} onseek={seekTo} />{/if}
     </div>
   </div>
   {#if minimized}
