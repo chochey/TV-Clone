@@ -29,6 +29,7 @@ export const api = {
   audioPreferences: () => fetch('/api/audio/preferences',opts('GET')).then(json),
   audioPreferencesUpdate: body => fetch('/api/audio/preferences',opts('PUT',body)).then(json),
   audioBookmarks: id => fetch(`/api/audio/bookmarks/${encodeURIComponent(id)}`,opts('GET')).then(json),
+  audioReadAlong: (id, signal) => fetch(`/api/audio/read-along/${encodeURIComponent(id)}`, { ...opts('GET'), signal }).then(json),
   audioBookmarkAdd: (id,body) => fetch(`/api/audio/bookmarks/${encodeURIComponent(id)}`,opts('POST',body)).then(json),
   audioBookmarkRemove: (id,bookmarkId) => fetch(`/api/audio/bookmarks/${encodeURIComponent(id)}/${encodeURIComponent(bookmarkId)}`,opts('DELETE')).then(json),
   scanStatus: () => fetch('/api/scan/status', {...opts('GET'),cache:'no-store'}).then(json),
