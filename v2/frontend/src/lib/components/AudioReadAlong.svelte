@@ -10,7 +10,9 @@
   let readingChapter = $state(0), following = $state(true), fontSize = $state(19), scroller = $state(null);
   let autoScroll = $state(true);
   let narrationTime = $state(0);
-  let lastScrolledChapter = -1, lastScrolledParagraph = -1;
+  let lastScrolledChapter = -1, lastScrolledParagraph = -1, lastWord = -1, lastFontSize = 0, lastReaderSize = '';
+  let readerSize = $state('');
+  let pendingScrollTop = null;
   const active = $derived(readAlongPosition(document, narrationTime));
   const activeChapter = $derived(active.chapter), activeParagraph = $derived(active.paragraph);
   const chapter = $derived(document?.chapters[readingChapter]);
@@ -18,6 +20,7 @@
   const activeKey = $derived(`${activeChapter}:${activeParagraph}`);
   const wordChapters = $derived(document?.chapters.filter(entry => entry.paragraphs.some(passage => passage.words?.length)).length || 0);
   const hasWordTimings = $derived(wordChapters > 0);
+  const chapterHasWords = $derived(chapter?.paragraphs.some(passage => passage.words?.length));
   const wordParagraph = $derived(currentParagraph >= 0 ? chapter?.paragraphs[currentParagraph] : null);
   const wordParts = $derived(readAlongWordParts(wordParagraph));
   const currentWord = $derived(readAlongWordAt(wordParagraph?.words, narrationTime));
@@ -60,7 +63,7 @@
     const id = itemId; retry;
     const controller = new AbortController();
     let cancelled = false;
-    loading = true; error = ''; unavailable = false; unavailableMessage = ''; document = null; following = true; readingChapter = 0; lastScrolledChapter = -1; lastScrolledParagraph = -1;
+    loading = true; error = ''; unavailable = false; unavailableMessage = ''; document = null; following = true; readingChapter = 0; lastScrolledChapter = -1; lastScrolledParagraph = -1; lastWord = -1; lastFontSize = 0; lastReaderSize = ''; pendingScrollTop = null;
     api.audioReadAlong(id, controller.signal).then(value => {
       if (cancelled) return;
       document = readAlongDocument(value, id);
@@ -80,29 +83,65 @@
   });
 
   $effect(() => {
-    const key = activeKey, selected = readingChapter; fontSize;
+    const pane = scroller;
+    if (!pane) return;
+    const observer = new ResizeObserver(() => { readerSize = `${pane.clientWidth}:${pane.clientHeight}`; });
+    observer.observe(pane);
+    return () => observer.disconnect();
+  });
+
+  $effect(() => {
+    const key = activeKey, selected = readingChapter, word = currentWord, size = fontSize, dimensions = readerSize;
     if (!autoScroll || !following || !visible || !scroller || activeChapter !== selected) return;
     let cancelled = false;
     tick().then(() => {
-      if (cancelled || key !== activeKey || !autoScroll || !following || !visible) return;
+      if (cancelled || key !== activeKey || word !== currentWord || !autoScroll || !following || !visible) return;
       const chapterChanged = lastScrolledChapter !== selected;
+      const paragraphChanged = chapterChanged || activeParagraph !== lastScrolledParagraph;
+      const layoutChanged = size !== lastFontSize || dimensions !== lastReaderSize;
       const nextParagraph = !chapterChanged && activeParagraph === lastScrolledParagraph + 1;
-      lastScrolledChapter = selected;
+      const previousWord = paragraphChanged ? -1 : lastWord;
+      lastScrolledChapter = selected; lastFontSize = size; lastReaderSize = dimensions;
       if (activeParagraph >= 0) lastScrolledParagraph = activeParagraph;
+      if (paragraphChanged) lastWord = -1;
+      if (paragraphChanged || layoutChanged) pendingScrollTop = null;
+      if (word >= 0) lastWord = word;
       // A newly rendered chapter must not inherit the previous chapter's scroll.
       if (chapterChanged) scroller.scrollTo({ top: 0, behavior: 'instant' });
-      const paragraph = scroller?.querySelector('[aria-current="true"] p');
+      const paragraph = scroller.querySelector('[aria-current="true"] p');
       if (!paragraph) return;
-      const pane = scroller.getBoundingClientRect(), bounds = paragraph.getBoundingClientRect(), height = scroller.clientHeight;
-      // Keep visible text still. For an oversized paragraph, reveal its beginning
-      // once; paragraph timestamps cannot tell us which line is being narrated.
-      const readableHeight = Math.min(bounds.height, height * .65);
-      if (bounds.top >= pane.top + 12 && bounds.top + readableHeight <= pane.top + height - 24) return;
-      const top = scroller.scrollTop + bounds.top - pane.top - 24;
+      const pane = scroller.getBoundingClientRect(), height = scroller.clientHeight;
+      const spoken = word >= 0 ? paragraph.querySelector('.spoken-current') : null;
+      // Measured word positions let a paragraph span several screens. Keep the
+      // current line still until it reaches the edge, then advance a screenful.
+      // A gap between matched words must never jump back to the paragraph start.
+      if (!spoken && !paragraphChanged && !layoutChanged) return;
+      const bounds = spoken?.getClientRects()[0] || paragraph.getBoundingClientRect();
+      const visibleTop = spoken ? Math.max(0, pane.top) : pane.top;
+      const visibleBottom = spoken ? Math.min(window.innerHeight, pane.top + height) : pane.top + height;
+      const visibleHeight = visibleBottom - visibleTop;
+      // The surrounding player can be scrolled separately on a phone. Never
+      // chase a tiny/offscreen slice or count text below the screen as visible.
+      if (visibleHeight < 100) return;
+      const readableHeight = spoken ? bounds.height : Math.min(bounds.height, height * .65);
+      const nextWord = !paragraphChanged && previousWord >= 0 && word > previousWord && word <= previousWord + 4;
+      if (spoken && nextWord && pendingScrollTop !== null) {
+        const remaining = pendingScrollTop - scroller.scrollTop;
+        if (Math.abs(remaining) < 2) pendingScrollTop = null;
+        // A fast narrator can reach another word before a smooth page advance
+        // settles. Keep that animation if its destination already reveals it.
+        else if (bounds.top - remaining >= visibleTop + 12 && bounds.bottom - remaining <= visibleBottom - 28) return;
+      }
+      if (bounds.top >= visibleTop + 12 && bounds.top + readableHeight <= visibleBottom - 28) return;
+      const inset = spoken ? visibleTop - pane.top + Math.max(24, visibleHeight * .25) : 24;
+      const top = scroller.scrollTop + bounds.top - pane.top - inset;
       const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-      // Advance by a screenful only when needed, leaving room for upcoming text.
-      // Move only this pane, never the page or playback controls.
-      scroller.scrollTo({ top: Math.max(0, top), behavior: !nextParagraph || reducedMotion ? 'instant' : 'smooth' });
+      // Only this reading pane moves. Seeks and layout changes settle at once;
+      // normal forward progress is smooth unless reduced motion is requested.
+      const smooth = !layoutChanged && !reducedMotion && (spoken ? nextWord : nextParagraph);
+      const target = Math.max(0, Math.min(scroller.scrollHeight - height, top));
+      pendingScrollTop = smooth ? target : null;
+      scroller.scrollTo({ top: target, behavior: smooth ? 'smooth' : 'instant' });
     });
     return () => { cancelled = true; };
   });
@@ -113,6 +152,7 @@
     if (scroller) scroller.scrollTo({ top: 0, behavior: 'instant' });
   }
   function pauseFollowing() {
+    pendingScrollTop = null;
     following = false;
     // Cancel an in-flight animation immediately when the listener takes over.
     scroller?.scrollTo({ top: scroller.scrollTop, behavior: 'instant' });
@@ -124,6 +164,7 @@
     else pauseFollowing();
   }
   function resumeFollowing() {
+    lastFontSize = 0;
     if (activeChapter >= 0) readingChapter = activeChapter;
     following = true;
   }
@@ -137,12 +178,13 @@
 </script>
 
 <section class="reader" aria-label="Read along">
-  <header class="reader-heading"><div><span class="eyebrow">READ & LISTEN</span><h2>Read along</h2></div><span class="reader-label">{wordParagraph?.words?.length ? 'Highlights the spoken word' : 'Highlights the current paragraph'}</span></header>
-  {#if hasWordTimings && wordChapters < document.chapters.length}<div class="word-progress"><span>Word highlights ready in {wordChapters} of {document.chapters.length} chapters. Other passages still highlight by paragraph.</span><button onclick={() => retry++}>Check for updates</button></div>{/if}
+  <header class="reader-heading"><div><span class="eyebrow">READ & LISTEN</span><h2>Read along</h2></div><span class="reader-label">{chapterHasWords ? 'Highlights matched spoken words' : 'Paragraph highlights in this chapter'}</span></header>
+  {#if hasWordTimings && wordChapters < document.chapters.length}<div class="word-progress"><span>Word highlights available in {wordChapters} of {document.chapters.length} chapters. Other passages still highlight by paragraph.</span><button onclick={() => retry++}>Check for updates</button></div>{/if}
   {#if loading}<div class="reader-message" role="status">Loading reading text…</div>
   {:else if error}<div class="reader-message" role="alert"><p>{error}</p><button onclick={() => retry++}>Retry reading text</button></div>
   {:else if unavailable}<div class="reader-message" role="status"><h3>Reading text isn’t ready for this book</h3><p>{unavailableMessage || 'A matching book needs to be added and synchronized before it can follow the narration.'}</p><button onclick={() => retry++}>Check again</button></div>
   {:else if document}
+    {#if hasWordTimings && !chapterHasWords}<p class="chapter-timing-note" role="status">This chapter has paragraph highlights only. Word timing is not available here yet.</p>{/if}
     <div class="reader-toolbar">
       <label class="reader-chapter">Reading chapter<select value={String(readingChapter)} onchange={event => browse(event.currentTarget.value)} aria-label="Reading chapter">
         {#each document.chapters as entry, index}<option value={String(index)}>{entry.title}</option>{/each}
@@ -179,13 +221,14 @@
 </section>
 
 <style>
-  .reader {min-width:0;display:flex;flex-direction:column;background:#15121d;border:1px solid #ffffff20;border-radius:14px;color:#f5f0fc;overflow:hidden;}
+  .reader {width:100%;max-width:100%;min-width:0;display:flex;flex-direction:column;background:#15121d;border:1px solid #ffffff20;border-radius:14px;color:#f5f0fc;overflow:hidden;}
   .reader-heading {display:flex;align-items:center;justify-content:space-between;gap:16px;padding:20px 24px 12px;}
   .eyebrow {font-size:.6rem;letter-spacing:.15em;color:#c8b1ed;font-weight:700;}
   h2 {font-size:1.3rem;margin:5px 0 0;letter-spacing:-.02em;}
   .reader-label {font-size:.72rem;color:#c6b9d6;}
   .word-progress {display:flex;align-items:center;flex-wrap:wrap;gap:4px 12px;font-size:.72rem;line-height:1.5;color:#cfc1df;margin:0;padding:0 24px 8px;}
   .word-progress button {font-size:.72rem;border:1px solid #6b5b7d;}
+  .chapter-timing-note {font-size:.75rem;line-height:1.5;color:#e1d2ee;padding:0 24px 8px;margin:0;}
   .reader-toolbar {display:flex;align-items:end;gap:16px;padding:10px 24px;}
   .reader-chapter {display:flex;flex-direction:column;gap:7px;flex:1;min-width:0;font-size:.74rem;color:#cfc1df;}
   select {width:100%;min-width:0;min-height:44px;padding:9px 12px;border:1px solid #6b5b7d;border-radius:8px;font:inherit;color:#f5f0fc;background:#282032;color-scheme:dark;}
@@ -200,9 +243,9 @@
   .auto-scroll input {width:17px;height:17px;accent-color:#cba6ff;cursor:pointer;}
   .follow-status button {color:#22172f;background:#d2b4ff;font-weight:650;}
   .follow-status button:hover {background:#e0cbff;}
-  .reading-body {position:relative;}
+  .reading-body {position:relative;min-width:0;}
   .timing-note {position:absolute;bottom:0;left:0;right:0;z-index:1;pointer-events:none;font-size:.75rem;line-height:1.5;padding:12px 24px;margin:0;background:#302639f5;color:#e1d2ee;border-top:1px solid #ffffff12;}
-  .reading-text {height:clamp(320px,58vh,740px);overflow:auto;overflow-anchor:none;overscroll-behavior:contain;scrollbar-color:#6f5e84 #191420;scrollbar-gutter:stable;padding:20px 22px 36px;outline-offset:-4px;}
+  .reading-text {width:100%;max-width:100%;height:clamp(320px,58vh,740px);overflow:auto;overflow-anchor:none;overscroll-behavior:contain;scrollbar-color:#6f5e84 #191420;scrollbar-gutter:stable;padding:20px 22px 36px;outline-offset:-4px;}
   .reading-text h3 {font-family:Georgia,serif;font-size:1.5rem;line-height:1.4;padding:0 14px;margin:0 0 22px;}
   .passage {padding:13px 14px 6px;margin:0 0 7px;border-left:3px solid transparent;border-radius:4px 9px 9px 4px;}
   .passage.current {background:#362547;border-left-color:#cba6ff;}
@@ -217,7 +260,7 @@
   button:focus-visible,select:focus-visible,input:focus-visible,.reading-text:focus-visible {outline:3px solid #cba6ff;outline-offset:3px;}
   button:disabled {opacity:.4;cursor:default;}
   @media(max-width:640px) {
-    .reader-heading {padding:18px 16px 10px;}.reader-label {display:none;}.word-progress {padding:0 16px 8px;}.reader-toolbar {padding:10px 16px;gap:8px;}
+    .reader-heading {padding:18px 16px 10px;}.reader-label {display:none;}.word-progress,.chapter-timing-note {padding:0 16px 8px;}.reader-toolbar {padding:10px 16px;gap:8px;}
     .follow-status {padding:4px 16px;align-items:flex-start;flex-direction:column;min-height:80px;gap:0;}.follow-actions {width:100%;justify-content:space-between;}.timing-note {padding:10px 16px;}.reading-text {height:58dvh;min-height:300px;padding:16px 8px 28px;}
     .reader-footer {padding:8px 6px;gap:2px;}.reader-footer button {font-size:.7rem;padding:8px 6px;}.passage {padding:11px 10px 5px;}
   }

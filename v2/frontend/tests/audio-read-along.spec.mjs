@@ -81,6 +81,24 @@ function wordDocument() {
     ] },
   ] };
 }
+function longWordDocument() {
+  const text = Array.from({ length: 120 }, (_, index) => `word${String(index).padStart(3, '0')}`).join(' ');
+  const words = [...text.matchAll(/\S+/g)].map((match, index) => [match.index, match.index + match[0].length, 1 + index * .4, 1.32 + index * .4]);
+  return { available: true, version: 1, itemId: 'book', title: 'Fixture audiobook', duration: 60, chapters: [
+    { id: 'long-words', title: 'A long paragraph', start: 0, end: 60, paragraphs: [
+      { id: 'long-words-one', text, start: 1, end: 50, words },
+      { id: 'long-after', text: 'The next paragraph stays available below the long one.', start: 51, end: 59 },
+    ] },
+  ] };
+}
+async function spokenIsReadable(text) {
+  return text.evaluate(element => {
+    const spoken = element.querySelector('.spoken-current');
+    if (!spoken) return false;
+    const pane = element.getBoundingClientRect(), bounds = spoken.getClientRects()[0];
+    return bounds.top >= Math.max(0, pane.top) + 10 && bounds.bottom <= Math.min(window.innerHeight, pane.top + element.clientHeight) - 20;
+  });
+}
 async function watchScroll(text) {
   await text.evaluate(element => {
     const scrollTo = element.scrollTo.bind(element);
@@ -350,15 +368,88 @@ test('partial word preparation is explained and refreshing adds chapters without
   await page.locator('audio').evaluate(media => media.dataset.identity = 'partial-word-player');
   await page.getByRole('button', { name: 'Read along', exact: true }).click();
   const reader = page.getByRole('region', { name: 'Read along', exact: true });
-  await expect(reader.getByText(/Word highlights ready in 1 of 3 chapters/)).toBeVisible();
+  await expect(reader.getByText(/Word highlights available in 1 of 3 chapters/)).toBeVisible();
   await expect(reader.locator('.spoken-current')).toHaveText('Chapter');
   for (const chapter of state.response.chapters) chapter.paragraphs[0].words = [[0, 7, chapter.paragraphs[0].start, chapter.paragraphs[0].start + .5]];
   await reader.getByRole('button', { name: 'Check for updates', exact: true }).click();
   await expect(reader.locator('.spoken-current')).toHaveText('Chapter');
-  await expect(reader.getByText(/Word highlights ready in/)).toHaveCount(0);
+  await expect(reader.getByText(/Word highlights available in/)).toHaveCount(0);
   expect(await page.locator('audio').evaluate(media => ({ identity: media.dataset.identity, position: media.currentTime, paused: media.paused }))).toEqual({ identity: 'partial-word-player', position: 1.2, paused: true });
   expect(await reader.locator('.spoken-word').count()).toBe(1); expect(state.requests).toBe(2);
   const box = await reader.boundingBox(); expect(box.x).toBeGreaterThanOrEqual(0); expect(box.x + box.width).toBeLessThanOrEqual(390);
   await reader.screenshot({ path: '/tmp/readalong-phone-word.png' });
+  expect(state.errors).toEqual([]);
+});
+
+
+test('phone long paragraphs advance by readable lines without moving controls and honor manual browsing', async ({ page }) => {
+  await page.setViewportSize({ width: 360, height: 780 });
+  const state = await fixture(page); state.response = longWordDocument(); await position(page, 1.05);
+  await page.getByRole('button', { name: 'Read along', exact: true }).click();
+  const reader = page.getByRole('region', { name: 'Read along', exact: true }), text = reader.getByRole('region', { name: 'Book text' });
+  await expect(reader.locator('.spoken-current')).toHaveText('word000');
+  const larger = reader.getByRole('button', { name: 'Increase text size' });
+  for (let count = 0; count < 5; count++) await larger.click();
+  await expect(larger).toBeDisabled();
+  // The player and book pane have independent scrolling. Bring the reader into
+  // view once, then ensure narration never scrolls the outer controls for us.
+  await text.scrollIntoViewIfNeeded(); await afterPaint(page);
+  await reader.getByRole('checkbox', { name: 'Auto-scroll' }).uncheck();
+  await reader.getByRole('checkbox', { name: 'Auto-scroll' }).check();
+  await text.scrollIntoViewIfNeeded(); await position(page, 1.05); await afterPaint(page);
+  await expect.poll(() => spokenIsReadable(text)).toBe(true);
+  expect(await text.evaluate(element => element.querySelector('[aria-current="true"] p').clientHeight > element.clientHeight * 3)).toBe(true);
+  expect(await page.getByRole('dialog', { name: 'Audio player' }).evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+  expect(await text.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+  const outer = await page.getByRole('dialog', { name: 'Audio player' }).evaluate(element => ({ top: element.scrollTop, page: window.scrollY }));
+  await watchScroll(text);
+  const outside = await text.evaluate(element => {
+    const pane = element.getBoundingClientRect(), bottom = Math.min(innerHeight, pane.top + element.clientHeight) - 28;
+    return [...element.querySelectorAll('.spoken-word')].findIndex(word => word.getClientRects()[0].bottom > bottom);
+  });
+  expect(outside).toBeGreaterThan(4);
+  for (let index = 1; index < outside; index++) { await position(page, 1.05 + index * .4); await afterPaint(page); }
+  expect(await scrollCalls(text)).toEqual([]);
+  await position(page, 1.05 + outside * .4);
+  await expect(reader.locator('.spoken-current')).toHaveText(`word${String(outside).padStart(3, '0')}`);
+  await expect.poll(async () => (await scrollCalls(text)).length).toBe(1);
+  // The following word arrives while the smooth advance may still be running.
+  // It must not repeatedly restart the same animation at higher playback speeds.
+  await position(page, 1.05 + (outside + 1) * .4); await afterPaint(page);
+  expect((await scrollCalls(text)).length).toBe(1);
+  await expect.poll(() => spokenIsReadable(text)).toBe(true);
+  const [advance] = await scrollCalls(text); expect(advance.behavior).toBe('smooth');
+  await expect.poll(() => text.evaluate(element => Math.abs(element.scrollTop - element.readerScrollCalls[0].top))).toBeLessThan(2);
+  const settled = await text.evaluate(element => element.scrollTop);
+  expect(settled).toBeGreaterThan(100);
+  // Paused narration and the small unmatched interval after a word stay still.
+  await position(page, 1.35 + (outside + 1) * .4); await afterPaint(page);
+  await expect(reader.locator('.spoken-current')).toHaveCount(0);
+  expect(await text.evaluate(element => element.scrollTop)).toBe(settled);
+  expect((await scrollCalls(text)).length).toBe(1);
+  expect(await page.getByRole('dialog', { name: 'Audio player' }).evaluate(element => ({ top: element.scrollTop, page: window.scrollY }))).toEqual(outer);
+  await text.dispatchEvent('touchmove'); await expect(reader.getByRole('button', { name: 'Resume following' })).toBeVisible();
+  await text.evaluate(element => element.scrollTop += 100); const browsed = await text.evaluate(element => element.scrollTop);
+  await position(page, 45.05); await afterPaint(page); expect(await text.evaluate(element => element.scrollTop)).toBe(browsed);
+  await reader.getByRole('button', { name: 'Resume following' }).click(); await text.scrollIntoViewIfNeeded();
+  await expect.poll(() => spokenIsReadable(text)).toBe(true);
+  await reader.screenshot({ path: '/tmp/readalong-phone-long-words.png' });
+  await page.emulateMedia({ reducedMotion: 'reduce' }); await watchScroll(text);
+  await position(page, 1.05); await expect.poll(() => spokenIsReadable(text)).toBe(true);
+  expect((await scrollCalls(text)).every(call => call.behavior === 'instant')).toBe(true);
+  await reader.getByRole('checkbox', { name: 'Auto-scroll' }).uncheck(); await watchScroll(text);
+  await position(page, 45.05); await afterPaint(page); expect(await scrollCalls(text)).toEqual([]);
+  expect(state.errors).toEqual([]);
+});
+
+test('a chapter without words explains paragraph-only highlighting without pretending preparation is running', async ({ page }) => {
+  const state = await fixture(page); state.response = shortDocument();
+  state.response.chapters[0].paragraphs[0].words = [[0, 7, 1, 1.5]]; await position(page, 23.2);
+  await page.getByRole('button', { name: 'Read along', exact: true }).click();
+  const reader = page.getByRole('region', { name: 'Read along', exact: true });
+  await expect(reader.getByText('Paragraph highlights in this chapter', { exact: true })).toBeVisible();
+  await expect(reader.getByRole('status')).toHaveText('This chapter has paragraph highlights only. Word timing is not available here yet.');
+  await position(page, 1.2); await expect(reader.locator('.spoken-current')).toHaveText('Chapter');
+  await expect(reader.getByText('This chapter has paragraph highlights only.', { exact: false })).toHaveCount(0);
   expect(state.errors).toEqual([]);
 });
