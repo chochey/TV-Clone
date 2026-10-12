@@ -8,6 +8,8 @@
   let document = $state(null), loading = $state(true), error = $state(''), unavailable = $state(false), retry = $state(0);
   let unavailableMessage = $state('');
   let readingChapter = $state(0), following = $state(true), fontSize = $state(19), scroller = $state(null);
+  let autoScroll = $state(true);
+  let lastScrolledChapter = -1, lastScrolledParagraph = -1;
   const active = $derived(readAlongPosition(document, position));
   const activeChapter = $derived(active.chapter), activeParagraph = $derived(active.paragraph);
   const chapter = $derived(document?.chapters[readingChapter]);
@@ -15,10 +17,14 @@
   const activeKey = $derived(`${activeChapter}:${activeParagraph}`);
 
   $effect(() => {
+    try { autoScroll = localStorage.getItem('tvclone.readAlong.autoScroll') !== 'off'; } catch { /* Storage may be disabled. */ }
+  });
+
+  $effect(() => {
     const id = itemId; retry;
     const controller = new AbortController();
     let cancelled = false;
-    loading = true; error = ''; unavailable = false; unavailableMessage = ''; document = null; following = true; readingChapter = 0;
+    loading = true; error = ''; unavailable = false; unavailableMessage = ''; document = null; following = true; readingChapter = 0; lastScrolledChapter = -1; lastScrolledParagraph = -1;
     api.audioReadAlong(id, controller.signal).then(value => {
       if (cancelled) return;
       document = readAlongDocument(value, id);
@@ -33,29 +39,53 @@
 
   $effect(() => {
     activeKey;
-    if (!following || !visible || !document || activeChapter < 0) return;
+    if (!autoScroll || !following || !visible || !document || activeChapter < 0) return;
     readingChapter = activeChapter;
   });
 
   $effect(() => {
-    const key = activeKey, selected = readingChapter;
-    if (!following || !visible || !scroller || activeChapter !== selected || activeParagraph < 0) return;
+    const key = activeKey, selected = readingChapter; fontSize;
+    if (!autoScroll || !following || !visible || !scroller || activeChapter !== selected) return;
     let cancelled = false;
     tick().then(() => {
-      if (cancelled || key !== activeKey || !following || !visible) return;
-      const paragraph = scroller?.querySelector('[aria-current="true"]');
+      if (cancelled || key !== activeKey || !autoScroll || !following || !visible) return;
+      const chapterChanged = lastScrolledChapter !== selected;
+      const nextParagraph = !chapterChanged && activeParagraph === lastScrolledParagraph + 1;
+      lastScrolledChapter = selected;
+      if (activeParagraph >= 0) lastScrolledParagraph = activeParagraph;
+      // A newly rendered chapter must not inherit the previous chapter's scroll.
+      if (chapterChanged) scroller.scrollTo({ top: 0, behavior: 'instant' });
+      const paragraph = scroller?.querySelector('[aria-current="true"] p');
       if (!paragraph) return;
-      // Move only the text pane, never the page or playback controls.
-      const pane = scroller.getBoundingClientRect(), bounds = paragraph.getBoundingClientRect();
-      scroller.scrollTop += bounds.top - pane.top - Math.max(16, (pane.height - bounds.height) / 3);
+      const pane = scroller.getBoundingClientRect(), bounds = paragraph.getBoundingClientRect(), height = scroller.clientHeight;
+      // Keep visible text still. For an oversized paragraph, reveal its beginning
+      // once; paragraph timestamps cannot tell us which line is being narrated.
+      const readableHeight = Math.min(bounds.height, height * .65);
+      if (bounds.top >= pane.top + 12 && bounds.top + readableHeight <= pane.top + height - 24) return;
+      const top = scroller.scrollTop + bounds.top - pane.top - 24;
+      const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      // Advance by a screenful only when needed, leaving room for upcoming text.
+      // Move only this pane, never the page or playback controls.
+      scroller.scrollTo({ top: Math.max(0, top), behavior: !nextParagraph || reducedMotion ? 'instant' : 'smooth' });
     });
     return () => { cancelled = true; };
   });
 
   function browse(index) {
-    following = false;
+    pauseFollowing();
     readingChapter = Math.max(0, Math.min(document.chapters.length - 1, Number(index)));
-    if (scroller) scroller.scrollTop = 0;
+    if (scroller) scroller.scrollTo({ top: 0, behavior: 'instant' });
+  }
+  function pauseFollowing() {
+    following = false;
+    // Cancel an in-flight animation immediately when the listener takes over.
+    scroller?.scrollTo({ top: scroller.scrollTop, behavior: 'instant' });
+  }
+  function setAutoScroll(enabled) {
+    autoScroll = enabled;
+    try { localStorage.setItem('tvclone.readAlong.autoScroll', enabled ? 'on' : 'off'); } catch { /* Storage may be disabled. */ }
+    if (enabled) resumeFollowing();
+    else pauseFollowing();
   }
   function resumeFollowing() {
     if (activeChapter >= 0) readingChapter = activeChapter;
@@ -63,7 +93,7 @@
   }
   function readingKey(event) {
     if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) {
-      following = false;
+      pauseFollowing();
       // These keys scroll the reader, not the global audio player.
       event.stopPropagation();
     }
@@ -83,14 +113,18 @@
       <div class="text-size" role="group" aria-label="Reading text size"><button aria-label="Decrease text size" onclick={() => fontSize = Math.max(16, fontSize - 2)} disabled={fontSize <= 16}>A−</button><button aria-label="Increase text size" onclick={() => fontSize = Math.min(29, fontSize + 2)} disabled={fontSize >= 29}>A+</button></div>
     </div>
     <div class="follow-status">
-      <span>{following ? 'Following narration' : 'Browsing text · audio continues'}</span>
-      {#if !following}<button onclick={resumeFollowing}>Resume following</button>{/if}
+      <span>{!autoScroll ? 'Highlight only · scroll at your own pace' : following ? 'Following narration' : 'Browsing text · audio continues'}</span>
+      <div class="follow-actions">
+        <label class="auto-scroll"><input type="checkbox" checked={autoScroll} onchange={event => setAutoScroll(event.currentTarget.checked)} /> Auto-scroll</label>
+        {#if autoScroll && !following}<button onclick={resumeFollowing}>Resume following</button>{/if}
+      </div>
     </div>
-    {#if activeParagraph < 0}<p class="timing-note" role="status">Text is not synchronized at this point in the audio. Following will resume with the next matched passage.</p>{/if}
+    <div class="reading-body">
+    {#if activeParagraph < 0}<p class="timing-note" role="status">Text is not synchronized at this point in the audio. Highlighting will resume with the next matched passage.</p>{/if}
     <!-- This scrollable reading region is focusable so keyboard readers can browse without moving playback. -->
     <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
     <div class="reading-text" bind:this={scroller} tabindex="0" role="region" aria-label="Book text" style={`--reading-size:${fontSize}px`}
-      onwheel={() => following = false} ontouchmove={() => following = false} onpointerdown={() => following = false} onkeydown={readingKey}>
+      onwheel={pauseFollowing} ontouchmove={pauseFollowing} onpointerdown={pauseFollowing} onkeydown={readingKey}>
       <h3>{chapter.title}</h3>
       {#each chapter.paragraphs as paragraph, index (paragraph.id)}
         <div class="passage" class:current={currentParagraph === index} aria-current={currentParagraph === index ? 'true' : undefined}>
@@ -101,6 +135,7 @@
           </div>
         </div>
       {/each}
+    </div>
     </div>
     <footer class="reader-footer"><button onclick={() => browse(readingChapter - 1)} disabled={readingChapter === 0}>← Previous chapter</button><span>{readingChapter + 1} / {document.chapters.length}</span><button onclick={() => browse(readingChapter + 1)} disabled={readingChapter === document.chapters.length - 1}>Next chapter →</button></footer>
   {/if}
@@ -120,11 +155,15 @@
   button:hover:not(:disabled) {background:#bd9cff20;}
   .text-size {display:flex;gap:4px;padding-bottom:1px;}
   .text-size button {min-width:42px;font-size:.9rem;border:1px solid #6b5b7d;}
-  .follow-status {display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:48px;padding:0 24px;font-size:.72rem;color:#ccbae3;}
+  .follow-status {display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:54px;padding:4px 24px;font-size:.72rem;color:#ccbae3;}
+  .follow-actions {display:flex;align-items:center;justify-content:flex-end;gap:12px;flex-shrink:0;}
+  .auto-scroll {display:flex;align-items:center;gap:7px;min-height:40px;cursor:pointer;white-space:nowrap;}
+  .auto-scroll input {width:17px;height:17px;accent-color:#cba6ff;cursor:pointer;}
   .follow-status button {color:#22172f;background:#d2b4ff;font-weight:650;}
   .follow-status button:hover {background:#e0cbff;}
-  .timing-note {font-size:.75rem;line-height:1.5;padding:12px 24px;margin:0;background:#302639;color:#e1d2ee;border-top:1px solid #ffffff12;}
-  .reading-text {height:clamp(320px,58vh,740px);overflow:auto;overscroll-behavior:contain;scrollbar-color:#6f5e84 #191420;scrollbar-gutter:stable;padding:20px 22px 36px;outline-offset:-4px;}
+  .reading-body {position:relative;}
+  .timing-note {position:absolute;bottom:0;left:0;right:0;z-index:1;pointer-events:none;font-size:.75rem;line-height:1.5;padding:12px 24px;margin:0;background:#302639f5;color:#e1d2ee;border-top:1px solid #ffffff12;}
+  .reading-text {height:clamp(320px,58vh,740px);overflow:auto;overflow-anchor:none;overscroll-behavior:contain;scrollbar-color:#6f5e84 #191420;scrollbar-gutter:stable;padding:20px 22px 36px;outline-offset:-4px;}
   .reading-text h3 {font-family:Georgia,serif;font-size:1.5rem;line-height:1.4;padding:0 14px;margin:0 0 22px;}
   .passage {padding:13px 14px 6px;margin:0 0 7px;border-left:3px solid transparent;border-radius:4px 9px 9px 4px;}
   .passage.current {background:#362547;border-left-color:#cba6ff;}
@@ -135,11 +174,11 @@
   .reader-message {min-height:240px;padding:32px 24px;color:#ded1ec;line-height:1.6;font-size:.9rem;}
   .reader-message h3 {font-size:1rem;margin-bottom:10px;}
   .reader-message button {margin-top:14px;border:1px solid #ad8bcf;}
-  button:focus-visible,select:focus-visible,.reading-text:focus-visible {outline:3px solid #cba6ff;outline-offset:3px;}
+  button:focus-visible,select:focus-visible,input:focus-visible,.reading-text:focus-visible {outline:3px solid #cba6ff;outline-offset:3px;}
   button:disabled {opacity:.4;cursor:default;}
   @media(max-width:640px) {
     .reader-heading {padding:18px 16px 10px;}.reader-label {display:none;}.reader-toolbar {padding:10px 16px;gap:8px;}
-    .follow-status {padding:0 16px;}.timing-note {padding:10px 16px;}.reading-text {height:58dvh;min-height:300px;padding:16px 8px 28px;}
+    .follow-status {padding:4px 16px;align-items:flex-start;flex-direction:column;min-height:80px;gap:0;}.follow-actions {width:100%;justify-content:space-between;}.timing-note {padding:10px 16px;}.reading-text {height:58dvh;min-height:300px;padding:16px 8px 28px;}
     .reader-footer {padding:8px 6px;gap:2px;}.reader-footer button {font-size:.7rem;padding:8px 6px;}.passage {padding:11px 10px 5px;}
   }
 </style>

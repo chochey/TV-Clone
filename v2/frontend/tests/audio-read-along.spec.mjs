@@ -62,6 +62,30 @@ async function fixture(page) {
   return state;
 }
 async function position(page, time) { await page.locator('audio').evaluate((audio, time) => { audio.pause(); audio.currentTime = time; audio.dispatchEvent(new Event('timeupdate')); }, time); }
+async function afterPaint(page) { await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))); }
+function shortDocument() {
+  const value = document();
+  for (const chapter of value.chapters) for (const [index, passage] of chapter.paragraphs.entries()) {
+    passage.text = `${chapter.title} passage ${index + 1}. A short passage.`;
+  }
+  return value;
+}
+async function watchScroll(text) {
+  await text.evaluate(element => {
+    const scrollTo = element.scrollTo.bind(element);
+    element.readerScrollCalls = [];
+    element.scrollTo = options => { element.readerScrollCalls.push(options); scrollTo(options); };
+  });
+}
+async function scrollCalls(text) { return text.evaluate(element => element.readerScrollCalls); }
+async function activeIsReadable(text) {
+  return text.evaluate(element => {
+    const paragraph = element.querySelector('[aria-current="true"] p');
+    if (!paragraph) return false;
+    const pane = element.getBoundingClientRect(), bounds = paragraph.getBoundingClientRect();
+    return bounds.top >= pane.top + 10 && bounds.top + Math.min(bounds.height, element.clientHeight * .65) <= pane.top + element.clientHeight - 20;
+  });
+}
 
 test('reading loads on demand and follows actual time without replacing or interrupting audio', async ({ page }) => {
   const state = await fixture(page), audio = page.locator('audio');
@@ -150,5 +174,102 @@ test('missing text and failed or cancelled loads leave playback usable and retry
   await expect(page.getByRole('region', { name: 'Read along', exact: true })).toHaveCount(0);
   await toggle.click(); await expect(page.getByRole('region', { name: 'Book text' })).toBeVisible();
   expect(await page.locator('audio').evaluate(audio => audio.paused)).toBe(false);
+  expect(state.errors).toEqual([]);
+});
+
+test('visible passages stay still and ordinary progression scrolls only when the next passage needs room', async ({ page }) => {
+  const state = await fixture(page); state.response = shortDocument(); await position(page, 1.25);
+  await page.getByRole('button', { name: 'Read along', exact: true }).click();
+  const reader = page.getByRole('region', { name: 'Read along', exact: true }), text = reader.getByRole('region', { name: 'Book text' });
+  await expect(reader.locator('[aria-current="true"]')).toContainText('Chapter 1 passage 1.'); await afterPaint(page);
+  await watchScroll(text);
+  const start = await text.evaluate(element => element.scrollTop);
+  const outside = await text.evaluate(element => {
+    const pane = element.getBoundingClientRect();
+    return [...element.querySelectorAll('.passage p')].findIndex(passage => passage.getBoundingClientRect().bottom > pane.top + element.clientHeight - 24);
+  });
+  expect(outside).toBeGreaterThan(1);
+  const outer = await page.getByRole('dialog', { name: 'Audio player' }).evaluate(element => ({ top: element.scrollTop, page: window.scrollY }));
+  for (let index = 1; index < outside; index++) {
+    await position(page, index + 1.25);
+    await expect(reader.locator('[aria-current="true"]')).toContainText(`Chapter 1 passage ${index + 1}.`); await afterPaint(page);
+    expect(await text.evaluate(element => element.scrollTop)).toBe(start);
+    expect(await scrollCalls(text)).toEqual([]);
+  }
+  await position(page, outside + 1.25);
+  await expect(reader.locator('[aria-current="true"]')).toContainText(`Chapter 1 passage ${outside + 1}.`);
+  await expect.poll(async () => (await scrollCalls(text)).length).toBe(1);
+  const [advance] = await scrollCalls(text); expect(advance.behavior).toBe('smooth');
+  await expect.poll(() => text.evaluate(element => Math.abs(element.scrollTop - element.readerScrollCalls[0].top))).toBeLessThan(2);
+  expect(await activeIsReadable(text)).toBe(true);
+  const settled = await text.evaluate(element => element.scrollTop);
+  for (const fraction of [.4, .6, .8]) { await position(page, outside + 1 + fraction); await afterPaint(page); }
+  expect(await text.evaluate(element => element.scrollTop)).toBe(settled); expect((await scrollCalls(text)).length).toBe(1);
+  expect(await page.getByRole('dialog', { name: 'Audio player' }).evaluate(element => ({ top: element.scrollTop, page: window.scrollY }))).toEqual(outer);
+  expect(state.errors).toEqual([]);
+});
+
+test('highlight-only mode stays put through passages and timing gaps and remembers the choice after reopening', async ({ page }) => {
+  const state = await fixture(page); state.response = shortDocument(); await position(page, 2.25);
+  const toggle = page.getByRole('button', { name: 'Read along', exact: true }); await toggle.click();
+  const reader = page.getByRole('region', { name: 'Read along', exact: true }), text = reader.getByRole('region', { name: 'Book text' });
+  await expect(reader.locator('[aria-current="true"]')).toContainText('Chapter 1 passage 2.');
+  await reader.getByRole('checkbox', { name: 'Auto-scroll' }).uncheck();
+  await text.evaluate(element => element.scrollTop = 55); await afterPaint(page); await watchScroll(text);
+  const before = await text.boundingBox();
+  await position(page, 3.25); await expect(reader.locator('[aria-current="true"]')).toContainText('Chapter 1 passage 3.'); await afterPaint(page);
+  expect(await text.evaluate(element => element.scrollTop)).toBe(55);
+  await position(page, 17.5); await expect(reader.getByText(/Text is not synchronized at this point/)).toBeVisible(); await afterPaint(page);
+  expect(await text.boundingBox()).toEqual(before); expect(await text.evaluate(element => element.scrollTop)).toBe(55);
+  await position(page, 23.25); await afterPaint(page);
+  await expect(reader.getByLabel('Reading chapter')).toHaveValue('0'); expect(await text.evaluate(element => element.scrollTop)).toBe(55);
+  expect(await scrollCalls(text)).toEqual([]);
+  await page.locator('audio').evaluate(audio => audio.dataset.identity = 'highlight-only-player');
+  await toggle.click(); await toggle.click(); await expect(reader.getByRole('checkbox', { name: 'Auto-scroll' })).not.toBeChecked();
+  await expect(reader.getByText('Highlight only · scroll at your own pace')).toBeVisible(); await afterPaint(page);
+  expect(await text.evaluate(element => element.scrollTop)).toBe(0);
+  expect(await page.locator('audio').evaluate(audio => ({ identity: audio.dataset.identity, time: audio.currentTime }))).toEqual({ identity: 'highlight-only-player', time: 23.25 });
+  await reader.getByRole('checkbox', { name: 'Auto-scroll' }).check(); await expect.poll(() => activeIsReadable(text)).toBe(true);
+  await expect(reader.getByText('Following narration', { exact: true })).toBeVisible(); expect(state.errors).toEqual([]);
+});
+
+test('reduced motion and distant seeks position the current passage without animated travel', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  const state = await fixture(page); state.response = shortDocument(); await position(page, 1.25);
+  await page.getByRole('button', { name: 'Read along', exact: true }).click();
+  const reader = page.getByRole('region', { name: 'Read along', exact: true }), text = reader.getByRole('region', { name: 'Book text' });
+  await expect(reader.locator('[aria-current="true"]')).toContainText('Chapter 1 passage 1.'); await afterPaint(page); await watchScroll(text);
+  for (let index = 2; index <= 8; index++) { await position(page, index + .25); await afterPaint(page); }
+  expect((await scrollCalls(text)).length).toBeGreaterThan(0); expect((await scrollCalls(text)).every(call => call.behavior === 'instant')).toBe(true);
+  expect(await activeIsReadable(text)).toBe(true);
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await text.evaluate(element => element.readerScrollCalls = []);
+  await position(page, 41.25); await expect(reader.getByLabel('Reading chapter')).toHaveValue('2'); await afterPaint(page);
+  expect(await activeIsReadable(text)).toBe(true);
+  await position(page, 1.25); await expect(reader.getByLabel('Reading chapter')).toHaveValue('0'); await afterPaint(page);
+  expect(await activeIsReadable(text)).toBe(true); expect((await scrollCalls(text)).length).toBeGreaterThan(0);
+  expect((await scrollCalls(text)).every(call => call.behavior === 'instant')).toBe(true); expect(state.errors).toEqual([]);
+});
+
+test('a long passage on a phone stays stable at large text size and manual browsing resumes deliberately', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const state = await fixture(page); await position(page, 8.25);
+  await page.getByRole('button', { name: 'Read along', exact: true }).click();
+  const reader = page.getByRole('region', { name: 'Read along', exact: true }), text = reader.getByRole('region', { name: 'Book text' });
+  await expect(reader.locator('[aria-current="true"]')).toContainText('Chapter 1 passage 8.');
+  const larger = reader.getByRole('button', { name: 'Increase text size' });
+  for (let count = 0; count < 5; count++) await larger.click();
+  await expect(larger).toBeDisabled(); await afterPaint(page);
+  expect(await text.evaluate(element => element.querySelector('[aria-current="true"] p').getBoundingClientRect().height > element.clientHeight)).toBe(true);
+  expect(await activeIsReadable(text)).toBe(true); await watchScroll(text);
+  const fixed = await text.evaluate(element => element.scrollTop);
+  for (const time of [8.4, 8.55, 8.7, 8.85]) { await position(page, time); await afterPaint(page); }
+  expect(await text.evaluate(element => element.scrollTop)).toBe(fixed); expect(await scrollCalls(text)).toEqual([]);
+  await text.dispatchEvent('touchmove'); await expect(reader.getByRole('button', { name: 'Resume following' })).toBeVisible();
+  await text.evaluate(element => element.scrollTop += 125); const browsed = await text.evaluate(element => element.scrollTop);
+  await position(page, 9.25); await afterPaint(page); expect(await text.evaluate(element => element.scrollTop)).toBe(browsed);
+  await reader.getByRole('button', { name: 'Resume following' }).click(); await expect.poll(() => activeIsReadable(text)).toBe(true);
+  expect(await page.getByRole('dialog', { name: 'Audio player' }).evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await reader.screenshot({ path: '/tmp/readalong-phone-stable.png' });
   expect(state.errors).toEqual([]);
 });
