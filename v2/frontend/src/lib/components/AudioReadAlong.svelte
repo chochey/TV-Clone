@@ -23,7 +23,7 @@
   const chapterHasWords = $derived(chapter?.paragraphs.some(passage => passage.words?.length));
   const wordParagraph = $derived(currentParagraph >= 0 ? chapter?.paragraphs[currentParagraph] : null);
   const wordParts = $derived(readAlongWordParts(wordParagraph));
-  const currentWord = $derived(readAlongWordAt(wordParagraph?.words, narrationTime));
+  const currentWord = $derived(readAlongWordAt(wordParagraph?.words, narrationTime, wordParagraph?.text));
 
   $effect(() => { narrationTime = position; });
 

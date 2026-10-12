@@ -67,6 +67,37 @@ test('word timing follows exact intervals and leaves pauses and unmatched text u
   assert.equal(readAlongWordAt(undefined, 12), -1);
 });
 
+test('short gaps between consecutive words hold the previous highlight without anticipating the next', () => {
+  const text = 'One\t two\nthree four';
+  const words = [[0, 3, 1, 1.5], [5, 8, 1.75, 2], [9, 14, 2.1, 2.5], [15, 19, 3, 3.5]];
+  for (const time of [1.5, 1.6, 1.749]) assert.equal(readAlongWordAt(words, time, text), 0);
+  assert.equal(readAlongWordAt(words, 1.75, text), 1);
+  assert.equal(readAlongWordAt(words, 2.05, text), 1);
+  assert.equal(readAlongWordAt(words, 2.1, text), 2);
+  // A seek uses only its new clock position, with no remembered highlight.
+  assert.equal(readAlongWordAt(words, 3.2, text), 3);
+  assert.equal(readAlongWordAt(words, 1.6, text), 0);
+  for (const time of [0, 0.999, 2.5, 2.6, 2.999, 3.5, 99, NaN, Infinity]) {
+    assert.equal(readAlongWordAt(words, time, text), -1);
+  }
+  assert.equal(readAlongWordAt(words, 1.6), -1);
+  const longerGap = [[0, 3, 1, 1.5], [5, 8, 1.751, 2]];
+  assert.equal(readAlongWordAt(longerGap, 1.6, text), -1);
+});
+
+test('gap smoothing preserves omitted words, punctuation boundaries and UTF-16 offsets', () => {
+  for (const text of ['One missing two', 'One, two', 'One\u2014two', 'Onetwo']) {
+    const words = [[0, 3, 1, 1.5], [text.indexOf('two'), text.length, 1.6, 2]];
+    assert.equal(readAlongWordAt(words, 1.55, text), -1);
+    assert.equal(readAlongWordAt(words, 1.6, text), 1);
+  }
+  const text = '\ud83d\udc4b\u00a0caf\u00e9\u2003next';
+  const words = [[0, 2, 1, 1.5], [3, 7, 1.6, 2], [8, 12, 2.1, 2.5]];
+  assert.equal(readAlongWordAt(words, 1.55, text), 0);
+  assert.equal(readAlongWordAt(words, 2.05, text), 1);
+  assert.equal(readAlongWordAt(words, 2.1, text), 2);
+});
+
 test('word spans preserve punctuation, whitespace, Unicode and unmatched text exactly', () => {
   const raw = fixture(), paragraph = raw.chapters[0].paragraphs[0];
   paragraph.text = '😀 “Hello,”\t  reader.\n<unmatched> words remain.';

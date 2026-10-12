@@ -328,6 +328,31 @@ test('spoken words follow seeks with exact text, paragraph fallback and no extra
   expect(state.errors).toEqual([]);
 });
 
+test('brief gaps keep consecutive words steady while omitted words and pauses remain unhighlighted', async ({ page }) => {
+  const state = await fixture(page); state.response = wordDocument();
+  const paragraph = state.response.chapters[0].paragraphs[0];
+  paragraph.text = 'First second omitted last after.';
+  paragraph.words = [[0, 5, 1, 2], [6, 12, 2.1, 3], [21, 25, 3.1, 4], [26, 31, 5, 6]];
+  await position(page, 1.2);
+  await page.getByRole('button', { name: 'Read along', exact: true }).click();
+  const reader = page.getByRole('region', { name: 'Read along', exact: true }), text = reader.getByRole('region', { name: 'Book text' });
+  const spoken = reader.locator('.spoken-current');
+  await expect(spoken).toHaveText('First'); await afterPaint(page); await watchScroll(text);
+  const bounds = await reader.locator('.passage p').first().boundingBox(), scroll = await text.evaluate(element => element.scrollTop);
+  await position(page, 2.05); await expect(spoken).toHaveText('First');
+  await position(page, 2.1); await expect(spoken).toHaveText('second');
+  await position(page, 3.05); await expect(spoken).toHaveCount(0);
+  await position(page, 3.2); await expect(spoken).toHaveText('last');
+  await position(page, 4.05); await expect(spoken).toHaveCount(0);
+  await position(page, 5.2); await expect(spoken).toHaveText('after');
+  await position(page, 6); await expect(spoken).toHaveCount(0);
+  await position(page, 2.05); await expect(spoken).toHaveText('First'); await afterPaint(page);
+  expect(await reader.locator('.passage p').first().boundingBox()).toEqual(bounds);
+  expect(await text.evaluate(element => element.scrollTop)).toBe(scroll); expect(await scrollCalls(text)).toEqual([]);
+  expect(await reader.locator('.passage p').first().textContent()).toBe(paragraph.text);
+  expect(state.errors).toEqual([]);
+});
+
 test('word highlighting reads the media clock between timeupdate events and keeps pause, speed and minimization stable', async ({ page }) => {
   const state = await fixture(page); state.response = wordDocument(); await position(page, 1.2);
   await page.getByRole('button', { name: 'Read along', exact: true }).click();
@@ -422,9 +447,9 @@ test('phone long paragraphs advance by readable lines without moving controls an
   await expect.poll(() => text.evaluate(element => Math.abs(element.scrollTop - element.readerScrollCalls[0].top))).toBeLessThan(2);
   const settled = await text.evaluate(element => element.scrollTop);
   expect(settled).toBeGreaterThan(100);
-  // Paused narration and the small unmatched interval after a word stay still.
+  // Paused narration and the small acoustic gap keep the previous word steady.
   await position(page, 1.35 + (outside + 1) * .4); await afterPaint(page);
-  await expect(reader.locator('.spoken-current')).toHaveCount(0);
+  await expect(reader.locator('.spoken-current')).toHaveText(`word${String(outside + 1).padStart(3, '0')}`);
   expect(await text.evaluate(element => element.scrollTop)).toBe(settled);
   expect((await scrollCalls(text)).length).toBe(1);
   expect(await page.getByRole('dialog', { name: 'Audio player' }).evaluate(element => ({ top: element.scrollTop, page: window.scrollY }))).toEqual(outer);

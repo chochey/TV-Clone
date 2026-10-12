@@ -64,7 +64,7 @@ export function readAlongWordParts(paragraph) {
   return parts;
 }
 
-export function readAlongWordAt(words, position) {
+export function readAlongWordAt(words, position, text) {
   if (!Array.isArray(words) || !finite(position)) return -1;
   let low = 0, high = words.length - 1;
   while (low <= high) {
@@ -73,6 +73,13 @@ export function readAlongWordAt(words, position) {
     else if (position >= word[3]) low = middle + 1;
     else return middle;
   }
+  // Short acoustic gaps between consecutive written words should not make the
+  // highlight blink. Hold the last confirmed word; never anticipate the next
+  // one, fill an omitted word, or carry a highlight across a longer pause.
+  const previous = words[high], next = words[low];
+  if (typeof text === 'string' && previous && next &&
+    next[2] - previous[3] <= 0.25 &&
+    /^\s+$/u.test(text.slice(previous[1], next[0]))) return high;
   return -1;
 }
 
