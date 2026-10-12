@@ -35,7 +35,6 @@ const { VIDEO_EXTENSIONS, AUDIO_EXTENSIONS, isAudioFile, normalizeFolderMediaKin
 const { FolderError, validateFolderPath, normalizeFolder, publicSections, sectionId, overlapsFolder } = require('./lib/library-folders');
 const SUPPORTED_EXT = [...VIDEO_EXTENSIONS, ...AUDIO_EXTENSIONS];
 const audioMetadata = require('./lib/audio-metadata')();
-const audioReadAlong = require('./lib/audio-read-along')({ DATA_DIR });
 const SUBTITLE_EXT = ['.srt', '.vtt'];
 const POSTER_EXT = ['.jpg', '.jpeg', '.png', '.webp'];
 
@@ -928,19 +927,6 @@ app.put('/api/audio/preferences',requireAuth,audioProfileRoute((data,req)=>audio
 app.get('/api/audio/bookmarks/:id',requireAuth,ensureLibrary,audioProfileRoute(data=>data));
 app.post('/api/audio/bookmarks/:id',requireAuth,ensureLibrary,audioProfileRoute((data,req)=>audioProfile.addBookmark(data,req.params.id,req.body)));
 app.delete('/api/audio/bookmarks/:id/:bookmarkId',requireAuth,ensureLibrary,audioProfileRoute((data,req)=>audioProfile.removeBookmark(data,req.params.id,req.params.bookmarkId)));
-
-// Prepared book text is loaded only when a listener opens the reader.
-app.get('/api/audio/read-along/:id', requireAuth, ensureLibrary, async (req, res) => {
-  res.set('Cache-Control', 'private, no-store');
-  if (!getRequestProfile(req)) return res.status(403).json({ error: 'Cannot access other profiles' });
-  const id = req.params.id;
-  const filePath = fileIndex[id];
-  if (!/^[a-f0-9]{16}$/.test(id) || !scanLibrary().some(item => item.id === id && item.mediaKind === 'audio') ||
-      !filePath || !isAudioFile(filePath) || playbackIssueForFile(filePath)) {
-    return res.status(404).json({ error: 'Audiobook not found' });
-  }
-  res.json(await audioReadAlong.get(id, filePath));
-});
 
 app.put('/api/subtitle-offset/:id', requireAuth, (req, res) => {
   const profileId = getRequestProfile(req);

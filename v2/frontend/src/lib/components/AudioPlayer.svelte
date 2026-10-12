@@ -6,14 +6,12 @@
   import { audioPresentation, audioRemaining, audioChapters, activeAudioChapter, audioChapterLabel } from '../audio-presentation.js';
   import { mergeAudioDetail } from '../audio-detail.js';
   import { AUDIO_SPEEDS, rememberedAudioSpeed, audioBookmarks, createSleepTimer } from '../listening-tools.js';
-  import AudioReadAlong from './AudioReadAlong.svelte';
 
   let { item, onclose, minimized = false, onminimize, onexpand } = $props();
   let audio = $state(null), dialog = $state(null), closeButton = $state(null);
   let error = $state(''), notice = $state('Loading audio…');
   let currentTime = $state(0), duration = $state(0), speed = $state(1), volume = $state(1), muted = $state(false);
   let playing = $state(false), ready = $state(false), full = $state(null), artworkIndex = $state(0);
-  let readAlongOpen = $state(false);
   const book = $derived(mergeAudioDetail(item, full));
   const presentation = $derived(audioPresentation(book));
   const title = $derived(presentation.title);
@@ -206,12 +204,11 @@
 </script>
 
 <div class="audio-player" class:minimized role={minimized ? 'region' : 'dialog'} aria-modal={minimized ? undefined : 'true'} aria-label={minimized ? 'Audio mini player' : 'Audio player'} tabindex="-1" bind:this={dialog}>
-  <div class="panel" class:reading={readAlongOpen} hidden={minimized}>
+  <div class="panel" hidden={minimized}>
     <header class="listening-header">
       <span class="listening-label"><span class="listening-dot" class:playing aria-hidden="true"></span>Now listening</span>
-      <div class="header-actions"><button class="close reader-toggle" class:active={readAlongOpen} aria-expanded={readAlongOpen} onclick={() => readAlongOpen = !readAlongOpen}>Read along</button><button class="close" onclick={minimize} aria-label="Minimize audio player">Browse while listening</button><button class="close" bind:this={closeButton} onclick={close} aria-label="Close audio player"><span aria-hidden="true">✕</span> Close</button></div>
+      <div class="header-actions"><button class="close" onclick={minimize} aria-label="Minimize audio player">Browse while listening</button><button class="close" bind:this={closeButton} onclick={close} aria-label="Close audio player"><span aria-hidden="true">✕</span> Close</button></div>
     </header>
-    <div class="player-content">
     <div class="listening-body">
       <div class="artwork">
         {#if artwork}<img src={artwork} alt={`Cover of ${title}`} onerror={() => { artworkIndex++; }} />
@@ -291,8 +288,6 @@
         {/if}
       </div>
     </div>
-    {#if readAlongOpen}<AudioReadAlong itemId={item.id} {position} {ready} visible={!minimized} onseek={seekTo} />{/if}
-    </div>
   </div>
   {#if minimized}
     <div class="mini-panel">
@@ -336,15 +331,6 @@
   .tool-error button {text-decoration:underline;min-height:40px;}
   @media(max-width:600px) {.header-actions {gap:0;} .header-actions .close {font-size:.7rem;padding:8px;} .mini-panel {gap:6px;} .mini-book {gap:8px;} .mini-book img {width:38px;height:38px;} .mini-control {min-width:40px;} .mini-close {min-width:32px;} }
   .panel { width:min(100%,960px); margin:auto; border:1px solid #ffffff17; border-radius:20px; background:linear-gradient(145deg,#201b2b,#15121d 70%); box-shadow:0 28px 100px #0008; }
-  .reader-toggle.active {background:#bd9cff25;color:#e1cbff;}
-  .panel.reading {width:min(100%,1360px);}
-  .reading .player-content {display:grid;grid-template-columns:minmax(260px,340px) minmax(0,1fr);gap:24px;padding:24px;align-items:start;}
-  .reading .listening-body {display:block;padding:0;}
-  .reading .artwork {width:110px;margin:0 auto 20px;}
-  .reading .book-info {text-align:center;}
-  .reading h1 {font-size:1.35rem;}
-  .reading .listening-tools,.reading .chapter-picker {display:none;}
-  .reading .transport {margin:16px 0;}
   .listening-header { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:14px 24px; border-bottom:1px solid #ffffff0e; }
   .listening-label { display:flex; align-items:center; gap:9px; font-size:.76rem; font-weight:650; letter-spacing:.1em; text-transform:uppercase; color:#bfb2d0; }
   .listening-dot { width:6px; height:6px; border-radius:50%; background:#6e627e; }
@@ -414,16 +400,5 @@
     .settings { gap:16px; }
     .volume { width:125px; }
   }
-  @media(max-width:900px) {
-    .reading .player-content {grid-template-columns:1fr;padding:18px;gap:20px;}
-    .reading .artwork {display:none;}
-    .reading .kind,.reading .album {display:none;}
-    .reading .timeline {margin-top:12px;}
-    .reading .transport {margin:12px 0;gap:24px;}
-    .reading .play-pause {width:52px;height:52px;}
-    .reading .settings {padding:8px 0 0;}
-    .reading .listening-main {max-width:580px;margin:auto;}
-  }
-  @media(max-width:640px) {.listening-header {flex-wrap:wrap;gap:4px;}.header-actions {flex:1;justify-content:flex-end;}.reading .player-content {padding:12px;}.reading h1 {font-size:1.12rem;margin:0 0 5px;}.reading .artist {font-size:.8rem;}}
   @media(max-width:360px) { .audio-player { padding:10px; } .listening-body { padding:20px; } .volume { width:105px; } .speed { gap:7px; } }
 </style>
