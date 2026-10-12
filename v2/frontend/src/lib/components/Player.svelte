@@ -16,7 +16,7 @@
   // Remounted per item via {#key} in App — `item` is static for this mount.
   let { item, next = null, prev = null, onclose, onnext, onprev } = $props();
 
-  const isDirect = $derived(item.streamMode === 'direct' && !full?.subtitles?.[subIdx]?.bitmap);
+  const isDirect = $derived((full?.streamMode || item.streamMode) === 'direct' && !full?.subtitles?.[subIdx]?.bitmap);
   // HEVC can be copied straight through to a browser that can decode it,
   // instead of being re-encoded to H.264 for the whole runtime.
   const isHevc = (item.codec || '').toLowerCase() === 'hevc';
@@ -625,7 +625,7 @@
     const selected = full?.subtitles?.[i];
     if (!initial && (wasBitmap || selected?.bitmap)) {
       error = '';
-      if (item.streamMode === 'direct' && !selected?.bitmap) {
+      if ((full?.streamMode || item.streamMode) === 'direct' && !selected?.bitmap) {
         ++loadSeq;
         cancelStartup();
         clearTimeout(retryTimer);
@@ -869,6 +869,7 @@
     // Full record: fresh resume point, subtitles, sync offset, audio tracks.
     try { full = await api.item(item.id); } catch { full = null; }
     if (destroyed) return;
+    audioTrack = full?.defaultAudioTrack ?? full?.audioTracks?.find(track => track.isDefault)?.index ?? null;
     const prog = full?.progress || item.progress || {};
     const start = (prog.percent || 0) >= AUTO_WATCHED_PERCENT ? 0 : (prog.currentTime > 5 ? prog.currentTime : 0);
     cur = start;
@@ -1155,7 +1156,8 @@
           {#if openMenu === 'audio'}
             <div class="menu" onclick={(e) => e.stopPropagation()}>
               {#each full.audioTracks as a (a.index)}
-                <button class:active={audioTrack === a.index || (audioTrack == null && a === full.audioTracks[0])}
+                <button class:active={audioTrack === a.index || (audioTrack == null && a.isDefault)}
+                        aria-pressed={audioTrack === a.index || (audioTrack == null && a.isDefault)}
                         onclick={() => setAudio(a.index)}>{a.label}</button>
               {/each}
             </div>

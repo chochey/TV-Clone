@@ -11,6 +11,7 @@
   let magnet = $state('');
   let busy = $state(false);
   let err = $state('');
+  let addNotice = $state('');
   let confirmDel = $state(null); // hash pending delete confirmation
   let timer, destroyed = false, refreshing = false, refreshFailures = 0;
   let connectionErr = $state('');
@@ -44,7 +45,7 @@
   let searching = $state(false);
   let results = $state(null);   // raw, unfiltered results from qbt
   let searchErr = $state('');
-  let added = $state(new Set()); // fileUrls already sent to qbt
+  let added = $state(new Map()); // fileUrl -> confirmed add outcome
 
 
   // ── Result sort + filter controls ───────────────────────────────────
@@ -161,15 +162,20 @@
   function stopSearch() { search.stop(); }
   function startSearch(e) {
     e?.preventDefault();
-    if (q.trim()) search.start(q.trim(), cat, plugin);
+    if (q.trim()) { addNotice = ''; search.start(q.trim(), cat, plugin); }
   }
 
   async function grab(r) {
     if (adding.has(r.fileUrl)) return;
     adding = new Set([...adding, r.fileUrl]);
+    searchErr = ''; addNotice = '';
     try {
-      await api.torrentAdd(r.fileUrl);
-      added = new Set([...added, r.fileUrl]);
+      const outcome = await api.torrentAdd(r.fileUrl);
+      const label = outcome.alreadyExists
+        ? (outcome.imported ? 'Already in your library' : 'Already in Downloads')
+        : 'Sent to downloader';
+      added = new Map([...added, [r.fileUrl, label]]);
+      addNotice = outcome.message || label;
       refresh();
     } catch (e2) {
       searchErr = e2.body?.error || 'Could not add that torrent.';
@@ -179,8 +185,8 @@
   async function add(e) {
     e.preventDefault();
     if (busy || !magnet.trim()) return;
-    busy = true; err = '';
-    try { await api.torrentAdd(magnet.trim()); magnet = ''; await refresh(); }
+    busy = true; err = ''; addNotice = '';
+    try { const outcome = await api.torrentAdd(magnet.trim()); addNotice = outcome.message || 'Sent to downloader.'; magnet = ''; await refresh(); }
     catch (e2) { err = e2.body?.error || 'Could not add torrent.'; }
     finally { busy = false; }
   }
@@ -223,6 +229,7 @@
     <button class="cta" type="submit" disabled={busy || !magnet.trim()}>{busy ? 'Adding…' : 'Add'}</button>
   </form>
   {#if err}<p class="err" role="alert">{err}</p>{/if}
+  {#if addNotice}<p class="addedtag" role="status">{addNotice}</p>{/if}
   {#if connectionErr}<p class="err" role="alert">{connectionErr}</p>{/if}
   {#if vpn?.error}<p class="meta">VPN account time could not be checked. This page does not verify the tunnel connection.</p>{/if}
 
@@ -281,7 +288,7 @@
           </div>
           <div class="actions">
             {#if added.has(r.fileUrl)}
-              <span class="addedtag">✓ Sent to downloader</span>
+              <span class="addedtag">✓ {added.get(r.fileUrl)}</span>
             {:else}
               <button disabled={adding.has(r.fileUrl)} onclick={() => grab(r)}>{adding.has(r.fileUrl) ? 'Adding…' : 'Download'}</button>
             {/if}

@@ -236,6 +236,8 @@ const storageHealth = require('./lib/storage-health')({
 const { findPosterInDir: _findPoster, createDirectoryLookup } = require('./lib/fs-helpers');
 const { preserveFailedEntries, libraryChanged, publicScanState } = require('./lib/library-scan-state');
 const { buildFfmpegArgs } = require('./lib/ffmpeg-args');
+const { selectAudioTrack, selectAudioTrackIndex, audioTrackFromStream, hasAudioTrackMetadata,
+  formatAudioTracks } = require('./lib/audio-track-selection');
 const { embeddedTracks, BITMAP_CODECS } = require('./lib/subtitle-tracks');
 const findPosterInDir = (dir, baseName) => _findPoster(dir, baseName, POSTER_EXT);
 
@@ -1128,6 +1130,18 @@ app.get('/api/item/:id', requireAuth, async (req, res) => {
       const { artwork, ...fields } = metadata;
       safeItem.audioMetadata = { ...fields, coverUrl: artwork ? `/audio-artwork/${item.id}` : null };
     }
+  }
+  if (item.mediaKind !== 'audio' && !isAudioFile(fileIndex[item.id])) {
+    const filePath = fileIndex[item.id];
+    // Old library snapshots may predate language/disposition probing. Refresh
+    // before playback so both the menu and direct/HLS decision use current data.
+    if (!probeCache[filePath] || !hasAudioTrackMetadata(audioTracksCache[filePath])) {
+      await probeFileAsync(filePath);
+    }
+    const tracks = audioTracksCache[filePath] || [];
+    safeItem.audioTracks = formatAudioTracks(tracks, LANG_CODES);
+    safeItem.defaultAudioTrack = selectAudioTrackIndex(tracks);
+    safeItem.streamMode = safeItem.playbackIssue ? 'unsupported' : getStreamMode(filePath);
   }
   const embedded = item.mediaKind === 'audio' || isAudioFile(fileIndex[item.id]) ? [] : await probeSubtitlesAsync(fileIndex[item.id]);
   safeItem.subtitles = [...(item.subtitles || []).filter(s => !s.embedded), ...embeddedTracks(item.id, embedded)];
@@ -2526,13 +2540,14 @@ app.get('/api/conversion/plan', requireAdminSession, (req, res) => {
     if (!filePath || item.mediaKind === 'audio' || isAudioFile(filePath) || seenFiles.has(filePath)) return null;
     seenFiles.add(filePath);
     const tracks = audioTracksCache[filePath] || [];
+    const selectedAudio = selectAudioTrack(tracks);
     return {
       filePath,
       size: item.fileSize || 0,
       videoCodec: probeCache[filePath] || '',
       pixFmt: pixFmtCache[filePath] || '',
-      audioCodec: audioProbeCache[filePath] || '',
-      audioChannels: tracks[0]?.channels || 0,
+      audioCodec: selectedAudio?.codec || audioProbeCache[filePath] || '',
+      audioChannels: selectedAudio?.channels || 0,
       subs: subProbeCache[filePath] || [],
     };
   }).filter(Boolean);
@@ -2601,13 +2616,14 @@ function eligibleContainerFiles(cfg) {
     const filePath = item._filePath;
     if (!filePath || item.mediaKind === 'audio' || isAudioFile(filePath) || sizes.has(filePath)) continue;
     const tracks = audioTracksCache[filePath] || [];
+    const selectedAudio = selectAudioTrack(tracks);
     const c = classifyFile({
       filePath,
       size: item.fileSize || 0,
       videoCodec: probeCache[filePath] || '',
       pixFmt: pixFmtCache[filePath] || '',
-      audioCodec: audioProbeCache[filePath] || '',
-      audioChannels: tracks[0]?.channels || 0,
+      audioCodec: selectedAudio?.codec || audioProbeCache[filePath] || '',
+      audioChannels: selectedAudio?.channels || 0,
       subs: subProbeCache[filePath] || [],
     }, {includeModernVideo: true});
     const tier = ['audioOnly','both'].includes(c.tier) ? 'audio' : c.tier;
@@ -2683,8 +2699,7 @@ function repairFilesChanged(oldPath, newPath, output) {
     const video = output.streams?.find(s => s.codec_type === 'video' && !s.disposition?.attached_pic);
     probeCache[newPath] = video?.codec_name; pixFmtCache[newPath] = video?.pix_fmt;
     heightCache[newPath] = video?.height; levelCache[newPath] = video?.level;
-    audioTracksCache[newPath] = (output.streams || []).filter(s => s.codec_type === 'audio').map(s =>
-      ({index:s.index,codec:s.codec_name,channels:s.channels,lang:s.tags?.language || '',title:s.tags?.title || ''}));
+    audioTracksCache[newPath] = (output.streams || []).filter(s => s.codec_type === 'audio').map(audioTrackFromStream);
     audioProbeCache[newPath] = audioTracksCache[newPath][0]?.codec;
     subProbeCache[newPath] = (output.streams || []).filter(s => s.codec_type === 'subtitle');
   }
@@ -2974,26 +2989,25 @@ function canVaapiDecode(filePath) {
 }
 
 function startFfmpeg(id, filePath, sessionDir, seekTime, startSegNum, audioStreamIndex, quality, hevcPassthrough = false, subtitleStreamIndex = null) {
-  const mode = getStreamMode(filePath);
+  const mode = getStreamMode(filePath, audioStreamIndex);
   const preset = Object.hasOwn(QUALITY_PRESETS, quality) ? QUALITY_PRESETS[quality] : QUALITY_PRESETS.auto;
 
   // Channel count of the track we are actually about to serve — multichannel
   // AAC must be downmixed or Firefox blacks out the whole element. A count of
   // 0 means "not probed yet", which the builder treats as safe to copy.
   const tracks = audioTracksCache[filePath] || [];
-  const chosenTrack = (audioStreamIndex !== undefined && audioStreamIndex !== null)
-    ? tracks.find(t => t.index === audioStreamIndex)
-    : tracks[0];
+  const chosenTrack = selectAudioTrack(tracks, audioStreamIndex);
+  const selectedAudioIndex = chosenTrack?.index ?? audioStreamIndex;
 
   // The branching lives in lib/ffmpeg-args.js so it can be unit-tested without
   // spawning ffmpeg or booting the server. Everything it needs is resolved
   // from the probe caches here and passed in as plain values.
   const { args: ffmpegArgs, hevcCopy, delivery } = buildFfmpegArgs({
-    filePath, sessionDir, seekTime, startSegNum, audioStreamIndex, subtitleStreamIndex,
+    filePath, sessionDir, seekTime, startSegNum, audioStreamIndex: selectedAudioIndex, subtitleStreamIndex,
     mode, preset,
     srcHeight: heightCache[filePath] || 0,
     pixFmt: pixFmtCache[filePath] || '',
-    audioCodec: audioProbeCache[filePath] || '',
+    audioCodec: chosenTrack?.codec || audioProbeCache[filePath] || '',
     audioChannels: chosenTrack?.channels || 0,
     videoCodec: (probeCache[filePath] || '').toLowerCase(),
     hevcPassthrough,
@@ -3118,10 +3132,16 @@ app.get('/hls/:id/:playbackId/master.m3u8', requireAuth, ensureLibrary, async (r
       session.duration = await probeDurationAsync(filePath);
       assertCurrent();
       if (!probeCache[filePath] || (vaapiAvailable() && !pixFmtCache[filePath])
-          || heightCache[filePath] === undefined || levelCache[filePath] === undefined) {
+          || heightCache[filePath] === undefined || levelCache[filePath] === undefined
+          || !hasAudioTrackMetadata(audioTracksCache[filePath])) {
         await probeFileAsync(filePath);
       }
       assertCurrent();
+      const tracks = audioTracksCache[filePath] || [];
+      if (audioTrack !== null && !selectAudioTrack(tracks, audioTrack)) {
+        throw Object.assign(new Error('Invalid audio track'), { status: 400 });
+      }
+      session.audioTrack = selectAudioTrackIndex(tracks, audioTrack);
       // Never reuse a directory left by an earlier generation or restart.
       await fs.promises.rm(session.dir, { recursive: true, force: true });
       assertCurrent();
@@ -3131,7 +3151,7 @@ app.get('/hls/:id/:playbackId/master.m3u8', requireAuth, ensureLibrary, async (r
       const hevcPassthrough = clientHevcLevel > 0
         && (probeCache[filePath] || '').toLowerCase() === 'hevc'
         && srcLevel > 0 && srcLevel <= clientHevcLevel;
-      startFfmpeg(id, filePath, session.dir, startTime, 0, audioTrack, quality, hevcPassthrough, subtitleTrack);
+      startFfmpeg(id, filePath, session.dir, startTime, 0, session.audioTrack, quality, hevcPassthrough, subtitleTrack);
       const libItem = libraryCache?.find(i => i.id === mediaId);
       recordStream({ id: mediaId, title: libItem?.title || path.basename(filePath),
         profileName: session.profileName, mode: getStreamMode(filePath),
@@ -3164,7 +3184,7 @@ app.get('/hls/:id/:playbackId/master.m3u8', requireAuth, ensureLibrary, async (r
     return sendPlaybackFile(req, res, path.join(session.dir, 'stream.m3u8'));
   } catch (err) {
     if (transcodeSessions[id] === session) cleanupSession(id);
-    if (!res.headersSent) res.status(503).send(err.message);
+    if (!res.headersSent) res.status(err.status || 503).send(err.message);
   }
 });
 
@@ -3513,6 +3533,7 @@ app.get('/api/notifications', requireAuth, (req, res) => {
 
 // Add torrent
 const { classifyTorrentUrl } = require('./lib/torrent-url');
+const { splitTorrentAdds, duplicateAddResult } = require('./lib/torrent-add');
 app.post('/api/qbt/torrents/add', requirePermission('canDownload'), requireQbt, async (req, res) => {
   try {
     const { urls, savepath } = req.body;
@@ -3524,18 +3545,32 @@ app.post('/api/qbt/torrents/add', requirePermission('canDownload'), requireQbt, 
     // URL, reply "Ok.", then silently fail to bdecode it, leaving the torrent
     // stuck at "Fetching metadata" while the UI reported success. See
     // lib/torrent-url.js for the torrentproject case that motivated this.
-    const kinds = cleanUrls.split(/\r?\n/).map((u) => u.trim()).filter(Boolean).map(classifyTorrentUrl);
+    const requestedUrls = cleanUrls.split(/\r?\n/).map((u) => u.trim()).filter(Boolean);
+    const kinds = requestedUrls.map(classifyTorrentUrl);
     if (kinds.some((k) => k === 'page')) {
       return res.status(400).json({ ok: false, error: 'That result links to a web page, not a downloadable torrent. Pick a different result or paste a magnet link.' });
     }
     if (kinds.some((k) => k === 'invalid') || kinds.length === 0) {
       return res.status(400).json({ ok: false, error: 'Use a magnet link or torrent URL' });
     }
-    let body = `urls=${encodeURIComponent(cleanUrls)}`;
+    let newUrls = requestedUrls, duplicateResult = null;
+    if (kinds.includes('magnet')) {
+      const torrents = qbtJson(await qbt('GET', '/api/v2/torrents/info'));
+      const split = splitTorrentAdds(requestedUrls, torrents);
+      newUrls = split.newUrls;
+      if (split.existingIndexes.length) {
+        // Receipt reconciliation requires the complete authoritative snapshot.
+        // Passing only matched rows would incorrectly prune other receipts.
+        const decorated = await downloadsWithStatus(torrents);
+        duplicateResult = duplicateAddResult(split.existingIndexes.map(index => decorated[index]), newUrls.length);
+      }
+    }
+    if (!newUrls.length) return res.json(duplicateResult);
+    let body = `urls=${encodeURIComponent(newUrls.join('\n'))}`;
     if (savepath) body += `&savepath=${encodeURIComponent(savepath)}`;
     const r = await qbt('POST', '/api/v2/torrents/add', body);
     if (r.status >= 400 || r.data !== 'Ok.') return res.status(502).json({ ok: false, error: r.data || 'qBittorrent rejected the torrent' });
-    res.json({ ok: true });
+    res.json(duplicateResult || { ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
