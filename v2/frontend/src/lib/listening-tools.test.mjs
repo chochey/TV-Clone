@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createSleepTimer, rememberedAudioSpeed, audioBookmarks, rememberedAudioVolume, rememberAudioVolume } from './listening-tools.js';
+import { createSleepTimer, rememberedAudioSpeed, audioBookmarks, rememberedAudioVolume, rememberAudioVolume, rememberedAudioMuted, rememberAudioMuted } from './listening-tools.js';
 
 const fakeStorage = (initial = {}) => {
   const map = new Map(Object.entries(initial));
@@ -60,4 +60,19 @@ test('remembered speeds and bookmarks reject malformed server values', () => {
   for (const value of [Infinity, -1, null, {}, 'fast']) assert.equal(rememberedAudioSpeed(value), 1);
   assert.deepEqual(audioBookmarks({ bookmarks: [null, { id: 'bad', time: -1 }, { id: 'late', time: 50 }, { id: 'early', time: 4, label: 'Opening' }] })
     .map(bookmark => [bookmark.id, bookmark.label]), [['early', 'Opening'], ['late', '']]);
+});
+
+
+test('mute is remembered, and defaults to sound on', () => {
+  const storage = fakeStorage();
+  assert.equal(rememberedAudioMuted(storage), false, 'an unset preference must not start silent');
+  assert.equal(rememberAudioMuted(true, storage), true);
+  assert.equal(rememberedAudioMuted(storage), true);
+  assert.equal(rememberAudioMuted(false, storage), false);
+  assert.equal(rememberedAudioMuted(storage), false);
+  // Anything unrecognised in storage means "not muted" rather than silence.
+  assert.equal(rememberedAudioMuted(fakeStorage({ 'tvclone.audio.muted': 'yes' })), false);
+  const hostile = { getItem() { throw new Error('denied'); }, setItem() { throw new Error('denied'); } };
+  assert.equal(rememberedAudioMuted(hostile), false);
+  assert.equal(rememberAudioMuted(true, hostile), true, 'playback still mutes even if it cannot be saved');
 });

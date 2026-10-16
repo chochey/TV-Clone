@@ -1,7 +1,6 @@
 {
   "description": "TV-Clone feature backlog. Set passes=true only after testing end-to-end. Do not remove or rename entries.",
   "features": [
-
     {
       "id": "auth-001",
       "category": "auth",
@@ -20,7 +19,6 @@
       "description": "30-day sliding session with HTTP-only cookie",
       "passes": true
     },
-
     {
       "id": "library-001",
       "category": "library",
@@ -57,7 +55,6 @@
       "description": "Local poster detection from media directory",
       "passes": true
     },
-
     {
       "id": "metadata-001",
       "category": "metadata",
@@ -76,7 +73,6 @@
       "description": "IntroDB API integration for automatic intro/outro detection",
       "passes": true
     },
-
     {
       "id": "playback-001",
       "category": "playback",
@@ -137,7 +133,6 @@
       "description": "Max 5 concurrent transcode sessions, idle cleanup after 2 minutes",
       "passes": true
     },
-
     {
       "id": "sprites-001",
       "category": "sprites",
@@ -174,7 +169,6 @@
       "description": "Progress endpoint /api/sprites/progress reports total and completed counts",
       "passes": true
     },
-
     {
       "id": "progress-001",
       "category": "progress",
@@ -199,14 +193,12 @@
       "description": "Mark watched/unwatched manually",
       "passes": true
     },
-
     {
       "id": "queue-001",
       "category": "queue",
       "description": "Per-profile Up Next queue with add/remove",
       "passes": true
     },
-
     {
       "id": "skip-001",
       "category": "skip",
@@ -225,7 +217,6 @@
       "description": "Show-level skip segments apply to all episodes, per-episode overrides supported",
       "passes": true
     },
-
     {
       "id": "admin-001",
       "category": "admin",
@@ -256,14 +247,12 @@
       "description": "Server restart button (permission-gated)",
       "passes": true
     },
-
     {
       "id": "downloads-001",
       "category": "downloads",
       "description": "qBittorrent proxy — search, add, pause/resume, delete torrents",
       "passes": true
     },
-
     {
       "id": "ui-001",
       "category": "ui",
@@ -288,7 +277,6 @@
       "description": "Season/episode detail pages",
       "passes": true
     },
-
     {
       "id": "new-001",
       "category": "sprites",
@@ -322,7 +310,7 @@
       "category": "library",
       "priority": "medium",
       "description": "Watchlist/favorites — per-profile list separate from queue",
-      "passes": false
+      "passes": true
     },
     {
       "id": "new-006",
@@ -336,7 +324,7 @@
       "category": "metadata",
       "priority": "medium",
       "description": "Manual metadata override — let admin edit title, year, poster for any item without relying on OMDB match",
-      "passes": false
+      "passes": true
     },
     {
       "id": "new-008",
@@ -350,7 +338,7 @@
       "category": "ui",
       "priority": "low",
       "description": "Continue watching row on home page showing in-progress items across all types",
-      "passes": false
+      "passes": true
     },
     {
       "id": "new-010",
@@ -380,7 +368,6 @@
       "description": "Dismiss from Recently Added — X button on items in the recently added row to hide them from that list per-profile",
       "passes": true
     },
-
     {
       "id": "sec-001",
       "category": "security",
@@ -414,6 +401,78 @@
       "category": "security",
       "priority": "low",
       "description": "Admin browse endpoint symlink escape — /api/browse blocklist checks string prefixes but does not resolve symlinks, allowing an admin to traverse outside blocked directories via symlinked paths.",
+      "passes": true
+    },
+    {
+      "id": "audio-001",
+      "category": "audiobooks",
+      "description": "Audiobook playback (m4b/mp3/m4a) served direct with byte-range seeking",
+      "passes": true
+    },
+    {
+      "id": "audio-002",
+      "category": "audiobooks",
+      "description": "Listening position saved every 5s and on pause/close/tab-hide, restored per profile",
+      "passes": true
+    },
+    {
+      "id": "audio-003",
+      "category": "audiobooks",
+      "description": "Chapter list and chapter jump from embedded chapter markers",
+      "passes": true
+    },
+    {
+      "id": "audio-004",
+      "category": "audiobooks",
+      "description": "Playback speed remembered per profile on the server",
+      "passes": true
+    },
+    {
+      "id": "audio-005",
+      "category": "audiobooks",
+      "description": "Volume and mute remembered per device, defaulting to full volume when unset",
+      "passes": true
+    },
+    {
+      "id": "audio-006",
+      "category": "audiobooks",
+      "description": "Embedded cover art extracted and served with ETag revalidation",
+      "passes": true
+    },
+    {
+      "id": "audio-007",
+      "category": "audiobooks",
+      "description": "Library indexes the embedded title and author, so books are searchable by either",
+      "passes": true
+    },
+    {
+      "id": "audio-008",
+      "category": "audiobooks",
+      "description": "Per-book bookmarks with optional labels",
+      "passes": true
+    },
+    {
+      "id": "audio-009",
+      "category": "audiobooks",
+      "description": "Sleep timer by minutes or end of chapter",
+      "passes": true
+    },
+    {
+      "id": "audio-010",
+      "category": "audiobooks",
+      "description": "Read-along paragraph highlighting follows narration",
+      "passes": true
+    },
+    {
+      "id": "audio-011",
+      "category": "audiobooks",
+      "description": "Read-along word highlighting bridges words the aligner missed, bounded by confirmed timings",
+      "passes": true
+    },
+    {
+      "id": "audio-012",
+      "category": "audiobooks",
+      "description": "Read-along text available across the library (only 4 of 55 books have prepared text; no generator is checked in)",
       "passes": false
     }
   ]

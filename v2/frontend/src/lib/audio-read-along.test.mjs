@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readAlongDocument, readAlongPosition, readAlongWordAt, readAlongWordParts } from './audio-read-along.js';
+import { readAlongDocument, readAlongPosition, readAlongWordAt, readAlongWordParts, bridgeUntimedWords } from './audio-read-along.js';
 import { api } from './api.js';
 
 const fixture = () => ({ available: true, version: 1, itemId: 'book', title: 'Book', duration: 120, chapters: [
@@ -104,8 +104,13 @@ test('word spans preserve punctuation, whitespace, Unicode and unmatched text ex
   paragraph.words = ['Hello', 'reader', 'remain'].map((word, index) => [paragraph.text.indexOf(word), paragraph.text.indexOf(word) + word.length, 12 + index, 12.5 + index]);
   const parsed = readAlongDocument(raw, 'book').chapters[0].paragraphs[0], parts = readAlongWordParts(parsed);
   assert.equal(parts.map(part => part.text).join(''), paragraph.text);
-  assert.deepEqual(parts.filter(part => part.word >= 0).map(part => part.text), ['Hello', 'reader', 'remain']);
-  assert.ok(parts.some(part => part.word === -1 && part.text.includes('<unmatched>')));
+  // Words the aligner missed are now highlighted too, as one bounded span, so
+  // the highlight stops vanishing mid-sentence. Punctuation and the emoji are
+  // still never spans: nobody "reads" a comma, and lighting one up looks wrong.
+  assert.deepEqual(parts.filter(part => part.word >= 0).map(part => part.text),
+    ['Hello', 'reader', '<unmatched> words', 'remain']);
+  assert.ok(parts.some(part => part.word === -1 && part.text.includes('😀')));
+  assert.ok(parts.some(part => part.word === -1 && part.text.includes(',”')));
   assert.deepEqual(readAlongWordParts({ text: 'Paragraph fallback' }), []);
   assert.deepEqual(readAlongWordParts({ text: 'Paragraph fallback', words: [] }), []);
 });
@@ -126,4 +131,42 @@ test('malformed word ranges cannot split Unicode or extend beyond paragraph text
     const raw = fixture(); raw.chapters[0].paragraphs[0].text = '😀 word'; raw.chapters[0].paragraphs[0].words = [range];
     assert.throws(() => readAlongDocument(raw, 'book'), /Invalid word timing/);
   }
+});
+
+
+test('untimed words bounded by confirmed timings get a highlight', () => {
+  // Forced alignment routinely drops numerals -- the narrator says "forty-three
+  // point one" where the text reads "43.1" -- leaving ~8% of words with no
+  // highlight at all, scattered mid-sentence.
+  const text = 'Views: 43.1 Quadrillion today';
+  const timed = [[0, 6, 10, 11], [24, 29, 14, 15]];   // "Views:" and "today"
+  const filled = bridgeUntimedWords(text, timed, 9.5, 15.5);
+  assert.deepEqual(filled, [
+    [0, 6, 10, 11],      // Views:
+    [7, 23, 11, 14],     // "43.1 Quadrillion" as one bounded span
+    [24, 29, 14, 15],    // today
+  ]);
+  assert.equal(text.slice(7, 23), '43.1 Quadrillion');
+});
+
+test('bridging only happens where confirmed timings bound the run', () => {
+  const text = 'alpha beta gamma';
+  const timed = [[6, 10, 5, 6]];           // only "beta"
+  // No paragraph bounds: leading "alpha" and trailing "gamma" stay untimed,
+  // because nothing proves when the narrator was inside them.
+  assert.deepEqual(bridgeUntimedWords(text, timed), [[6, 10, 5, 6]]);
+  // With paragraph bounds both sides become bounded and are bridged.
+  assert.deepEqual(bridgeUntimedWords(text, timed, 4, 7), [
+    [0, 5, 4, 5], [6, 10, 5, 6], [11, 16, 6, 7],
+  ]);
+  // A zero-length gap cannot carry a span, and an implausible one is left as a
+  // genuinely unread passage rather than parked under a single highlight.
+  assert.deepEqual(bridgeUntimedWords(text, timed, 5, 7), [[6, 10, 5, 6], [11, 16, 6, 7]]);
+  assert.deepEqual(bridgeUntimedWords(text, timed, 5, 999), [[6, 10, 5, 6]]);
+});
+
+test('whitespace-only gaps never gain a span', () => {
+  const text = 'one two';
+  assert.deepEqual(bridgeUntimedWords(text, [[0, 3, 1, 2], [4, 7, 3, 4]]),
+    [[0, 3, 1, 2], [4, 7, 3, 4]]);
 });

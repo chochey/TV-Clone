@@ -250,6 +250,7 @@ let subtitleIndex = {};  // subId -> { absPath, format }
 const probe = require('./lib/probe')({ DATA_DIR, loadJSON, saveJSON });
 const {
   probeCache, pixFmtCache, audioProbeCache, audioTracksCache, subProbeCache, heightCache, levelCache,
+  audioMetaCache,
   corruptedFiles, durationCache,
   probeFileAsync,
   probeDurationAsync, probeDurationWithReason,
@@ -260,6 +261,9 @@ const {
 
 // ── Library conversion (MEDIA_CONVERSION_PLAN.md) — phase 1: read-only
 // planner + config only. Nothing here mutates a media file; that is phase 2+.
+const { probeRunner: audioTextRunner } = require('./lib/media-process');
+const { splitSquashedTitle, audioMetaEntry, audioMetaValid, probeAudioText } = require('./lib/audio-title');
+const { describeCrash } = require('./lib/crash-report');
 const { planConversion, classifyFile } = require('./lib/conversion-plan');
 const conversionConfig = require('./lib/conversion-config')({ DATA_DIR, loadJSON, saveJSON });
 
@@ -489,6 +493,26 @@ async function doRescan(trigger) {
 
       newFileIndex[id] = fullPath;
 
+      // Audiobooks carry their real title and author in the file's own tags.
+      // Prefer those over the squashed filename so the shelf reads properly and
+      // search can match the words people actually type. Cached by path and
+      // validated on size+mtime, so each book is probed once, not every scan.
+      let itemTitle = title, itemArtist = null;
+      if (mediaKind === 'audio' && !playbackIssue) {
+        let meta = audioMetaCache[fullPath];
+        if (!audioMetaValid(meta, { size: fileSize, mtimeMs: addedAt })) {
+          const fields = await probeAudioText(fullPath, { run: (...a) => audioTextRunner.run(...a) });
+          meta = fields ? audioMetaEntry({ size: fileSize, mtimeMs: addedAt }, fields) : null;
+          // markDirty alone only flags the cache; the background probe pool is
+          // what normally flushes it and it skips audio entirely, so without
+          // scheduling a write these results would die with the process and
+          // every restart would re-probe the whole shelf.
+          if (meta) { audioMetaCache[fullPath] = meta; markDirty(); scheduleSaveMediaInfo(); }
+        }
+        itemTitle = meta?.title || splitSquashedTitle(title);
+        itemArtist = meta?.artist || null;
+      }
+
       // Poster (check file's own directory)
       const posterAbsPath = await lookup.poster(fileDir, baseName, POSTER_EXT);
       if (posterAbsPath) newPosterIndex[id] = posterAbsPath;
@@ -531,7 +555,7 @@ async function doRescan(trigger) {
       });
 
       library.push({
-        id, _filePath: fullPath, title, year, type, mediaKind, sectionId: sectionId(dirPath), filename: file,
+        id, _filePath: fullPath, title: itemTitle, artist: itemArtist, year, type, mediaKind, sectionId: sectionId(dirPath), filename: file,
         folder: folder.label || path.basename(dirPath),
         folderPath: folder.path,
         posterUrl: posterAbsPath ? `/poster/${id}` : null,
@@ -678,6 +702,23 @@ function recordStream({ id, title, profileName, mode, codec, quality, seekTime }
 function recordError(context, message) {
   _errorLog.push({ context, message });
 }
+
+// Node treats an unhandled rejection as fatal, so one stray promise in a single
+// request would tear down every live stream and the whole library cache with
+// it. Record it where the admin Logs page can see it and keep serving. An
+// uncaught exception still exits, because process state is no longer
+// trustworthy after one -- but it is logged first, and systemd restarts us.
+process.on('unhandledRejection', reason => {
+  const detail = describeCrash(reason);
+  recordError('unhandled-rejection', detail);
+  console.error('[unhandledRejection]', detail);
+});
+process.on('uncaughtException', error => {
+  const detail = describeCrash(error);
+  recordError('uncaught-exception', detail);
+  console.error('[uncaughtException]', detail);
+  setTimeout(() => process.exit(1), 100);   // let stderr flush, then restart clean
+});
 
 app.post('/api/login', (req, res) => {
   const ip = req.ip;
@@ -1887,9 +1928,23 @@ app.get('/poster/:id', requireAuth, ensureLibrary, (req, res) => {
 app.get('/audio-artwork/:id', requireAuth, ensureLibrary, async (req, res) => {
   const filePath = fileIndex[req.params.id];
   if (!filePath) return res.status(404).send('Not found');
+  // Cover art is derived from the file, so the file's own identity is a sound
+  // validator. This used to send 'no-cache' with no ETag, so every shelf render
+  // refetched every cover -- and because the artwork cache is memory-only, a
+  // miss means re-running an ffmpeg decode. Revalidating skips both.
+  let tag = null;
+  try {
+    const st = await fs.promises.stat(filePath);
+    tag = `"a${st.size.toString(36)}-${Math.round(st.mtimeMs).toString(36)}"`;
+  } catch { /* unreadable: fall through and serve without a validator */ }
+  if (tag && req.headers['if-none-match'] === tag) {
+    res.set({ ETag: tag, 'Cache-Control': 'private, max-age=86400' });
+    return res.status(304).end();
+  }
   const metadata = await audioMetadata.get(filePath);
+  // Never cache the miss: artwork appears as soon as the book is probed.
   if (!metadata?.artwork) return res.status(404).send('No audio artwork available');
-  res.set({ 'Content-Type': 'image/jpeg', 'Cache-Control': 'private, no-cache' });
+  res.set({ 'Content-Type': 'image/jpeg', 'Cache-Control': 'private, max-age=86400', ...(tag ? { ETag: tag } : {}) });
   res.send(metadata.artwork);
 });
 

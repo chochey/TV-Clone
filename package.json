@@ -21,7 +21,7 @@
     "test:report": "npx playwright show-report test-results/html-report"
   },
   "dependencies": {
-    "express": "^4.21.0"
+    "express": "^4.22.3"
   },
   "devDependencies": {
     "@playwright/test": "^1.58.2"

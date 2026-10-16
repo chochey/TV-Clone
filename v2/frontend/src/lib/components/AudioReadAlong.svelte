@@ -6,7 +6,7 @@
 
   let { itemId, position = 0, ready = false, visible = true, audio = null, onseek } = $props();
   let document = $state(null), loading = $state(true), error = $state(''), unavailable = $state(false), retry = $state(0);
-  let unavailableMessage = $state('');
+  let unavailableMessage = $state(''), unavailableRetryable = $state(false);
   let readingChapter = $state(0), following = $state(true), fontSize = $state(19), scroller = $state(null);
   let autoScroll = $state(true);
   let narrationTime = $state(0);
@@ -63,12 +63,13 @@
     const id = itemId; retry;
     const controller = new AbortController();
     let cancelled = false;
-    loading = true; error = ''; unavailable = false; unavailableMessage = ''; document = null; following = true; readingChapter = 0; lastScrolledChapter = -1; lastScrolledParagraph = -1; lastWord = -1; lastFontSize = 0; lastReaderSize = ''; pendingScrollTop = null;
+    loading = true; error = ''; unavailable = false; unavailableMessage = ''; unavailableRetryable = false; document = null; following = true; readingChapter = 0; lastScrolledChapter = -1; lastScrolledParagraph = -1; lastWord = -1; lastFontSize = 0; lastReaderSize = ''; pendingScrollTop = null;
     api.audioReadAlong(id, controller.signal).then(value => {
       if (cancelled) return;
       document = readAlongDocument(value, id);
       unavailable = !document;
       if (!document && typeof value?.message === 'string') unavailableMessage = value.message.slice(0, 400);
+      if (!document) unavailableRetryable = value?.retryable === true;
       if (document) readingChapter = Math.max(0, readAlongPosition(document, position).chapter);
     }).catch(failure => {
       if (!cancelled && failure.name !== 'AbortError') error = 'Could not load the reading text. Your audio can keep playing.';
@@ -182,7 +183,14 @@
   {#if hasWordTimings && wordChapters < document.chapters.length}<div class="word-progress"><span>Word highlights available in {wordChapters} of {document.chapters.length} chapters. Other passages still highlight by paragraph.</span><button onclick={() => retry++}>Check for updates</button></div>{/if}
   {#if loading}<div class="reader-message" role="status">Loading reading text…</div>
   {:else if error}<div class="reader-message" role="alert"><p>{error}</p><button onclick={() => retry++}>Retry reading text</button></div>
-  {:else if unavailable}<div class="reader-message" role="status"><h3>Reading text isn’t ready for this book</h3><p>{unavailableMessage || 'A matching book needs to be added and synchronized before it can follow the narration.'}</p><button onclick={() => retry++}>Check again</button></div>
+  {:else if unavailable}<div class="reader-message" role="status">
+    <h3>{unavailableRetryable ? 'Reading text isn’t ready yet' : 'Read along isn’t set up for this book'}</h3>
+    <p>{unavailableMessage || 'Read along needs matching text prepared and synchronized against the narration.'}</p>
+    <!-- Only a busy reader resolves on its own; everything else waits on text
+         being prepared, so offering "Check again" there just wastes a click. -->
+    {#if unavailableRetryable}<button onclick={() => retry++}>Check again</button>
+    {:else}<p class="reader-hint">Only books with prepared text can follow along. Listening is unaffected.</p>{/if}
+  </div>
   {:else if document}
     {#if hasWordTimings && !chapterHasWords}<p class="chapter-timing-note" role="status">This chapter has paragraph highlights only. Word timing is not available here yet.</p>{/if}
     <div class="reader-toolbar">
@@ -256,6 +264,7 @@
   .reader-footer {display:flex;align-items:center;justify-content:space-between;gap:8px;border-top:1px solid #ffffff18;padding:10px 14px;font-size:.7rem;color:#c8b9d7;}
   .reader-message {min-height:240px;padding:32px 24px;color:#ded1ec;line-height:1.6;font-size:.9rem;}
   .reader-message h3 {font-size:1rem;margin-bottom:10px;}
+  .reader-message .reader-hint {margin-top:10px;color:#a192b5;font-size:.82rem;}
   .reader-message button {margin-top:14px;border:1px solid #ad8bcf;}
   button:focus-visible,select:focus-visible,input:focus-visible,.reading-text:focus-visible {outline:3px solid #cba6ff;outline-offset:3px;}
   button:disabled {opacity:.4;cursor:default;}

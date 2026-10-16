@@ -1,6 +1,52 @@
 const finite = value => typeof value === 'number' && Number.isFinite(value);
 
-// Never fill gaps with estimated timestamps: untimed passages remain readable.
+// Word timings come from forced alignment, which routinely fails on numerals:
+// the narrator says "forty-three point one" where the text reads "43.1". In
+// this library that leaves ~15% of words untimed, scattered mid-sentence, so
+// the highlight kept vanishing and reappearing several times a paragraph.
+//
+// A run of untimed words is bridged only when confirmed timings bound it on
+// both sides: between two timed words, or between a paragraph boundary and the
+// nearest timed word. The narrator is provably inside that interval, so the run
+// gets one span rather than invented per-word boundaries. Deliberately
+// conservative: a zero-length gap gets no span, and an implausibly long one is
+// treated as a genuinely unread passage rather than parked under a highlight.
+const MAX_BRIDGED_GAP = 10;
+const HAS_WORD = /[\p{L}\p{N}]/u;
+const SPACE = /\s/u;
+export function bridgeUntimedWords(text, words, start = null, end = null) {
+  const filled = [];
+  const bridge = (from, until, fromTime, untilTime) => {
+    const between = text.slice(from, until);
+    const gap = untilTime - fromTime;
+    // Only actual words are worth a highlight. A run of punctuation between two
+    // timed words -- a comma and a closing quote, a trailing full stop -- is
+    // not something the narrator "reads", and lighting it up looks like a bug.
+    if (!HAS_WORD.test(between) || !(gap > 0) || gap > MAX_BRIDGED_GAP) return;
+    // Snap to whole words. Trimming whitespace alone would swallow the full
+    // stop that closes the *previous* word, while trimming all punctuation
+    // would bite into words that legitimately start with it, so walk out from
+    // the first and last word character to the nearest space instead.
+    const first = between.search(HAS_WORD);
+    const last = between.length - 1 - [...between].reverse().join('').search(HAS_WORD);
+    let head = first, tailIndex = last;
+    while (head > 0 && !SPACE.test(between[head - 1])) head--;
+    while (tailIndex < between.length - 1 && !SPACE.test(between[tailIndex + 1])) tailIndex++;
+    filled.push([from + head, from + tailIndex + 1, fromTime, untilTime]);
+  };
+  if (finite(start) && words.length) bridge(0, words[0][0], start, words[0][2]);
+  for (let index = 0; index < words.length; index++) {
+    const word = words[index], previous = words[index - 1];
+    if (previous) bridge(previous[1], word[0], previous[3], word[2]);
+    filled.push(word);
+  }
+  const last = words[words.length - 1];
+  if (finite(end) && last) bridge(last[1], text.length, last[3], end);
+  return filled;
+}
+
+// Untimed passages always remain readable; only bounded interior runs are
+// bridged, and never with per-word precision we do not have.
 export function readAlongDocument(value, itemId) {
   if (!value?.available) return null;
   if (value.version !== 1 || value.itemId !== itemId || !finite(value.duration) || value.duration <= 0 || !Array.isArray(value.chapters)) {
@@ -34,6 +80,7 @@ export function readAlongDocument(value, itemId) {
           textEnd = end; wordEnd = until;
           return [start, end, from, until];
         });
+        words = bridgeUntimedWords(paragraph.text, words, paragraph.start, paragraph.end);
       }
       return { id, text: paragraph.text, start: timed ? paragraph.start : null, end: timed ? paragraph.end : null,
         page: Number.isInteger(paragraph.page) && paragraph.page > 0 ? paragraph.page : null, ...(words ? { words } : {}) };

@@ -5,13 +5,13 @@
   import { audioProgressPayload, audioResumePosition, audioPlaybackError, audioPlaybackIssue, startAudioPlayback, audioTime } from '../audio-playback.js';
   import { audioPresentation, audioRemaining, audioChapters, activeAudioChapter, audioChapterLabel } from '../audio-presentation.js';
   import { mergeAudioDetail } from '../audio-detail.js';
-  import { AUDIO_SPEEDS, rememberedAudioSpeed, rememberedAudioVolume, rememberAudioVolume, audioBookmarks, createSleepTimer } from '../listening-tools.js';
+  import { AUDIO_SPEEDS, rememberedAudioSpeed, rememberedAudioVolume, rememberAudioVolume, rememberedAudioMuted, rememberAudioMuted, audioBookmarks, createSleepTimer } from '../listening-tools.js';
   import AudioReadAlong from './AudioReadAlong.svelte';
 
   let { item, onclose, minimized = false, onminimize, onexpand } = $props();
   let audio = $state(null), dialog = $state(null), closeButton = $state(null);
   let error = $state(''), notice = $state('Loading audio…');
-  let currentTime = $state(0), duration = $state(0), speed = $state(1), volume = $state(rememberedAudioVolume()), muted = $state(false);
+  let currentTime = $state(0), duration = $state(0), speed = $state(1), volume = $state(rememberedAudioVolume()), muted = $state(rememberedAudioMuted());
   let playing = $state(false), ready = $state(false), full = $state(null), artworkIndex = $state(0);
   let readAlongOpen = $state(false);
   const book = $derived(mergeAudioDetail(item, full));
@@ -73,7 +73,7 @@
       onMetadata: value => {
         duration = value;
         audio.currentTime = value > 0 && resumePoint >= value ? 0 : resumePoint;
-        currentTime = audio.currentTime; ready = true; audio.playbackRate = speed; audio.volume = volume;
+        currentTime = audio.currentTime; ready = true; audio.playbackRate = speed; audio.volume = volume; audio.muted = muted;
       },
       onBlocked: () => { notice = 'Press Play to listen.'; },
       onSlow: () => { notice = 'Waiting for audio…'; },
@@ -107,7 +107,12 @@
   }
   function setVolume(value) {
     volume = rememberAudioVolume(value);
+    muted = rememberAudioMuted(false);
     if (audio) { audio.muted = false; audio.volume = volume; }
+  }
+  function toggleMute() {
+    muted = rememberAudioMuted(!muted);
+    if (audio) audio.muted = muted;
   }
   async function setSpeed(value) {
     speedTouched = true; speed = rememberedAudioSpeed(value); preferenceError = '';
@@ -264,7 +269,15 @@
             <label class="speed">Speed <select aria-label="Speed" value={speed} onchange={(event) => setSpeed(event.currentTarget.value)}>
               {#each AUDIO_SPEEDS as rate}<option value={rate}>{rate}×</option>{/each}
             </select></label>
-            <label class="volume"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M3 9v6h4l5 4V5L7 9zm12-1v8a5 5 0 0 0 0-8zm0-4v2a7 7 0 0 1 0 12v2a9 9 0 0 0 0-16z"/></svg><span class="sr-only">Volume</span><input type="range" min="0" max="1" step="0.05" value={muted ? 0 : volume} style={`--fill:${(muted ? 0 : volume) * 100}%`} aria-valuetext={`${Math.round((muted ? 0 : volume) * 100)} percent`} oninput={(event) => setVolume(event.currentTarget.value)} /></label>
+            <div class="volume">
+              <button type="button" class="mute" onclick={toggleMute} aria-pressed={muted} aria-label={muted ? 'Unmute' : 'Mute'} title={muted ? 'Unmute' : 'Mute'}>
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true">
+                  {#if muted}<path d="M3 9v6h4l5 4V5L7 9zm13.59 3L14 9.41 15.41 8 18 10.59 20.59 8 22 9.41 19.41 12 22 14.59 20.59 16 18 13.41 15.41 16 14 14.59z"/>
+                  {:else}<path d="M3 9v6h4l5 4V5L7 9zm12-1v8a5 5 0 0 0 0-8zm0-4v2a7 7 0 0 1 0 12v2a9 9 0 0 0 0-16z"/>{/if}
+                </svg>
+              </button>
+              <input type="range" min="0" max="1" step="0.05" aria-label="Volume" value={muted ? 0 : volume} style={`--fill:${(muted ? 0 : volume) * 100}%`} aria-valuetext={muted ? 'Muted' : `${Math.round(volume * 100)} percent`} oninput={(event) => setVolume(event.currentTarget.value)} />
+            </div>
           </div>
           {#if preferenceError}<p class="tool-error" role="status">{preferenceError}</p>{/if}
           {#if chapters.length}
@@ -385,6 +398,11 @@
   select option:checked { color:#fff; background:#604480; }
   .volume { display:flex; align-items:center; gap:9px; width:145px; min-width:0; color:#aa9ab9; }
   .volume svg { flex-shrink:0; }
+  .volume .mute { display:flex; align-items:center; justify-content:center; padding:2px; border:0; border-radius:6px;
+    background:none; color:inherit; cursor:pointer; flex-shrink:0; }
+  .volume .mute:hover { color:#e6dcf2; }
+  .volume .mute:focus-visible { outline:2px solid #b388ff; outline-offset:2px; }
+  .volume .mute[aria-pressed="true"] { color:#d08a8a; }
   .chapter-picker { display:flex; flex-direction:column; gap:8px; margin-top:12px; color:#a99fb4; font-size:.8rem; }
   .chapter-picker > span { display:flex; justify-content:space-between; }
   .chapter-picker small { font-size:inherit; color:#8e809b; }

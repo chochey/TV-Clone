@@ -46,7 +46,8 @@ function haystack(i) {
   const hit = foldCache.get(i);
   if (hit !== undefined) return hit;
   const folded = fold(
-    `${i.showName || ''} ${i.title || ''} ${i.omdbTitle || ''}`.replace(/^\(auto\)\s*/i, ''),
+    // artist is the audiobook author, so "Matt Dinniman" finds his books.
+    `${i.showName || ''} ${i.title || ''} ${i.omdbTitle || ''} ${i.artist || ''}`.replace(/^\(auto\)\s*/i, ''),
   );
   foldCache.set(i, folded);
   return folded;

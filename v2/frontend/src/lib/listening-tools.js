@@ -22,6 +22,18 @@ export function rememberAudioVolume(value, storage = globalThis.localStorage) {
   return volume;
 }
 
+// Mute rides with volume: both are device settings, and a listener who muted
+// before closing the tab expects it to still be muted on return.
+const MUTED_KEY = 'tvclone.audio.muted';
+export function rememberedAudioMuted(storage = globalThis.localStorage) {
+  try { return storage?.getItem(MUTED_KEY) === 'on'; } catch { return false; }
+}
+export function rememberAudioMuted(value, storage = globalThis.localStorage) {
+  const muted = !!value;
+  try { storage?.setItem(MUTED_KEY, muted ? 'on' : 'off'); } catch { /* Storage may be disabled. */ }
+  return muted;
+}
+
 export function audioBookmarks(value) {
   const bookmarks = Array.isArray(value?.bookmarks) ? value.bookmarks : [];
   return bookmarks.filter(bookmark => typeof bookmark?.id === 'string' && Number.isFinite(bookmark.time) && bookmark.time >= 0)
