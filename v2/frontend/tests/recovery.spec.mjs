@@ -508,13 +508,14 @@ test('an organizer alias failure preserves the title input and can be retried', 
     '/api/organizer/logs': route => route.fulfill({ json: { ok: true, lines: [], total: 0 } }),
     '/api/organizer/fix-queue': route => route.fulfill({ json: { ok: true, queue: [{ id: 'fix', type: 'show', title: 'Test show', stillPresent: true }], aliases: [], leftovers: [] } }),
     '/api/organizer/aliases': route => { attempts++; return route.fulfill(attempts === 1 ? { status: 503, json: { error: 'Temporarily unavailable' } } : { json: { ok: true } }); },
+    '/api/organizer/retry': route => route.fulfill({ json: { ok: true, queued: true, requestId: 'a1b2c3' } }),
   });
   await page.goto(`${origin}/organizer`);
   await page.getByRole('button', { name: 'Fix & retry' }).click();
   await expect(page.getByRole('alert')).toContainText('Temporarily unavailable');
   await expect(page.getByPlaceholder('Correct title (as OMDb knows it)')).toBeVisible();
   await page.getByRole('button', { name: 'Fix & retry' }).click();
-  await expect(page.getByText('Alias saved — organizer is retrying…')).toBeVisible();
+  await expect(page.getByText('Retry queued — organizer will retry after the current import.')).toBeVisible();
   expect(attempts).toBe(2);
 });
 
@@ -537,6 +538,78 @@ test('organizer counts current issues while keeping resolved failures and import
   await expect(page.getByText('Most Dangerous Game release', { exact: true })).toBeVisible();
   await page.getByText('1 past review item', { exact: true }).click();
   await expect(page.getByText(/Resolved after retry/)).toBeVisible();
+});
+
+test('clearing leftover files asks first, sends exactly the folders asked about, and reports the result', async ({ page }) => {
+  const sent = [];
+  let cleared = false;
+  const folders = [{ name: 'Film (2020) release', reason: 'Media imported; only other files remain in the download folder.' },
+    { name: 'Second film release', reason: 'Media imported; only other files remain in the download folder.' }];
+  await mockApi(page, {
+    '/api/organizer/logs': route => route.fulfill({ json: { ok: true, lines: [], total: 0 } }),
+    '/api/organizer/fix-queue': route => route.fulfill({ json: { ok: true, queue: [], aliases: [], leftovers: [], importedLeftovers: cleared ? [] : folders } }),
+    '/api/organizer/clear-leftovers': route => {
+      sent.push(route.request().postDataJSON());
+      cleared = true;
+      return route.fulfill({ json: { ok: true, skipped: [], importedLeftovers: [],
+        cleared: [{ name: 'Film (2020) release', files: 3, folderRemoved: true }, { name: 'Second film release', files: 1, folderRemoved: true }] } });
+    },
+  });
+  await page.goto(`${origin}/organizer`);
+  await page.getByText('2 imported releases with other files left behind', { exact: true }).click();
+  await page.getByRole('button', { name: 'Clear leftover files…' }).click();
+  await expect(page.getByText('Delete the leftover text, image and link files from 2 folders? The imported movies and episodes are not touched.')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Cancel' }).click();
+  await expect(page.getByRole('button', { name: 'Yes, delete them' })).toHaveCount(0);
+  expect(sent, 'asking and cancelling removes nothing').toEqual([]);
+
+  await page.getByRole('button', { name: 'Clear leftover files…' }).click();
+  await page.getByRole('button', { name: 'Yes, delete them' }).click();
+  await expect(page.getByRole('status').filter({ hasText: 'Removed 4 leftover files from 2 folders.' })).toBeVisible();
+  expect(sent).toEqual([{ names: ['Film (2020) release', 'Second film release'] }]);
+  await expect(page.getByText(/imported releases? with other files left behind/)).toHaveCount(0);
+});
+
+test('a failed clear keeps the list, shows the reason, and can be tried again', async ({ page }) => {
+  let attempts = 0;
+  await mockApi(page, {
+    '/api/organizer/logs': route => route.fulfill({ json: { ok: true, lines: [], total: 0 } }),
+    '/api/organizer/fix-queue': route => route.fulfill({ json: { ok: true, queue: [], aliases: [], leftovers: [],
+      importedLeftovers: [{ name: 'Film release', reason: 'Media imported; only other files remain in the download folder.' }] } }),
+    '/api/organizer/clear-leftovers': route => {
+      attempts++;
+      return route.fulfill(attempts === 1
+        ? { status: 503, json: { ok: false, error: 'The download folder is unavailable.' } }
+        : { json: { ok: true, cleared: [{ name: 'Film release', files: 2, folderRemoved: true }], skipped: [], importedLeftovers: [] } });
+    },
+  });
+  await page.goto(`${origin}/organizer`);
+  await page.getByText('1 imported release with other files left behind', { exact: true }).click();
+  await page.getByRole('button', { name: 'Clear leftover files…' }).click();
+  await page.getByRole('button', { name: 'Yes, delete them' }).click();
+  await expect(page.getByRole('alert')).toContainText('The download folder is unavailable.');
+  await expect(page.getByText('Film release', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Clear leftover files…' }).click();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Yes, delete them' }).click();
+  await expect(page.getByRole('status').filter({ hasText: 'Removed 2 leftover files from 1 folder.' })).toBeVisible();
+});
+
+test('folders left alone are reported honestly', async ({ page }) => {
+  await mockApi(page, {
+    '/api/organizer/logs': route => route.fulfill({ json: { ok: true, lines: [], total: 0 } }),
+    '/api/organizer/fix-queue': route => route.fulfill({ json: { ok: true, queue: [], aliases: [], leftovers: [],
+      importedLeftovers: [{ name: 'A', reason: 'x' }, { name: 'B', reason: 'x' }] } }),
+    '/api/organizer/clear-leftovers': route => route.fulfill({ json: { ok: true,
+      cleared: [{ name: 'A', files: 2, folderRemoved: true }], skipped: [{ name: 'B', reason: 'It changed while it was being cleared, so the rest was left alone.' }],
+      importedLeftovers: [{ name: 'B', reason: 'x' }] } }),
+  });
+  await page.goto(`${origin}/organizer`);
+  await page.getByText('2 imported releases with other files left behind', { exact: true }).click();
+  await page.getByRole('button', { name: 'Clear leftover files…' }).click();
+  await page.getByRole('button', { name: 'Yes, delete them' }).click();
+  await expect(page.getByRole('status').filter({ hasText: 'Removed 2 leftover files from 1 folder. 1 was left alone because it changed.' })).toBeVisible();
 });
 
 test('a sole surviving retained original can be restored but cannot be deleted', async ({ page }) => {

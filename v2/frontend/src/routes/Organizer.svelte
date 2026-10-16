@@ -2,6 +2,7 @@
   import { onDestroy } from 'svelte';
   import { createRefreshLoop } from '../lib/refresh-loop.js';
   import { api } from '../lib/api.js';
+  import { describeClearResult, leftoverSummary } from '../lib/organizer-clear.js';
 
   let data = $state(null);   // {ok, lines, total, meta}
   let status = $state(null); // {ok, active}
@@ -108,6 +109,28 @@
   async function removeAlias(id) {
     actionError = '';
     try { await api.organizerAliasDelete(id); await loadFixQueue(); } catch (e) { if (!closed) actionError = e.body?.error || 'Could not remove alias.'; }
+  }
+
+  // Delete the advertising and poster files that imported releases left in Share. It asks first,
+  // and sends exactly the folders the question was about.
+  let clearNames = $state(null);   // folders being asked about; null = not asking
+  let clearBusy = $state(false);
+  let clearMsg = $state('');
+  let clearError = $state('');
+  async function clearLeftovers() {
+    if (!clearNames?.length || clearBusy) return;
+    clearBusy = true;
+    clearError = '';
+    try {
+      const result = await api.organizerClearLeftovers(clearNames);
+      if (closed) return;
+      clearMsg = describeClearResult(result);
+      await loadFixQueue();
+    } catch (e) {
+      if (!closed) clearError = e.body?.error || 'Could not clear the leftovers. Please try again.';
+    } finally {
+      if (!closed) { clearBusy = false; clearNames = null; }
+    }
   }
 
   const loop = createRefreshLoop({
@@ -260,8 +283,21 @@
               <span class="rmeta">{l.reason}</span>
             </div>
           {/each}
+          <div class="rclear">
+            {#if clearNames}
+              <p class="rmeta">{leftoverSummary(clearNames)}</p>
+              <button class="rsave" onclick={clearLeftovers} disabled={clearBusy}>{clearBusy ? 'Deleting…' : 'Yes, delete them'}</button>
+              <button class="rcancel" onclick={() => (clearNames = null)} disabled={clearBusy}>Cancel</button>
+            {:else}
+              <button class="rsave" onclick={() => { clearNames = fq.importedLeftovers.map((l) => l.name); clearMsg = ''; clearError = ''; }}>
+                Clear leftover files…
+              </button>
+            {/if}
+          </div>
         </details>
       {/if}
+      {#if clearMsg}<p class="rdone" role="status">{clearMsg}</p>{/if}
+      {#if clearError}<p class="err" role="alert">{clearError}</p>{/if}
 
       {#if history.length}
         <details class="rextra">
@@ -378,6 +414,11 @@
   .rsave:hover:not(:disabled) { opacity: 0.85; }
   .rsave:disabled { opacity: 0.45; cursor: not-allowed; }
   .rdone { font-size: 0.85rem; color: #7ed491; }
+  .rclear { display: flex; gap: var(--s2); align-items: center; flex-wrap: wrap; padding: var(--s2) 0 var(--s2) var(--s3); }
+  .rclear .rmeta { flex-basis: 100%; margin: 0; }
+  .rcancel { color: var(--ink-soft); font-size: 0.85rem; padding: 8px 12px; border-radius: var(--r-sm); }
+  .rcancel:hover:not(:disabled) { color: var(--ink); background: rgba(242, 242, 244, 0.08); }
+  .rcancel:disabled { opacity: 0.45; cursor: not-allowed; }
   .leftover .rtitle { font-weight: 500; font-family: ui-monospace, Menlo, monospace; font-size: 0.85rem; }
   .rextra { margin-top: var(--s3); }
   .rextra summary {

@@ -99,6 +99,7 @@ export const api = {
   organizerRetry: id => fetch('/api/organizer/retry',opts('POST',{id})).then(json),
   organizerRestart: () => fetch('/api/organizer/restart', opts('POST')).then(json),
   organizerFixQueue: () => fetch('/api/organizer/fix-queue', opts('GET')).then(json),
+  organizerClearLeftovers: names => fetch('/api/organizer/clear-leftovers', opts('POST', { names })).then(json),
   organizerAliasSave: (body) => fetch('/api/organizer/aliases', opts('POST', body)).then(json),
   organizerAliasDelete: (id) =>
     fetch(`/api/organizer/aliases/${encodeURIComponent(id)}`, opts('DELETE')).then(json),

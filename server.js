@@ -3924,6 +3924,7 @@ app.delete('/api/organizer/aliases/:id', requireAdminSession, (req, res) => {
 // Successful imports can leave advertising or other companion files behind.
 const ORGANIZER_SOURCE_DIR = process.env.ORGANIZER_SOURCE_DIR || '/mnt/media/Share';
 const normName = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+const organizerClear = require('./lib/organizer-clear');
 const organizerRetry = require('./lib/organizer-retry')({
   sourceDir: ORGANIZER_SOURCE_DIR,
   spoolDir: process.env.ORGANIZER_RETRY_DIR || path.join(DATA_DIR,'organizer-retries'),
@@ -3935,7 +3936,9 @@ app.post('/api/organizer/retry',requireAdminSession,async(req,res)=>{
 });
 
 
-app.get('/api/organizer/fix-queue', requireAdminSession, async (_req, res) => {
+// What the review screen shows: unresolved failures, plus whatever is physically left in Share.
+// Throws an error carrying a status when the download folder cannot be read.
+async function organizerReviewState() {
   const aliases = getOrganizerAliases();
   const logLines = readOrganizerLogLines();
   const queue = organizerTools.parseOrganizerFixQueue(logLines, aliases);
@@ -3954,7 +3957,7 @@ app.get('/api/organizer/fix-queue', requireAdminSession, async (_req, res) => {
       return { name, norm: normName(name), mtime, matched: false };
     }));
   } catch {
-    return res.status(503).json({ ok: false, error: 'Could not read the download folder. Review status is unavailable.' });
+    throw Object.assign(new Error('Could not read the download folder. Review status is unavailable.'), { status: 503 });
   }
 
   // A queue entry is live if its release (or parsed title) still sits in Share.
@@ -3969,7 +3972,7 @@ app.get('/api/organizer/fix-queue', requireAdminSession, async (_req, res) => {
   }
 
   // Unknown leftovers remain in review. Confirmed imports containing only
-  // other files are listed separately; this endpoint never removes files.
+  // other files are listed separately; only clear-leftovers removes anything.
   const cutoff = Date.now() - 10 * 60 * 1000;
   const aged = shareEntries
     .filter((s) => !s.matched && s.mtime < cutoff)
@@ -3980,7 +3983,39 @@ app.get('/api/organizer/fix-queue', requireAdminSession, async (_req, res) => {
   });
   const active = queue.filter(entry => entry.stillPresent && !entry.resolved);
   const history = queue.filter(entry => !entry.stillPresent || entry.resolved).slice(0, 100);
-  res.json({ ok: true, queue: [...active, ...history], aliases, leftovers, importedLeftovers, retries: await organizerRetry.snapshot() });
+  return { queue: [...active, ...history], aliases, leftovers, importedLeftovers };
+}
+
+app.get('/api/organizer/fix-queue', requireAdminSession, async (_req, res) => {
+  try { res.json({ ok: true, ...(await organizerReviewState()), retries: await organizerRetry.snapshot() }); }
+  catch (error) { res.status(error.status || 500).json({ ok: false, error: error.status ? error.message : 'Could not build the review queue.' }); }
+});
+
+// Remove the advertising and poster files an imported release left behind. The browser names
+// releases it saw under importedLeftovers; what may be cleared is worked out again here, and
+// lib/organizer-clear.js checks every file once more immediately before removing it.
+app.post('/api/organizer/clear-leftovers', requireAdminSession, async (req, res) => {
+  const names = req.body?.names;
+  if (!Array.isArray(names) || !names.length || names.length > 200) {
+    return res.status(400).json({ ok: false, error: 'Choose which leftovers to clear.' });
+  }
+  try {
+    const clearable = new Set((await organizerReviewState()).importedLeftovers.map(entry => entry.name));
+    const requested = [...new Set(names.map(name => String(name).slice(0, 255)))];
+    const eligible = requested.filter(name => clearable.has(name));
+    const outcome = eligible.length
+      ? await organizerClear.clearJunk({ sourceDir: ORGANIZER_SOURCE_DIR, names: eligible })
+      : { cleared: [], skipped: [] };
+    for (const done of outcome.cleared) {
+      console.log(`[organizer] cleared ${done.files} leftover file${done.files === 1 ? '' : 's'} from "${done.name}"${done.folderRemoved ? '' : ' (folder kept)'}`);
+    }
+    const stale = requested.filter(name => !clearable.has(name))
+      .map(name => ({ name, reason: 'This release no longer qualifies for clearing. Refresh the list.' }));
+    res.json({ ok: true, cleared: outcome.cleared, skipped: [...outcome.skipped, ...stale],
+      importedLeftovers: (await organizerReviewState()).importedLeftovers });
+  } catch (error) {
+    res.status(error.status || 500).json({ ok: false, error: error.status ? error.message : 'Could not clear the leftovers.' });
+  }
 });
 
 // ── Episode index: missing-episode report + new-episode tracker ─────────
