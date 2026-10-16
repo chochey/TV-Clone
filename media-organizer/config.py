@@ -54,6 +54,10 @@ OMDB_USAGE_FILE = os.environ.get('ORGANIZER_OMDB_USAGE', os.path.join(_DATA, 'or
 INFLIGHT_FILE = os.environ.get('ORGANIZER_INFLIGHT_FILE',
     os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data', 'organizer-inflight.json'))
 
+# Bonus videos inside a TV pack (featurettes, deleted scenes) are filed under <Series>/Extras
+# instead of staying in the download folder. Set to 0 to leave them where they are.
+FILE_EXTRAS = os.environ.get('ORGANIZER_FILE_EXTRAS', '1').strip().lower() not in ('0', 'false', 'no', 'off')
+
 # Watch mode
 POLL_INTERVAL = int(os.environ.get('ORGANIZER_POLL_INTERVAL', '30'))
 

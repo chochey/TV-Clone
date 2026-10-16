@@ -178,11 +178,11 @@ class TvPacksWaitForTitles(Harness):
                           "tv/Example (2022)/Season 01/Example - S01E02 - Title 2.mkv"])
 
     def test_a_waiting_pack_does_not_repeat_its_review_notes_on_every_scan(self):
-        # "Bonus.mkv" sorts first and cannot be placed, so it is reported for review. The episodes
-        # after it need titles. While OMDb is down the pack is planned again on every scan, so the
-        # note must wait until the plan is complete or it would be repeated every 30 seconds.
+        # An episode of another show sorts first and is reported for review. The episodes after it
+        # need titles. While OMDb is down the pack is planned again on every scan, so the note must
+        # wait until the plan is complete or it would be repeated every 30 seconds.
         pack = self.pack([1, 2])
-        (pack["path"] / "Bonus.mkv").write_bytes(b"b" * 1024)
+        (pack["path"] / "Different.Show.S01E01.mkv").write_bytes(b"b" * 1024)
         pack["video_files"] = sorted(pack["path"].glob("*.mkv"))
         down = Mock(side_effect=requests.Timeout("down"))
         with patch.object(m, "query_omdb_series", return_value=self.info), patch("movie_renamer.requests.get", down), \
@@ -199,8 +199,8 @@ class TvPacksWaitForTitles(Harness):
             self.assertEqual(m.process_tv_shows_list([pack]), (1, 0))
         reviews = [line for line in recovered.output if "REVIEW:" in line]
         self.assertEqual(len(reviews), 1)
-        self.assertIn("Bonus.mkv", reviews[0])
-        self.assertTrue((pack["path"] / "Bonus.mkv").exists(), "the file nobody could place stays where it was")
+        self.assertIn("Different.Show.S01E01.mkv", reviews[0])
+        self.assertTrue((pack["path"] / "Different.Show.S01E01.mkv").exists(), "the file nobody could place stays where it was")
 
     def test_a_twelve_episode_pack_costs_one_request_not_twelve(self):
         pack = self.pack(range(1, 13))

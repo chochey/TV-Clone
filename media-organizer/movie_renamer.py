@@ -19,6 +19,7 @@ import requests
 from PTN import parse
 
 import config
+import extras
 import omdb_support
 import safe_copy
 import sys
@@ -1358,6 +1359,53 @@ def resolve_tv_file(file: Path, show: dict) -> dict | None:
     return info
 
 
+def _ambiguous_note(file: Path) -> str:
+    return f"Missing or ambiguous season/episode: {file.name}; source retained"
+
+
+def _names_no_episode(file: Path) -> bool:
+    """Bonus material, as opposed to an episode whose season could not be worked out."""
+    info = parse_tv_info(file.stem)
+    return not info or info.get("episode") is None
+
+
+def _plan_extras(show: dict, series_info: dict, base: Path, plan: list, bonus: list,
+                 subtitles: list) -> tuple[list, list]:
+    """File the bonus videos of an episode pack under <series>/Extras/ (see extras.py).
+
+    Only for a pack whose series is a confident match and that is demonstrably a set of
+    episodes: one of its own episodes is being imported now, or the library already has some.
+    Anything doubtful (a sample, something much larger than the episodes, a name that carries
+    another year) stays where it is and is reported for review as before.
+    Returns (plan entries, review notes)."""
+    if not (bonus or subtitles):
+        return [], []
+    episodes = [source for source, _ in plan if source in show["video_files"]]
+    eligible = (bonus and config.FILE_EXTRAS and show["type"] == "folder" and series_info.get("imdbID")
+                and (episodes or extras.series_has_episodes(base)))
+    if not eligible:
+        return [], [_ambiguous_note(file) for file in bonus + subtitles]
+    sizes = []
+    for source in episodes:
+        try:
+            sizes.append(source.stat().st_size)
+        except OSError:
+            pass
+    filed, declined = extras.choose_extras(
+        show["path"], bonus, series_year=series_info["year"],
+        largest_episode=max(sizes) if sizes else None, pack_season=show["tv_info"].get("season"))
+    destination = base / extras.EXTRAS_DIR
+    paired = extras.pair_subtitles(filed, subtitles, extract_language_suffix)
+    entries = [(source, destination.joinpath(*parts)) for source, parts in filed + paired]
+    taken = {subtitle for subtitle, _ in paired}
+    notes = [f"Not filed as an extra ({why}): {source.name}; source retained" for source, why in declined]
+    notes += [_ambiguous_note(file) for file in subtitles if file not in taken]
+    if filed:
+        log.info("Filing %d extra%s from %s under %s/%s", len(filed), "" if len(filed) == 1 else "s",
+                 show["path"].name, base.name, extras.EXTRAS_DIR)
+    return entries, notes
+
+
 def move_tv_show(show: dict, series_info: dict, dry_run: bool = False) -> bool:
     title, year = series_info["title"], series_info["year"]
     folder = create_clean_filename(title, year, "")
@@ -1367,10 +1415,16 @@ def move_tv_show(show: dict, series_info: dict, dry_run: bool = False) -> bool:
     # Written once the plan is complete. If OMDb cannot supply an episode title the pack is
     # planned again on the next scan, and these notes must not be repeated every time.
     reviews = []
+    bonus, loose_subtitles = [], []   # what is left over once the episodes are placed
     for file in videos + show.get("subtitle_files", []):
         info = resolve_tv_file(file, show)
         if not info:
-            reviews.append(f"Missing or ambiguous season/episode: {file.name}; source retained")
+            if file not in videos:
+                loose_subtitles.append(file)
+            elif show["type"] == "folder" and _names_no_episode(file):
+                bonus.append(file)
+            else:
+                reviews.append(_ambiguous_note(file))
             continue
         file_title = info.get("title")
         if file_title and not is_good_series_match(file_title, info.get("year"), series_info):
@@ -1390,7 +1444,9 @@ def move_tv_show(show: dict, series_info: dict, dry_run: bool = False) -> bool:
                                   "" if is_video else extract_language_suffix(stem))
         if name:
             plan.append((file, base / f"Season {season:02d}" / name))
-    for reason in reviews:
+    extra_plan, extra_notes = _plan_extras(show, series_info, base, plan, bonus, loose_subtitles)
+    plan += extra_plan
+    for reason in reviews + extra_notes:
         review_item(show, title, reason)
     return execute_import(show, title, plan, dry_run)
 

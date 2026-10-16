@@ -35,10 +35,19 @@ class ImportSafety(OrganizerTestCase):
  def test_multiple_movie_videos_retained(self):
   src=self.folder('pack',{'part1.mkv':b'long','part2.mkv':b'short'})
   before=self.snapshot();self.assertFalse(m.move_movie(self.item(src),self.info));self.assertEqual(before,self.snapshot())
- def test_partial_tv_move_preserves_unknown_and_extras(self):
-  src=self.folder('pack',{'Example.S01E01.mkv':b'episode','bonus.mkv':b'bonus','notes.txt':b'notes'})
+ def test_partial_tv_move_files_extras_and_keeps_what_it_cannot_place(self):
+  src=self.folder('pack',{'Example.S01E01.mkv':b'episode','bonus.mkv':b'bonus','Different.Show.S01E01.mkv':b'other','notes.txt':b'notes'})
   self.assertTrue(m.move_tv_show(self.item(src,'Example.2022.S01'),self.info))
+  self.assertEqual((self.root/'tv/Example (2022)/Extras/Season 01 - bonus.mkv').read_bytes(),b'bonus')
+  self.assertFalse((src/'bonus.mkv').exists())
+  self.assertEqual((src/'Different.Show.S01E01.mkv').read_bytes(),b'other');self.assertTrue((src/'notes.txt').exists())
+  self.assertTrue((self.root/'tv/Example (2022)/Season 01/Example - S01E01.mkv').exists())
+ def test_extras_stay_in_the_download_folder_when_filing_is_switched_off(self):
+  src=self.folder('pack',{'Example.S01E01.mkv':b'episode','bonus.mkv':b'bonus','notes.txt':b'notes'})
+  with patch.object(m.config,'FILE_EXTRAS',False):
+   self.assertTrue(m.move_tv_show(self.item(src,'Example.2022.S01'),self.info))
   self.assertEqual((src/'bonus.mkv').read_bytes(),b'bonus');self.assertTrue((src/'notes.txt').exists())
+  self.assertFalse((self.root/'tv/Example (2022)/Extras').exists())
   self.assertTrue((self.root/'tv/Example (2022)/Season 01/Example - S01E01.mkv').exists())
  def test_folder_episode_never_assigned_to_bonus(self):
   src=self.folder('pack',{'bonus.mkv':b'bonus'})
