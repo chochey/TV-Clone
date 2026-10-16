@@ -3,7 +3,9 @@ from pathlib import Path
 from unittest.mock import patch, Mock
 import movie_renamer as m
 
-class ImportSafety(unittest.TestCase):
+from organizer_testing import OrganizerTestCase
+
+class ImportSafety(OrganizerTestCase):
  def setUp(self):
   self.tmp=tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup); self.root=Path(self.tmp.name)
   self.info={'title':'Example','year':'2022','imdbID':'tt12345'}

@@ -43,7 +43,12 @@ TV_DEST_DIRS    = [d.strip() for d in os.environ.get('ORGANIZER_TV_DEST_DIRS',  
 
 # OMDb API
 OMDB_API_KEY  = os.environ.get('OMDB_API_KEY', '')
-OMDB_BASE_URL = os.environ.get('OMDB_BASE_URL', 'http://www.omdbapi.com/')
+# https: the key travels in the query string, so it should not cross the network in the clear
+OMDB_BASE_URL = os.environ.get('OMDB_BASE_URL', 'https://www.omdbapi.com/')
+_DATA = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data')
+# Episode titles per season (one request per season) and the daily request count
+OMDB_SEASON_CACHE = os.environ.get('ORGANIZER_OMDB_SEASON_CACHE', os.path.join(_DATA, 'organizer-omdb-seasons.json'))
+OMDB_USAGE_FILE = os.environ.get('ORGANIZER_OMDB_USAGE', os.path.join(_DATA, 'organizer-omdb-usage.json'))
 
 # Part-files being written right now (see safe_copy.py), so an interrupted run can clean up
 INFLIGHT_FILE = os.environ.get('ORGANIZER_INFLIGHT_FILE',

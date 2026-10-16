@@ -19,8 +19,10 @@ import requests
 from PTN import parse
 
 import config
+import omdb_support
 import safe_copy
 import sys
+from omdb_support import OMDbUnavailableError
 
 # Shared, versioned import guard from the media-server repository.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
@@ -68,6 +70,7 @@ def setup_logging(log_dir=None, preview=None, desktop_copy=None) -> list:
             except OSError as error:  # keep running on the console/journal if a log path is unwritable
                 print(f"[organizer] cannot write {path}: {error}", flush=True)
     for handler in handlers:
+        handler.addFilter(omdb_support.RedactingFilter())   # the API key never reaches a log
         handler.setFormatter(_LOG_FORMAT)
         setattr(handler, _OWN_HANDLER, True)
         root.addHandler(handler)
@@ -110,6 +113,88 @@ def _check_omdb_rate_limit(response: requests.Response) -> None:
             )
     else:
         _omdb_consecutive_401s = 0
+
+
+# Shared OMDb state. The episode-title cache and the usage counter are memory-only until a
+# real run calls start_omdb_state(), so tests and previews touch no shared files.
+_omdb_backoff = omdb_support.Backoff()
+_season_cache = omdb_support.SeasonCache()
+_omdb_usage = omdb_support.UsageCounter()
+_omdb_wait_logged: set[str] = set()   # releases already reported as waiting for OMDb
+
+
+def start_omdb_state() -> None:
+    """Persist the episode-title cache and the daily request count (real runs only)."""
+    global _season_cache, _omdb_usage
+    _season_cache = omdb_support.SeasonCache(config.OMDB_SEASON_CACHE)
+    _omdb_usage = omdb_support.UsageCounter(config.OMDB_USAGE_FILE)
+
+
+def reset_omdb_state() -> None:
+    """Forget every in-memory OMDb result and failure (used by tests)."""
+    global _omdb_backoff, _season_cache, _omdb_usage, _omdb_consecutive_401s
+    _omdb_backoff = omdb_support.Backoff()
+    _season_cache = omdb_support.SeasonCache()
+    _omdb_usage = omdb_support.UsageCounter()
+    _omdb_consecutive_401s = 0
+    _omdb_wait_logged.clear()
+    _omdb_no_match_cache.clear()
+
+
+def _note_omdb_failure() -> None:
+    first = _omdb_backoff.failures == 0
+    _omdb_backoff.failed()
+    if first:
+        log.warning("OMDb is not responding; releases that need it will wait and be retried "
+                    "(next attempt in %ds)", int(_omdb_backoff.remaining()))
+
+
+def _omdb_get(params: dict) -> dict:
+    """One OMDb request; returns the parsed reply (an unknown title is {"Response": "False"}).
+
+    Raises OMDbRateLimitError after repeated 401s, and OMDbUnavailableError when OMDb could
+    not be asked at all (timeout, connection failure, server error, unreadable or refused
+    reply). That is not an answer about the title: callers must wait and retry, never record
+    a "no match". While OMDb is failing, requests are held back and fail fast, so an outage
+    costs one probe every few minutes instead of a 10 s timeout per spelling of every title.
+    """
+    if _omdb_backoff.blocked():
+        raise OMDbUnavailableError(f"holding off for {int(_omdb_backoff.remaining())}s after a failure")
+    _omdb_usage.hit()
+    try:
+        response = requests.get(config.OMDB_BASE_URL, params=params, timeout=10)
+    except requests.RequestException as error:
+        _note_omdb_failure()
+        raise OMDbUnavailableError(omdb_support.describe_request_error(error)) from None
+    try:
+        _check_omdb_rate_limit(response)
+    except OMDbRateLimitError:
+        _omdb_backoff.hold(30 * 60)   # the day's allowance is gone; re-asking every poll only wastes it
+        raise
+    try:
+        response.raise_for_status()
+        data = response.json()
+    except (requests.RequestException, ValueError) as error:
+        _note_omdb_failure()
+        raise OMDbUnavailableError(omdb_support.describe_request_error(error)) from None
+    if not isinstance(data, dict):
+        return {}   # readable but not an answer we understand: no verdict is accepted (fails closed)
+    if data.get("Response") == "False" and re.search(r"api key|limit", str(data.get("Error", "")), re.I):
+        _note_omdb_failure()
+        raise OMDbUnavailableError(f"OMDb said: {omdb_support.redact(data.get('Error'))[:80]}")
+    if _omdb_backoff.failures:
+        log.info("OMDb is responding again")
+        _omdb_wait_logged.clear()
+    _omdb_backoff.succeeded()
+    return data
+
+
+def _wait_for_omdb(parse_name: str, error: Exception) -> None:
+    """A release that could not be looked up because OMDb was unreachable. It is left for
+    the next scan: no skip is recorded and no "no match" is remembered."""
+    if parse_name not in _omdb_wait_logged:
+        _omdb_wait_logged.add(parse_name)
+        log.warning("WAIT: OMDb unavailable (%s); leaving %s for the next scan", error, parse_name)
 
 
 def find_existing_movie_drive(movie_folder_name: str) -> Path | None:
@@ -626,25 +711,15 @@ def query_omdb_exact(title: str, year: str | None = None, type_filter: str | Non
     if year:
         params["y"] = year
 
-    try:
-        response = requests.get(config.OMDB_BASE_URL, params=params, timeout=10)
-        _check_omdb_rate_limit(response)
-        response.raise_for_status()
-        data = response.json()
-
-        if data.get("Response") == "True":
-            return {
-                "title": data.get("Title"),
-                "year": data.get("Year"),
-                "type": data.get("Type"),
-                "imdbID": data.get("imdbID"),
-                "runtime": data.get("Runtime"),
-            }
-    except OMDbRateLimitError:
-        raise
-    except requests.RequestException as e:
-        log.error(f"OMDb API error: {e}")
-
+    data = _omdb_get(params)
+    if data.get("Response") == "True":
+        return {
+            "title": data.get("Title"),
+            "year": data.get("Year"),
+            "type": data.get("Type"),
+            "imdbID": data.get("imdbID"),
+            "runtime": data.get("Runtime"),
+        }
     return None
 
 
@@ -661,29 +736,19 @@ def query_omdb_search(title: str, year: str | None = None) -> dict | None:
     if year:
         params["y"] = year
 
-    try:
-        response = requests.get(config.OMDB_BASE_URL, params=params, timeout=10)
-        _check_omdb_rate_limit(response)
-        response.raise_for_status()
-        data = response.json()
-
-        if data.get("Response") == "True" and data.get("Search"):
-            if int(data.get("totalResults", len(data["Search"]))) > len(data["Search"]):
-                return None
-            candidates = [{"title": row.get("Title"), "year": row.get("Year"),
-                           "type": row.get("Type"), "imdbID": row.get("imdbID")}
-                          for row in data["Search"]]
-            candidates = [row for row in candidates if is_good_match(title, year, row)]
-            candidates.sort(key=lambda row: title_match_ratio(title, row["title"]), reverse=True)
-            if len(candidates) > 1 and (title_match_ratio(title, candidates[0]["title"]) -
-                                       title_match_ratio(title, candidates[1]["title"])) < 0.08:
-                return None
-            return candidates[0] if candidates else None
-    except OMDbRateLimitError:
-        raise
-    except requests.RequestException as e:
-        log.error(f"OMDb API error: {e}")
-
+    data = _omdb_get(params)
+    if data.get("Response") == "True" and data.get("Search"):
+        if int(data.get("totalResults", len(data["Search"]))) > len(data["Search"]):
+            return None
+        candidates = [{"title": row.get("Title"), "year": row.get("Year"),
+                       "type": row.get("Type"), "imdbID": row.get("imdbID")}
+                      for row in data["Search"]]
+        candidates = [row for row in candidates if is_good_match(title, year, row)]
+        candidates.sort(key=lambda row: title_match_ratio(title, row["title"]), reverse=True)
+        if len(candidates) > 1 and (title_match_ratio(title, candidates[0]["title"]) -
+                                   title_match_ratio(title, candidates[1]["title"])) < 0.08:
+            return None
+        return candidates[0] if candidates else None
     return None
 
 
@@ -974,10 +1039,7 @@ def _query_omdb_series_single(title: str, year: str | None = None) -> dict | Non
         params["y"] = year
 
     try:
-        response = requests.get(config.OMDB_BASE_URL, params=params, timeout=10)
-        _check_omdb_rate_limit(response)
-        response.raise_for_status()
-        data = response.json()
+        data = _omdb_get(params)
 
         if data.get("Response") == "True":
             if not year:
@@ -999,10 +1061,7 @@ def _query_omdb_series_single(title: str, year: str | None = None) -> dict | Non
                     return None
                 for page in range(2, (total + 9) // 10 + 1):
                     page_params = {**params, "page": page}
-                    page_response = requests.get(config.OMDB_BASE_URL, params=page_params, timeout=10)
-                    _check_omdb_rate_limit(page_response)
-                    page_response.raise_for_status()
-                    page_data = page_response.json()
+                    page_data = _omdb_get(page_params)
                     if not isinstance(page_data, dict) or page_data.get("Response") != "True":
                         return None
                     page_rows = page_data.get("Search")
@@ -1033,10 +1092,10 @@ def _query_omdb_series_single(title: str, year: str | None = None) -> dict | Non
                 "type": data.get("Type"),
                 "imdbID": data.get("imdbID"),
             }
-    except OMDbRateLimitError:
-        raise  # Let this propagate up
-    except (requests.RequestException, ValueError, TypeError, AttributeError):
-        # Request exceptions can contain credential-bearing URLs.
+    except (OMDbRateLimitError, OMDbUnavailableError):
+        raise  # not a verdict on the title: the caller waits and retries
+    except (ValueError, TypeError, AttributeError):
+        # An unexpected reply shape is not a transport failure: no match is accepted.
         log.error("OMDb series lookup failed; no match accepted")
 
     return None
@@ -1070,34 +1129,34 @@ def query_omdb_series(title: str, year: str | None = None) -> dict | None:
     return None
 
 
-def query_omdb_episode(series_title: str, season: int, episode: int, imdb_id: str | None = None) -> dict | None:
-    """Query OMDb API for episode info to get episode title.
+def _season_episode_titles(series_title: str, season: int, imdb_id: str | None) -> dict:
+    """{episode number: title} for one season: a single OMDb request, then cached.
 
-    Raises OMDbRateLimitError if too many consecutive 401 errors are detected.
-    """
+    Asking for each episode on its own cost one request per file, so a 134-episode pack ate
+    13% of the free key's 1,000-a-day allowance and a few big packs could exhaust it."""
+    key = f"{imdb_id or 'title:' + series_title.lower().strip()}|{int(season)}"
+    cached = _season_cache.get(key)
+    if cached is not None:
+        return cached
     params = {
         "apikey": config.OMDB_API_KEY,
         ("i" if imdb_id else "t"): imdb_id or series_title,
         "Season": season,
-        "Episode": episode,
     }
+    data = _omdb_get(params)
+    episodes, finished = omdb_support.parse_season(data) if data.get("Response") == "True" else ({}, False)
+    _season_cache.put(key, episodes, finished)
+    return episodes
 
-    try:
-        response = requests.get(config.OMDB_BASE_URL, params=params, timeout=10)
-        _check_omdb_rate_limit(response)
-        response.raise_for_status()
-        data = response.json()
 
-        if data.get("Response") == "True":
-            return {
-                "episode_title": data.get("Title"),
-            }
-    except OMDbRateLimitError:
-        raise  # Let this propagate up
-    except requests.RequestException as e:
-        log.error(f"OMDb API error: {e}")
+def query_omdb_episode(series_title: str, season: int, episode: int, imdb_id: str | None = None) -> dict | None:
+    """Episode title from OMDb, from one cached request per season.
 
-    return None
+    Raises OMDbRateLimitError after repeated 401s, and OMDbUnavailableError when OMDb cannot
+    be asked: that is never reported as "no title", or the episode would be filed without one.
+    """
+    title = _season_episode_titles(series_title, season, imdb_id).get(int(episode))
+    return {"episode_title": title} if title else None
 
 
 def create_tv_filename(
@@ -1305,14 +1364,17 @@ def move_tv_show(show: dict, series_info: dict, dry_run: bool = False) -> bool:
     base = get_tv_dest(folder) / folder
     videos = [show["path"]] if show["type"] == "loose" else show["video_files"]
     plan = []
+    # Written once the plan is complete. If OMDb cannot supply an episode title the pack is
+    # planned again on the next scan, and these notes must not be repeated every time.
+    reviews = []
     for file in videos + show.get("subtitle_files", []):
         info = resolve_tv_file(file, show)
         if not info:
-            review_item(show, title, f"Missing or ambiguous season/episode: {file.name}; source retained")
+            reviews.append(f"Missing or ambiguous season/episode: {file.name}; source retained")
             continue
         file_title = info.get("title")
         if file_title and not is_good_series_match(file_title, info.get("year"), series_info):
-            review_item(show, title, f"File belongs to a different or uncertain series: {file.name}; source retained")
+            reviews.append(f"File belongs to a different or uncertain series: {file.name}; source retained")
             continue
         season, episode = info["season"], info["episode"]
         is_video = file in videos
@@ -1328,6 +1390,8 @@ def move_tv_show(show: dict, series_info: dict, dry_run: bool = False) -> bool:
                                   "" if is_video else extract_language_suffix(stem))
         if name:
             plan.append((file, base / f"Season {season:02d}" / name))
+    for reason in reviews:
+        review_item(show, title, reason)
     return execute_import(show, title, plan, dry_run)
 
 
@@ -1728,6 +1792,8 @@ def process_library(dry_run: bool = False) -> tuple[int, int, int]:
     except OMDbRateLimitError as e:
         log.error(f"ABORTING: {e}")
         log.error("Partial progress has been saved. Re-run once the API limit resets.")
+    except OMDbUnavailableError as e:
+        log.error(f"ABORTING: OMDb is not responding ({e}). Progress has been saved; re-run later.")
     except KeyboardInterrupt:
         log.info("Interrupted. Progress has been saved. Re-run to continue.")
 
@@ -2001,6 +2067,8 @@ def process_tv_library(dry_run: bool = False) -> tuple[int, int, int]:
     except OMDbRateLimitError as e:
         log.error(f"ABORTING: {e}")
         log.error("Partial progress has been saved. Re-run once the API limit resets.")
+    except OMDbUnavailableError as e:
+        log.error(f"ABORTING: OMDb is not responding ({e}). Progress has been saved; re-run later.")
     except KeyboardInterrupt:
         log.info("Interrupted. Progress has been saved. Re-run to continue.")
 
@@ -2072,7 +2140,14 @@ def process_movies_list(movies: list[dict], dry_run: bool = False) -> tuple[int,
         inferred_year = folder_year is None and year is not None
 
         # Query OMDb (match validation happens inside query_omdb)
-        omdb_info = query_omdb(title, year)
+        try:
+            omdb_info = query_omdb(title, year)
+        except OMDbUnavailableError as error:
+            # OMDb could not be asked, which says nothing about this title: leave it for the
+            # next scan instead of recording a skip that would last until a restart.
+            _wait_for_omdb(parse_name, error)
+            skipped += 1
+            continue
         if not omdb_info:
             if parse_name not in _watch_skip_logged or _targeted_retry_item(movie, dry_run):
                 log.info("")
@@ -2080,7 +2155,12 @@ def process_movies_list(movies: list[dict], dry_run: bool = False) -> tuple[int,
                 log.info(f"  Parsed: title='{title}', year={year or 'none'}")
                 if inferred_year:
                     log.info(f"  Year inferred from sole matching video: {Path(movie['video_files'][0]).name}")
-                series_hit = check_if_actually_series(title, year)
+                try:
+                    series_hit = check_if_actually_series(title, year)
+                except OMDbUnavailableError as error:
+                    _wait_for_omdb(parse_name, error)
+                    skipped += 1
+                    continue
                 if series_hit:
                     log.info(
                         f"SKIP: '{title}' is a TV series in OMDb ({series_hit['title']}, "
@@ -2150,7 +2230,12 @@ def process_tv_shows_list(tv_shows: list[dict], dry_run: bool = False) -> tuple[
             episode = episode[0]
 
         # Query OMDb for series
-        series_info = query_omdb_series(title, tv_info.get("year"))
+        try:
+            series_info = query_omdb_series(title, tv_info.get("year"))
+        except OMDbUnavailableError as error:
+            _wait_for_omdb(parse_name, error)
+            skipped += 1
+            continue
         if not series_info:
             if parse_name not in _watch_skip_logged or _targeted_retry_item(show, dry_run):
                 ep_str = f"{episode:02d}" if episode else "??"
@@ -2169,8 +2254,15 @@ def process_tv_shows_list(tv_shows: list[dict], dry_run: bool = False) -> tuple[
         log.info(f"  Parsed: title='{title}', S{season:02d}E{ep_str}")
         log.info(f"  OMDb match: {series_info['title']} ({series_info['year']})")
 
-        # Move the TV show
-        if move_tv_show(show, series_info, dry_run=dry_run):
+        # Move the TV show. Episode titles come from OMDb; if it cannot be asked, the pack
+        # waits (nothing has moved yet) rather than being filed without titles for good.
+        try:
+            moved = move_tv_show(show, series_info, dry_run=dry_run)
+        except OMDbUnavailableError as error:
+            _wait_for_omdb(parse_name, error)
+            skipped += 1
+            continue
+        if moved:
             processed += 1
         else:
             _watch_skip_logged.add(parse_name)
@@ -2216,6 +2308,8 @@ def process_all(quiet: bool = False, dry_run: bool = False) -> tuple[int, int, i
     except OMDbRateLimitError as e:
         log.error(f"ABORTING: {e}")
         log.error("Partial progress has been saved. Re-run once the API limit resets.")
+    except OMDbUnavailableError as e:
+        log.error(f"ABORTING: OMDb is not responding ({e}). Progress has been saved; re-run later.")
 
     total_processed = movies_processed + tv_processed
     total_skipped = movies_skipped + tv_skipped
@@ -2367,6 +2461,7 @@ def main() -> None:
 
     if not args.dry_run:
         start_inflight_journal()
+        start_omdb_state()
     if args.watch:
         run_watch()
     else:

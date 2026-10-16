@@ -40,7 +40,11 @@ from movie_renamer import (
 )
 
 
-class TestSeriesSearchPagination(unittest.TestCase):
+from organizer_testing import OrganizerTestCase
+from omdb_support import OMDbUnavailableError
+from movie_renamer import reset_omdb_state as m_reset
+
+class TestSeriesSearchPagination(OrganizerTestCase):
     """A title is unique only after all bounded search pages are complete."""
 
     def setUp(self):
@@ -144,10 +148,15 @@ class TestSeriesSearchPagination(unittest.TestCase):
         rows[0] = self.row(0, "Below")
         secret_error = requests.ConnectionError("https://metadata.invalid/?apikey=DO_NOT_LOG")
         with patch("movie_renamer.requests.get", side_effect=[self.response(rows, 11), secret_error]), \
-                self.assertLogs("movie_renamer", level="ERROR") as logs:
-            self.assertIsNone(_query_omdb_series_single("Below"))
-        self.assertNotIn("DO_NOT_LOG", " ".join(logs.output))
-        self.assertNotIn("https://", " ".join(logs.output))
+                self.assertLogs("movie_renamer", level="WARNING") as logs:
+            # A failed request is not an answer: the lookup says so instead of reporting
+            # "no match" (which used to be remembered for 24 h and skip the release).
+            with self.assertRaises(OMDbUnavailableError) as raised:
+                _query_omdb_series_single("Below")
+        for text in (str(raised.exception), " ".join(logs.output)):
+            self.assertNotIn("DO_NOT_LOG", text)
+            self.assertNotIn("https://", text)
+            self.assertNotIn("apikey", text.lower())
 
     def test_over_limit_search_does_not_fetch_extra_pages(self):
         rows = [self.row(i) for i in range(10)]
@@ -204,7 +213,10 @@ class TestSeriesSearchPagination(unittest.TestCase):
         rows = [self.row(i) for i in range(10)]
         rows[0] = self.row(0, "Below")
         with patch("movie_renamer.requests.get", side_effect=[self.response(rows, 11), self.response([], status=401)]):
-            self.assertIsNone(_query_omdb_series_single("Below"))
+            # Never accepts the first-page match on the strength of an unanswered page.
+            with self.assertRaises(OMDbUnavailableError):
+                _query_omdb_series_single("Below")
+        m_reset()   # the failure above started a back-off; this block is about the counter
         with patch("movie_renamer._omdb_consecutive_401s", 4), \
                 patch("movie_renamer.requests.get", return_value=self.response([], status=401)):
             with self.assertRaises(OMDbRateLimitError):
@@ -244,7 +256,7 @@ class TestSeriesSearchPagination(unittest.TestCase):
             self.assertEqual(len(list(folder.iterdir())), 6)
 
 
-class TestNormalize(unittest.TestCase):
+class TestNormalize(OrganizerTestCase):
     def test_punctuation_equivalence(self):
         self.assertEqual(
             normalize_for_match("R.I.P.D. 2: Rise of the Damned"),
@@ -255,7 +267,7 @@ class TestNormalize(unittest.TestCase):
         self.assertEqual(normalize_for_match("Law & Order"), normalize_for_match("Law and Order"))
 
 
-class TestMissingMovieYear(unittest.TestCase):
+class TestMissingMovieYear(OrganizerTestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.source = Path(self._tmp.name)
@@ -371,7 +383,7 @@ class TestMissingMovieYear(unittest.TestCase):
                 self.assertTrue(all(video.is_file() for video in movie["video_files"]))
 
 
-class TestAcronymVariations(unittest.TestCase):
+class TestAcronymVariations(OrganizerTestCase):
     def test_spaced_acronym_run(self):
         # PTN output for R.I.P.D.2.Rise.of.the.Damned.2022 (log 2026-06-05)
         variations = get_acronym_variations("R I P D 2 Rise of the Damned")
@@ -394,7 +406,7 @@ class TestAcronymVariations(unittest.TestCase):
         self.assertEqual(get_acronym_variations("Malcolm X"), [])
 
 
-class TestMovieVariations(unittest.TestCase):
+class TestMovieVariations(OrganizerTestCase):
     def test_ripd_end_to_end_from_filename(self):
         title, year = parse("R.I.P.D.2.Rise.of.the.Damned.2022.1080p.WEBRip.x264.mp4").get("title"), "2022"
         self.assertEqual(title, "R I P D 2 Rise of the Damned")
@@ -416,7 +428,7 @@ class TestMovieVariations(unittest.TestCase):
         ])
 
 
-class TestSeparatorVariations(unittest.TestCase):
+class TestSeparatorVariations(OrganizerTestCase):
     def test_black_pearl_full_title_without_an_alias(self):
         variants = get_separator_variations(
             "Pirates of the Caribbean - The Curse of the Black Pearl")
@@ -447,7 +459,7 @@ class TestSeparatorVariations(unittest.TestCase):
                 self.assertEqual(get_separator_variations(title), [])
 
 
-class TestSeparatorLookup(unittest.TestCase):
+class TestSeparatorLookup(OrganizerTestCase):
     def setUp(self):
         self.title = "Pirates of the Caribbean - On Stranger Tides"
         self.canonical = "Pirates of the Caribbean: On Stranger Tides"
@@ -484,7 +496,7 @@ class TestSeparatorLookup(unittest.TestCase):
                     self.assertIsNone(query_omdb(self.title, "2011"))
 
 
-class TestPossessiveVariations(unittest.TestCase):
+class TestPossessiveVariations(OrganizerTestCase):
     def test_only_one_word_changes_and_the_franchise_can_stay_plural(self):
         title = "Pirates of the Caribbean - At Worlds End"
         self.assertEqual(get_possessive_variations(title), [
@@ -544,7 +556,7 @@ class TestPossessiveVariations(unittest.TestCase):
                 self.assertIsNone(query_omdb(title, "2007"))
 
 
-class TestIsGoodMatch(unittest.TestCase):
+class TestIsGoodMatch(OrganizerTestCase):
     def test_accepts_punctuation_differences(self):
         self.assertTrue(is_good_match(
             "R I P D 2 Rise of the Damned", "2022",
@@ -568,7 +580,7 @@ class TestIsGoodMatch(unittest.TestCase):
         ))
 
 
-class TestSeriesVariations(unittest.TestCase):
+class TestSeriesVariations(OrganizerTestCase):
     def test_sas_rogue_heroes_generalized(self):
         # Log 2026-05-22: OMDb lists this series as plain "Rogue Heroes"
         variations = get_series_title_variations("SAS Rogue Heroes")
@@ -584,7 +596,7 @@ class TestSeriesVariations(unittest.TestCase):
         self.assertIn("S.W.A.T.", variations)
 
 
-class TestIsGoodSeriesMatch(unittest.TestCase):
+class TestIsGoodSeriesMatch(OrganizerTestCase):
     def test_accepts_contained_title(self):
         self.assertTrue(is_good_series_match(
             "SAS Rogue Heroes", None, {"title": "Rogue Heroes", "year": "2022", "type": "series"}))
@@ -606,7 +618,7 @@ class TestIsGoodSeriesMatch(unittest.TestCase):
             "Battlestar Galactica", "2004", {"title": "Battlestar Galactica", "year": "1978", "type": "series"}))
 
 
-class TestForeignReleasePrefix(unittest.TestCase):
+class TestForeignReleasePrefix(OrganizerTestCase):
     """SSDSSE-style CJK prefixes must not hide the real Latin title."""
 
     def test_ssdsse_signs(self):
@@ -622,7 +634,7 @@ class TestForeignReleasePrefix(unittest.TestCase):
         self.assertEqual(parse_filename("The.Sopranos.1999.S01E02.1080p")[0], "The Sopranos")
 
 
-class TestMoveMovieDestination(unittest.TestCase):
+class TestMoveMovieDestination(OrganizerTestCase):
     """move_movie must never delete a download because a junk-only folder
     already sits at the destination (the Kraven the Hunter data-loss bug)."""
 
@@ -754,7 +766,7 @@ class TestMoveMovieDestination(unittest.TestCase):
         self.assertTrue((source / "Kraven.mkv").is_file())
 
 
-class TestMovieFolderIdentity(unittest.TestCase):
+class TestMovieFolderIdentity(OrganizerTestCase):
     def test_only_punctuation_space_and_case_differences_are_equal(self):
         self.assertEqual(movie_folder_identity("Pirates - On Stranger Tides (2011)"),
                          movie_folder_identity("PIRATES: On Stranger Tides (2011)"))
@@ -768,7 +780,7 @@ class TestMovieFolderIdentity(unittest.TestCase):
                 self.assertNotEqual(original, movie_folder_identity(different))
 
 
-class TestCheckIfActuallySeries(unittest.TestCase):
+class TestCheckIfActuallySeries(OrganizerTestCase):
     """check_if_actually_series is the only function here that touches the
     network, so query_omdb_exact is mocked rather than adding real HTTP calls
     to an offline suite. The case is real: "Band of Brothers" (2001) is OMDb
