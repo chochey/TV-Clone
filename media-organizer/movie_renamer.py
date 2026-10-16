@@ -28,31 +28,50 @@ from organizer_readiness import ready_for_import, existing_series
 _download_observations = {}
 _DOWNLOAD_SNAPSHOT = Path(__file__).resolve().parent.parent / "data" / "download-readiness.json"
 
-# Set up logging
-_log_format = logging.Formatter("[%(asctime)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
-
-# Console handler
-_console_handler = logging.StreamHandler()
-_console_handler.setFormatter(_log_format)
-
-# File handlers — log to project dir and desktop
-_log_dir = pathlib.Path(__file__).parent
-_desktop_dir = pathlib.Path.home() / "Desktop"
-_file_handlers = []
-for _log_path in [_log_dir / "media-organizer.log", _desktop_dir / "media-organizer.log"]:
-    if os.environ.get("ORGANIZER_PREVIEW") == "1":
-        break
-    _fh = logging.handlers.RotatingFileHandler(
-        _log_path, maxBytes=5 * 1024 * 1024, backupCount=2,
-    )
-    _fh.setFormatter(_log_format)
-    _file_handlers.append(_fh)
-
-logging.basicConfig(
-    level=logging.INFO,
-    handlers=[_console_handler] + _file_handlers,
-)
+# Logging is configured by setup_logging(), which main() calls -- never at import.
+# It used to attach rotating file handlers to the production log (and a copy on the
+# Desktop) the moment this module was imported, so every unit-test run wrote fake
+# imports, fake review items and "Moved -> /tmp/..." lines into the files the
+# Organizer page reads and that the library-rescan trigger watches.
+_LOG_FORMAT = logging.Formatter("[%(asctime)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+_OWN_HANDLER = "_organizer_handler"
 log = logging.getLogger(__name__)
+log.addHandler(logging.NullHandler())  # stays silent when imported without setup_logging()
+
+
+def setup_logging(log_dir=None, preview=None, desktop_copy=None) -> list:
+    """Attach console + rotating-file handlers to the root logger. Safe to call twice.
+
+    preview (ORGANIZER_PREVIEW=1): console only; never writes a log file.
+    desktop_copy (ORGANIZER_DESKTOP_LOG=1): also mirror the log to ~/Desktop. Off by
+    default: it doubled every write and left two 5 MB files on the Desktop.
+    """
+    if preview is None:
+        preview = os.environ.get("ORGANIZER_PREVIEW") == "1"
+    if desktop_copy is None:
+        desktop_copy = os.environ.get("ORGANIZER_DESKTOP_LOG") == "1"
+    directory = pathlib.Path(log_dir) if log_dir else pathlib.Path(__file__).parent
+    root = logging.getLogger()
+    for existing in list(root.handlers):
+        if getattr(existing, _OWN_HANDLER, False):
+            root.removeHandler(existing)
+            existing.close()
+    handlers = [logging.StreamHandler()]
+    if not preview:
+        paths = [directory / "media-organizer.log"]
+        if desktop_copy:
+            paths.append(pathlib.Path.home() / "Desktop" / "media-organizer.log")
+        for path in paths:
+            try:
+                handlers.append(logging.handlers.RotatingFileHandler(path, maxBytes=5 * 1024 * 1024, backupCount=2))
+            except OSError as error:  # keep running on the console/journal if a log path is unwritable
+                print(f"[organizer] cannot write {path}: {error}", flush=True)
+    for handler in handlers:
+        handler.setFormatter(_LOG_FORMAT)
+        setattr(handler, _OWN_HANDLER, True)
+        root.addHandler(handler)
+    root.setLevel(logging.INFO)
+    return handlers
 
 # Track consecutive OMDb 401 errors to detect rate limiting
 _omdb_consecutive_401s = 0
@@ -2300,6 +2319,7 @@ def main() -> None:
         help="Clear library progress tracking so folders are re-processed from scratch",
     )
     args = parser.parse_args()
+    setup_logging()
 
     # Loud warning if the OMDb key is missing — without it every lookup 401s
     # and content is silently SKIP'd. (June 2026: a wrapper launch with no

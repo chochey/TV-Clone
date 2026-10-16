@@ -3806,7 +3806,9 @@ const ORGANIZER_SERVICE = process.env.ORGANIZER_SERVICE || 'tvclone-organizer.se
 // fuse.mergerfs where fs.watch is blind, so the folder watcher above never
 // fires — we watch the organizer's (ext4) log for "Moved ->" lines instead.
 const ORGANIZER_RESCAN_DEBOUNCE_MS = Math.max(2000, parseInt(process.env.ORGANIZER_RESCAN_DEBOUNCE_MS, 10) || 15000);
-const { setup: setupOrganizerWatch } = require('./lib/organizer-watch')({
+const organizerWatchFactory = require('./lib/organizer-watch');
+const { describeAttention } = organizerWatchFactory;
+const { setup: setupOrganizerWatch } = organizerWatchFactory({
   logPath: ORGANIZER_LOG,
   debounceMs: ORGANIZER_RESCAN_DEBOUNCE_MS,
   onMove: () => {
@@ -3815,14 +3817,13 @@ const { setup: setupOrganizerWatch } = require('./lib/organizer-watch')({
     // (an organizer move always changes ids, so the poke always fires).
     invalidateLibrary('organizer');
   },
-  onAttention: () => {
-    console.log('[OrganizerWatch] Placement failure — notifying admins');
-    notifyLog.push({
-      type: 'organizer',
-      title: 'Organizer needs attention',
-      body: 'A download could not be matched to a title',
-      audience: 'organizer',
-    });
+  // batch = { reviews: [{type,title,source,reason}], legacy: n }. The organizer logs
+  // most "needs a person" cases as REVIEW events; describeAttention says which
+  // release and why instead of a fixed sentence.
+  onAttention: (batch) => {
+    const { title, body } = describeAttention(batch);
+    console.log(`[OrganizerWatch] Needs attention — notifying admins: ${body.slice(0, 120)}`);
+    notifyLog.push({ type: 'organizer', title, body, audience: 'organizer' });
     notifyClients('notifications-updated');
   },
 });
@@ -3882,13 +3883,13 @@ app.get('/api/organizer/logs', requirePermission('canOrganizer'), async (req, re
       if (ts > meta.lastActivity) meta.lastActivity = ts;
       if (ts < dayAgo) continue;
       if (/Moved ->/.test(l)) meta.moves24h++;
-      else if (/SKIP|No confident/i.test(l)) meta.skips24h++;
+      else if (/SKIP|No confident|REVIEW: \{/i.test(l)) meta.skips24h++;
       else if (/ERROR|FAIL|rate limit/i.test(l)) meta.errors24h++;
     }
 
     let out;
     if (filter === 'moves') out = allLines.filter(l => /Moved ->|MOVIE.*Found|TV.*Found|Parsed:|OMDb match:|Scan complete/.test(l));
-    else if (filter === 'errors') out = allLines.filter(l => /SKIP|ERROR|FAIL|No confident|rate limit/i.test(l));
+    else if (filter === 'errors') out = allLines.filter(l => /SKIP|ERROR|FAIL|No confident|rate limit|REVIEW: \{/i.test(l));
     else if (filter === 'scans') out = allLines.filter(l => /Scan complete|Watching|============/.test(l));
     else out = allLines.filter(l => !isHeartbeat(l)); // 'all' still hides heartbeats
     if (q) out = out.filter(l => l.toLowerCase().includes(q));
