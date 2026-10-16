@@ -94,7 +94,7 @@ class ImportSafety(OrganizerTestCase):
   # Remove the setUp episode stub just for this check via module source function.
   import inspect
   namespace=dict(m.__dict__)
-  source=Path(m.__file__).read_text();start=source.index('def query_omdb_episode(');end=source.index('def create_tv_filename(',start)
+  source=Path(m.__file__).read_text();start=source.index('def query_omdb_episode(');end=source.index('def find_media_in_source(',start)
   exec(source[start:end],namespace)
   response=Mock();response.status_code=200;response.json.return_value={'Response':'True','Title':'Episode'}
   with patch.object(m.requests,'get',return_value=response) as get:

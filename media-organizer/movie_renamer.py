@@ -26,6 +26,23 @@ import safe_copy
 from movie_import_guard import check_movie
 from omdb_support import OMDbUnavailableError
 from organizer_readiness import ready_for_import, existing_series
+from titles import (
+    clean_title,
+    create_clean_filename,
+    create_tv_filename,
+    extract_language_suffix,
+    get_acronym_variations,
+    get_file_parts,
+    get_possessive_variations,
+    get_separator_variations,
+    is_tv_show,
+    movie_folder_identity,
+    normalize_for_match,
+    parse_filename,
+    parse_tv_info,
+    strip_foreign_release_prefix,
+    title_match_ratio,
+)
 _download_observations = {}
 _DOWNLOAD_SNAPSHOT = Path(__file__).resolve().parent.parent / "data" / "download-readiness.json"
 
@@ -221,11 +238,6 @@ def find_existing_movie_drive(movie_folder_name: str) -> Path | None:
     return None
 
 
-def movie_folder_identity(name: str) -> str:
-    """Compare the complete folder title and year; only punctuation varies."""
-    return re.sub(r"[\W_]+", " ", name.casefold()).strip()
-
-
 def _folder_has_movie_video(folder: Path) -> bool:
     """Require a nonempty regular video; unreadable folders raise for review."""
     pending = [folder]
@@ -285,35 +297,6 @@ def get_tv_dest(series_folder_name: str) -> Path:
     return Path(config.TV_DEST_DIR)
 
 
-# CJK block: fullwidth punctuation (incl. 【】), kana, Han, Hangul, fullwidth forms.
-_CJK = r"　-〿぀-ヿ一-鿿가-힯＀-￯"
-
-
-def strip_foreign_release_prefix(name: str) -> str:
-    """Drop Chinese/Japanese/Korean release-site prefixes that hide the title.
-
-    Sites like SSDSSE ship names as
-      【高清影视之家发布 www.SSDSSE.com】天兆[国英多音轨].Signs.2002.BluRay...
-    PTN then reads the whole CJK blob as the title and every OMDb lookup
-    fails. If the name carries CJK, strip the 【…】 groups and any leading CJK
-    runs (plus an attached […] tag) so the real Latin title leads.
-    """
-    if not re.search(f"[{_CJK}]", name):
-        return name
-    name = re.sub(r"【[^】]*】", " ", name)                       # 【site】 groups
-    name = re.sub(f"[{_CJK}]+(\\s*\\[[^\\]]*\\])?", " ", name)   # CJK run + optional [tag]
-    name = re.sub(r"^[\s.\-_]+", "", name)                       # leftover separators
-    return re.sub(r"\s+", " ", name).strip()
-
-
-def parse_filename(filename: str) -> tuple[str | None, str | None]:
-    """Extract title and year from a filename using PTN."""
-    parsed = parse(strip_foreign_release_prefix(filename))
-    title = parsed.get("title")
-    year = parsed.get("year")
-    return title, str(year) if year else None
-
-
 def infer_missing_movie_year(movie: dict, title: str, year: str | None) -> str | None:
     """Use the sole video filename's year only when its complete title agrees.
 
@@ -332,74 +315,6 @@ def infer_missing_movie_year(movie: dict, title: str, year: str | None) -> str |
             and movie_folder_identity(title) == movie_folder_identity(video_title)):
         return video_year
     return year
-
-
-def clean_title(title: str) -> str:
-    """Clean a title by removing common release group tags and normalizing."""
-    release_tags = [
-        r"\[TGx\]", r"\[YTS[^\]]*\]", r"\[RARBG\]", r"\[ettv\]", r"\[eztv\]",
-        r"YTS\.MX", r"YTS\.LT", r"YTS\.AM", r"RARBG", r"TGx",
-        r"\(TGx\)", r"\(RARBG\)", r"\(YTS[^\)]*\)",
-    ]
-    for tag in release_tags:
-        title = re.sub(tag, "", title, flags=re.IGNORECASE)
-    title = re.sub(r"\s+", " ", title).strip()
-    return title
-
-
-def normalize_for_match(title: str) -> str:
-    """Normalize a title for similarity comparison: case, punctuation, '&'.
-
-    'R.I.P.D. 2: Rise of the Damned' and 'R I P D 2 Rise of the Damned'
-    both normalize to 'r i p d 2 rise of the damned'.
-    """
-    s = title.lower().strip().replace("&", " and ")
-    s = re.sub(r"[^a-z0-9]+", " ", s)
-    return re.sub(r"\s+", " ", s).strip()
-
-
-def title_match_ratio(a: str, b: str) -> float:
-    """Title similarity that is robust to punctuation differences.
-
-    Takes the best of raw and normalized comparison so existing accepts
-    never get worse, but dots/colons/hyphens stop dragging scores down.
-    """
-    raw = SequenceMatcher(None, a.lower().strip(), b.lower().strip()).ratio()
-    norm = SequenceMatcher(None, normalize_for_match(a), normalize_for_match(b)).ratio()
-    return max(raw, norm)
-
-
-def get_acronym_variations(title: str) -> list[str]:
-    """Variations for acronym titles that PTN and OMDb disagree on.
-
-    PTN strips dots, so 'R.I.P.D.2.Rise.of.the.Damned' parses as
-    'R I P D 2 Rise of the Damned' while OMDb titles it
-    'R.I.P.D. 2: Rise of the Damned'. Generates dotted, collapsed and
-    unglued-digit forms so one of the exact queries can land.
-    """
-    results: list[str] = []
-    base = re.sub(r"\s+", " ", title).strip().rstrip(".").strip()
-
-    def add(value: str) -> None:
-        value = re.sub(r"\s+", " ", value).strip()
-        if value and value.lower() != title.lower().strip() and value not in results:
-            results.append(value)
-
-    # Runs of 2+ single-letter words: 'S W A T' -> 'S.W.A.T.' and 'SWAT'
-    run_re = re.compile(r"\b([A-Za-z](?:\s+[A-Za-z]\b)+)")
-    if run_re.search(base):
-        add(run_re.sub(lambda m: ".".join(m.group(1).split()) + ".", base))
-        add(run_re.sub(lambda m: "".join(m.group(1).split()), base))
-
-    # Digit glued onto a dotted acronym: 'R.I.P.D.2. Rise' -> 'R.I.P.D. 2 Rise'
-    unglued = re.sub(r"((?:[A-Za-z]\.){2,})\s*(\d)", r"\1 \2", base)
-    unglued = re.sub(r"(\d)\.(?=\s|$)", r"\1", unglued)
-    add(unglued)
-
-    # Dotted acronym -> plain word: 'S.W.A.T. Under Siege' -> 'SWAT Under Siege'
-    add(re.sub(r"\b((?:[A-Za-z]\.){2,})", lambda m: m.group(1).replace(".", ""), unglued))
-
-    return results
 
 
 def get_alias_variations(title: str, media_type: str) -> list[str]:
@@ -425,43 +340,6 @@ def get_alias_variations(title: str, media_type: str) -> list[str]:
         if target and target not in results:
             results.append(target)
     return results
-
-
-def get_separator_variations(title: str) -> list[str]:
-    """Vary full-title separators without removing words or word hyphens.
-
-    Release folders often use 'Franchise - Subtitle' where metadata uses a
-    colon. Only standalone, spaced dashes qualify: 'Spider-Man' stays intact.
-    Every part is retained, including sequel numbers and multiple subtitles.
-    """
-    parts = re.split(r"\s+[-\u2013\u2014]\s+|:\s*", title)
-    if len(parts) == 1 or any(not part.strip() for part in parts):
-        return []
-    parts = [part.strip() for part in parts]
-    variations = []
-    for separator in (": ", " ", " - "):
-        variant = separator.join(parts)
-        if variant != title and variant not in variations:
-            variations.append(variant)
-    return variations
-
-
-def get_possessive_variations(title: str, limit: int = 6) -> list[str]:
-    """Insert an apostrophe in one eligible word; preserve every other word.
-
-    Trying all plural-looking words together turns 'Pirates ... Worlds End'
-    into "Pirate's ... World's End". Single-word candidates allow the correct
-    possessive without changing the franchise. The fixed bound avoids expanding
-    a long release title into an unbounded set of metadata requests.
-    """
-    variations = []
-    for match in re.finditer(r"\b([A-Za-z]+[^s\W])s\b", title, re.IGNORECASE):
-        if len(variations) >= limit:
-            break
-        suffix = title[match.end() - 1]
-        variant = title[:match.start()] + match.group(1) + "'" + suffix + title[match.end():]
-        variations.append(variant)
-    return variations
 
 
 def get_title_variations(title: str) -> list[str]:
@@ -870,28 +748,6 @@ def get_all_files(directory: Path, extensions: list[str]) -> list[Path]:
     return files
 
 
-def is_tv_show(parsed: dict) -> bool:
-    """Check if parsed filename indicates a TV show (has season/episode info)."""
-    return parsed.get("season") is not None or parsed.get("episode") is not None
-
-
-def parse_tv_info(filename: str) -> dict | None:
-    """Parse TV show info from filename. Returns None if not a TV show."""
-    parsed = parse(filename)
-    if not is_tv_show(parsed):
-        return None
-
-    episode = parsed.get("episode")
-
-    return {
-        "title": parsed.get("title"),
-        "season": parsed.get("season"),
-        "year": str(parsed["year"]) if parsed.get("year") else None,
-        "episode": episode,
-        "episode_title": parsed.get("episodeName"),
-    }
-
-
 def get_series_title_variations(title: str) -> list[str]:
     """Generate variations of a TV series title for OMDb lookup.
 
@@ -1157,41 +1013,6 @@ def query_omdb_episode(series_title: str, season: int, episode: int, imdb_id: st
     """
     title = _season_episode_titles(series_title, season, imdb_id).get(int(episode))
     return {"episode_title": title} if title else None
-
-
-def create_tv_filename(
-    series_title: str,
-    season: int,
-    episode: int | None,
-    episode_title: str | None,
-    extension: str,
-    lang_suffix: str = "",
-) -> str | None:
-    """Create a TV show filename: 'Show Name - S01E02 - Episode Title.ext'
-
-    Returns None if episode is None (can't create valid filename).
-    """
-    if episode is None:
-        return None
-
-    clean_title = re.sub(r'[<>:"/\\|?*]', "", series_title)
-    episodes = episode if isinstance(episode, list) else [episode]
-    ep_code = f"S{season:02d}" + "".join(f"E{ep:02d}" for ep in episodes)
-
-    if episode_title:
-        # Decode HTML entities from OMDb (e.g., &gt; -> >)
-        episode_title = html.unescape(episode_title)
-        # Replace / with - (not allowed in Windows filenames)
-        episode_title = episode_title.replace("/", "-")
-        clean_ep_title = re.sub(r'[<>:"/\\|?*]', "", episode_title)
-        clean_ep_title = re.sub(r"\s+", " ", clean_ep_title).strip()
-        base = f"{clean_title} - {ep_code} - {clean_ep_title}"
-    else:
-        base = f"{clean_title} - {ep_code}"
-
-    if lang_suffix:
-        return f"{base}{lang_suffix}{extension}"
-    return f"{base}{extension}"
 
 
 def find_media_in_source() -> tuple[list[dict], list[dict]]:
@@ -1494,96 +1315,6 @@ def move_tv_show(show: dict, series_info: dict, dry_run: bool = False) -> bool:
     for reason, name in reviews + extra_notes:
         review_item(show, title, reason, name)
     return execute_import(show, title, plan, dry_run)
-
-
-def create_clean_filename(title: str, year: str, extension: str, lang_suffix: str = "") -> str:
-    """Create a clean filename from title and year."""
-    clean = re.sub(r'[<>:"/\\|?*]', "", title)
-    if lang_suffix:
-        return f"{clean} ({year}){lang_suffix}{extension}"
-    return f"{clean} ({year}){extension}"
-
-
-def get_file_parts(filepath: Path) -> tuple[str, str]:
-    """Get stem and suffix from a file, handling edge cases like '.srt'.
-
-    Returns (stem, suffix) where suffix includes the leading dot.
-    For files like '.srt', returns ('', '.srt').
-    """
-    name = filepath.name
-    suffix = filepath.suffix
-
-    # Handle files like ".srt" where pathlib treats it as hidden with no extension
-    if not suffix and name.startswith("."):
-        return "", name.lower()
-
-    return filepath.stem, suffix.lower()
-
-
-def extract_language_suffix(filename: str) -> str:
-    """Extract language suffix from subtitle filename if present.
-
-    Expects the filename stem (without extension), e.g., "Forced.eng" not "Forced.eng.srt".
-    """
-    # Known ISO 639-1 and 639-2 codes
-    iso_codes = {
-        "en", "eng", "es", "spa", "fr", "fre", "fra", "de", "ger", "deu",
-        "it", "ita", "pt", "por", "ru", "rus", "zh", "chi", "zho",
-        "ja", "jpn", "ko", "kor", "ar", "ara", "hi", "hin", "nl", "dut",
-        "nld", "sv", "swe", "no", "nor", "nob", "nb", "nn", "nno",  # Norwegian variants
-        "da", "dan", "fi", "fin", "pl", "pol", "tr", "tur", "cs", "cze", "ces",
-        "el", "gre", "ell", "he", "heb", "th", "tha", "vi", "vie",
-        "id", "ind", "ms", "msa", "ro", "rum", "ron", "hu", "hun",
-        "uk", "ukr", "bg", "bul", "hr", "hrv", "sk", "slo", "slk",
-        "sl", "slv", "et", "est", "lv", "lav", "lt", "lit",
-        "cat", "baq", "fil", "glg", "may", "tam", "tel", "urd",
-        "ben", "mar", "guj", "kan", "mal", "pan", "yue",  # Cantonese
-    }
-    # Full language names and special tags
-    full_names = {
-        "english", "spanish", "french", "german", "italian", "portuguese",
-        "russian", "chinese", "japanese", "korean", "arabic", "hindi",
-        "dutch", "swedish", "norwegian", "danish", "finnish", "polish",
-        "turkish", "czech", "greek", "hebrew", "thai", "vietnamese",
-        "indonesian", "malay", "romanian", "hungarian", "ukrainian",
-        "bulgarian", "croatian", "slovak", "slovenian", "brazilian",
-        "estonian", "latvian", "lithuanian", "filipino", "catalan",
-        "simplified", "traditional", "latin", "european", "canadian",  # Region modifiers
-        "forced", "sdh", "hi", "cc",  # Special tags (hi = hearing impaired)
-    }
-
-    # Use filename directly - it's already the stem
-    stem = filename.strip()
-    if not stem:
-        return ""
-
-    stem_lower = stem.lower()
-
-    # Check if entire stem is a language code (e.g., "ara" from "ara.srt")
-    if stem_lower in iso_codes or stem_lower in full_names:
-        return f".{stem_lower}"
-
-    # Split by dots, underscores, and spaces
-    parts = re.split(r"[._ ]+", stem_lower)
-
-    # Filter out empty parts
-    parts = [p for p in parts if p]
-    if not parts:
-        return ""
-
-    # Take only the last 1-4 parts that might be language-related
-    suffix_parts = []
-    for part in reversed(parts[-4:]):
-        if part in iso_codes or part in full_names:
-            suffix_parts.insert(0, part)
-        elif suffix_parts:
-            # Stop when we hit a non-language part after finding some
-            break
-
-    if suffix_parts:
-        return "." + ".".join(suffix_parts)
-
-    return ""
 
 
 def move_movie(movie: dict, omdb_info: dict, dry_run: bool = False) -> bool:
