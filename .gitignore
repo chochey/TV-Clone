@@ -10,8 +10,14 @@ docs/
 test-results/
 tests/screenshots/
 
-# Nested standalone repo (has its own .git) — never commit it here
-media-organizer/
+# media-organizer/ is tracked in this repository. Its own .gitignore keeps these out
+# too; they are repeated here so the rule survives anything that moves that file.
+media-organizer/.env
+media-organizer/*.log
+media-organizer/*.log.*
+media-organizer/library_progress.json
+media-organizer/__pycache__/
+media-organizer/.claude/
 
 # Python import-guard bytecode
 lib/__pycache__/

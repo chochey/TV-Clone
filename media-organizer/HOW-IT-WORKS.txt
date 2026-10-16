@@ -1,0 +1,92 @@
+Media Organizer - How It Works
+================================
+
+WHAT IT DOES:
+-------------
+Automatically watches your downloads folder for new movies and TV shows.
+When a download finishes, it identifies the media using OMDb (online movie
+database), renames it cleanly, and moves it to the correct library folder.
+
+  Downloads folder:  /mnt/media/Share
+  Movies go to:      /mnt/media/Movies/Title (Year)/Title (Year).ext
+  TV shows go to:    /mnt/media/TV/Show Name (Year)/Season XX/Show Name - S01E01 - Episode.ext
+
+
+HOW IT IDENTIFIES MEDIA:
+------------------------
+1. Scans /mnt/media/Share for new folders/files
+2. Parses the messy torrent name to extract the title and year
+   Example: "Under.the.Skin.2013.1080p.BluRay.x264-YIFY" -> title: "Under the Skin", year: 2013
+3. Looks up the title on OMDb to get the official name and year
+4. If the filename contains season/episode patterns (S01E01, 1x01, etc) -> TV show
+   Otherwise -> Movie
+5. Renames and moves to the correct folder
+6. Deletes leftover junk files from the source folder (thumbnails, .nfo, etc)
+
+
+AUTOMATIC BACKGROUND SERVICE:
+-----------------------------
+The organizer runs as a systemd user service that:
+- Starts automatically when you log in
+- Scans every 30 seconds for new downloads
+- Runs silently in the background (no terminal window needed)
+- Restarts automatically if it crashes
+
+Service name: media-organizer
+
+Commands:
+  systemctl --user status media-organizer     Check if running
+  systemctl --user stop media-organizer       Stop it
+  systemctl --user start media-organizer      Start it
+  systemctl --user restart media-organizer    Restart it
+
+Service file location:
+  ~/.config/systemd/user/media-organizer.service
+
+
+LOGGING:
+--------
+All activity is logged to two files:
+
+  ~/Desktop/media-organizer.log
+  ~/Desktop/Repos/Media-Organizer/media-organizer.log
+
+Both files contain the same output. Each log entry is timestamped.
+Log files auto-rotate at 5MB with 2 backups, so they won't fill your disk.
+
+What gets logged:
+- Every media file found
+- Title parsing results
+- OMDb lookup results
+- Files moved and where they went
+- Files skipped (already exists, still downloading, no match)
+- Errors and warnings
+- "Still watching..." heartbeat every 5 minutes
+
+
+STORAGE (MERGERFS):
+-------------------
+All USB drives are combined into one /mnt/media mount using mergerfs.
+The script sees a single unified folder structure. When placing files:
+- If a movie/show already exists on a drive, new files go to that same drive
+- New content goes to the drive with the most free space
+
+
+CONFIGURATION:
+--------------
+Settings are in config.py:
+
+  SOURCE_DIR      Where to watch for downloads    /mnt/media/Share
+  MOVIE_DEST_DIR  Where movies go                 /mnt/media/Movies
+  TV_DEST_DIR     Where TV shows go               /mnt/media/TV
+  INCOMPLETE_DIR  Incomplete downloads             /mnt/media/incomplete
+  POLL_INTERVAL   Scan frequency (seconds)         30
+  OMDB_API_KEY    API key for movie lookups        (set)
+
+
+REQUIREMENTS:
+-------------
+- Python 3
+- pip packages: requests, parse-torrent-name (installed via requirements.txt)
+- OMDb API key (free tier: 1,000 lookups/day)
+- mergerfs mounted at /mnt/media

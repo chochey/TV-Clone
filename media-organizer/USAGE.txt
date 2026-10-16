@@ -1,0 +1,87 @@
+Media Renamer - Usage Commands
+===============================
+
+Automatically renames and organizes movies and TV shows from downloads.
+
+BACKGROUND SERVICE (recommended - runs 24/7, starts on login):
+--------------------------------------------------------------
+systemctl --user status media-organizer    # check status
+systemctl --user restart media-organizer   # restart
+systemctl --user stop media-organizer      # stop
+systemctl --user start media-organizer     # start
+
+Logs:
+  ~/Desktop/media-organizer.log
+  ~/Desktop/Repos/Media-Organizer/media-organizer.log
+
+
+SETUP (one-time):
+-----------------
+cd ~/Desktop/Repos/Media-Organizer
+pip3 install --break-system-packages -r requirements.txt
+
+
+RUN ONCE (process new downloads):
+---------------------------------
+python3 movie_renamer.py
+
+
+DRY RUN (preview without moving):
+---------------------------------
+python3 movie_renamer.py --dry-run
+
+
+RUN IN WATCH MODE (auto every 30 seconds):
+------------------------------------------
+python3 movie_renamer.py --watch
+
+
+RENAME EXISTING LIBRARIES:
+--------------------------
+# Scan and rename both movies and TV at once:
+python3 movie_renamer.py --all
+
+# Preview first (dry run):
+python3 movie_renamer.py --all --dry-run
+
+# Movies only:
+python3 movie_renamer.py --library
+
+# TV only:
+python3 movie_renamer.py --library-tv
+
+
+STOP WATCH MODE:
+----------------
+Press Ctrl+C
+
+
+HOW IT WORKS:
+-------------
+Movies:   /mnt/media/Share -> /mnt/media/Movies/Title (Year)/Title (Year).ext
+TV Shows: /mnt/media/Share -> /mnt/media/TV/Show Name (Year)/Season XX/Show Name - S01E01 - Episode.ext
+
+Auto-detection:
+- If filename has S01E01, SxxExx, season/episode info -> TV show
+- Otherwise -> Movie
+
+
+MERGERFS STORAGE:
+-----------------
+All 4 USB drives are combined into a single /mnt/media mount using mergerfs.
+The drives auto-mount on boot via /etc/fstab. mergerfs does NOT modify the
+underlying drives - it provides a unified view on top of them.
+
+If a TV show or movie already exists on a drive, new episodes/seasons are
+automatically placed on that same drive (epmfs policy). New content goes
+to the drive with the most free space.
+
+
+CONFIGURATION:
+--------------
+Edit config.py to change:
+- SOURCE_DIR: Where downloads come from (/mnt/media/Share)
+- MOVIE_DEST_DIR: Movie destination (/mnt/media/Movies)
+- TV_DEST_DIR: TV destination (/mnt/media/TV)
+- INCOMPLETE_DIR: Where incomplete downloads are (/mnt/media/incomplete)
+- POLL_INTERVAL: How often to scan in watch mode (default: 30 seconds)

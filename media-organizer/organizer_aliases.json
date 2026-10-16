@@ -1,0 +1,52 @@
+{
+  "aliases": [
+    {
+      "id": "46a1780dd933",
+      "from": "Pirates of the Caribbean - Curse of the Black Pearl",
+      "to": "Pirates of the Caribbean Curse of the Black Pearl",
+      "type": "movie",
+      "createdAt": 1791000062629,
+      "updatedAt": 1791000062629
+    },
+    {
+      "id": "4aea7be95bab",
+      "from": "The Last House",
+      "to": "The Last House",
+      "type": "movie",
+      "createdAt": 1786344686094,
+      "updatedAt": 1786344686094
+    },
+    {
+      "id": "355f9bcff168",
+      "from": "Men In Black 3",
+      "to": "Men in Black³",
+      "type": "movie",
+      "createdAt": 1785642324933,
+      "updatedAt": 1785642535976
+    },
+    {
+      "id": "busan2peninsula",
+      "from": "Train to Busan 2.Peninsula.",
+      "to": "Peninsula",
+      "type": "movie",
+      "createdAt": 1782491769232,
+      "updatedAt": 1782491769232
+    },
+    {
+      "id": "raiders-alias",
+      "from": "Indiana Jones And The Raiders Of The Lost Ark",
+      "to": "Raiders of the Lost Ark",
+      "type": "movie",
+      "createdAt": 1783464000000,
+      "updatedAt": 1783464000000
+    },
+    {
+      "id": "ray-donovan-alias",
+      "from": "Ray Donovan 2013",
+      "to": "Ray Donovan",
+      "type": "series",
+      "createdAt": 1783466000000,
+      "updatedAt": 1783466000000
+    }
+  ]
+}

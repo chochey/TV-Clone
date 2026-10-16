@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+*.log
+*.backup
+library_progress.json
+.claude/
+.env
+*.log.*
