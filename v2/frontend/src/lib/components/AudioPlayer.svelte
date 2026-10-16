@@ -5,13 +5,13 @@
   import { audioProgressPayload, audioResumePosition, audioPlaybackError, audioPlaybackIssue, startAudioPlayback, audioTime } from '../audio-playback.js';
   import { audioPresentation, audioRemaining, audioChapters, activeAudioChapter, audioChapterLabel } from '../audio-presentation.js';
   import { mergeAudioDetail } from '../audio-detail.js';
-  import { AUDIO_SPEEDS, rememberedAudioSpeed, audioBookmarks, createSleepTimer } from '../listening-tools.js';
+  import { AUDIO_SPEEDS, rememberedAudioSpeed, rememberedAudioVolume, rememberAudioVolume, audioBookmarks, createSleepTimer } from '../listening-tools.js';
   import AudioReadAlong from './AudioReadAlong.svelte';
 
   let { item, onclose, minimized = false, onminimize, onexpand } = $props();
   let audio = $state(null), dialog = $state(null), closeButton = $state(null);
   let error = $state(''), notice = $state('Loading audio…');
-  let currentTime = $state(0), duration = $state(0), speed = $state(1), volume = $state(1), muted = $state(false);
+  let currentTime = $state(0), duration = $state(0), speed = $state(1), volume = $state(rememberedAudioVolume()), muted = $state(false);
   let playing = $state(false), ready = $state(false), full = $state(null), artworkIndex = $state(0);
   let readAlongOpen = $state(false);
   const book = $derived(mergeAudioDetail(item, full));
@@ -106,7 +106,7 @@
     }
   }
   function setVolume(value) {
-    volume = Math.max(0, Math.min(1, Number(value)));
+    volume = rememberAudioVolume(value);
     if (audio) { audio.muted = false; audio.volume = volume; }
   }
   async function setSpeed(value) {
