@@ -1,92 +1,179 @@
 Media Organizer - How It Works
 ================================
 
-WHAT IT DOES:
--------------
-Automatically watches your downloads folder for new movies and TV shows.
-When a download finishes, it identifies the media using OMDb (online movie
-database), renames it cleanly, and moves it to the correct library folder.
+WHAT IT DOES
+------------
+Watches the downloads folder. When a download has really finished, it works out what
+it is using OMDb (the online movie database), gives it a clean name, and files it in
+the library. Anything it is not sure about is left alone and shown on the Organizer
+page for a person to look at.
 
   Downloads folder:  /mnt/media/Share
   Movies go to:      /mnt/media/Movies/Title (Year)/Title (Year).ext
-  TV shows go to:    /mnt/media/TV/Show Name (Year)/Season XX/Show Name - S01E01 - Episode.ext
+  TV shows go to:    /mnt/media/TV/Show Name (Year)/Season 01/Show Name - S01E01 - Episode Title.ext
+  TV bonus videos:   /mnt/media/TV/Show Name (Year)/Extras/...
 
 
-HOW IT IDENTIFIES MEDIA:
-------------------------
-1. Scans /mnt/media/Share for new folders/files
-2. Parses the messy torrent name to extract the title and year
-   Example: "Under.the.Skin.2013.1080p.BluRay.x264-YIFY" -> title: "Under the Skin", year: 2013
-3. Looks up the title on OMDb to get the official name and year
-4. If the filename contains season/episode patterns (S01E01, 1x01, etc) -> TV show
-   Otherwise -> Movie
-5. Renames and moves to the correct folder
-6. Deletes leftover junk files from the source folder (thumbnails, .nfo, etc)
-
-
-AUTOMATIC BACKGROUND SERVICE:
------------------------------
-The organizer runs as a systemd user service that:
-- Starts automatically when you log in
-- Scans every 30 seconds for new downloads
-- Runs silently in the background (no terminal window needed)
-- Restarts automatically if it crashes
-
-Service name: media-organizer
-
-Commands:
-  systemctl --user status media-organizer     Check if running
-  systemctl --user stop media-organizer       Stop it
-  systemctl --user start media-organizer      Start it
-  systemctl --user restart media-organizer    Restart it
-
-Service file location:
-  ~/.config/systemd/user/media-organizer.service
-
-
-LOGGING:
---------
-All activity is logged to two files:
-
-  ~/Desktop/media-organizer.log
-  ~/Desktop/Repos/Media-Organizer/media-organizer.log
-
-Both files contain the same output. Each log entry is timestamped.
-Log files auto-rotate at 5MB with 2 backups, so they won't fill your disk.
-
-What gets logged:
-- Every media file found
-- Title parsing results
-- OMDb lookup results
-- Files moved and where they went
-- Files skipped (already exists, still downloading, no match)
-- Errors and warnings
-- "Still watching..." heartbeat every 5 minutes
-
-
-STORAGE (MERGERFS):
--------------------
-All USB drives are combined into one /mnt/media mount using mergerfs.
-The script sees a single unified folder structure. When placing files:
-- If a movie/show already exists on a drive, new files go to that same drive
-- New content goes to the drive with the most free space
-
-
-CONFIGURATION:
+HOW IT DECIDES
 --------------
-Settings are in config.py:
+1. Waits until the download is finished. The media server writes a snapshot of
+   qBittorrent's state to data/download-readiness.json. A release is only touched when
+   the snapshot (never more than 45 seconds old) says it is complete and its files have
+   stayed exactly the same across two looks at least 30 seconds apart. If the snapshot
+   goes stale, the organizer pauses instead of guessing. qBittorrent's own work-in-
+   progress folder, Share/incomplete, is never touched, and neither are folders whose
+   names start with an underscore (_review, ...): those are for you to park things in.
+2. Reads the messy name: "Under.the.Skin.2013.1080p.BluRay.x264-YIFY" -> "Under the Skin", 2013.
+3. Season/episode markers (S01E01, 1x01, ...) mean TV; otherwise it is a movie.
+4. Looks the title up on OMDb and only accepts a match whose title and year agree.
+   A wrong-looking or tied result is never guessed: it goes to review.
+5. A movie file is also checked with ffprobe: a file with no readable length, a very short
+   one (a sample) or one much shorter than OMDb's runtime is held for review instead of
+   being filed.
+6. Files it. Episode titles come from OMDb, one request per season (kept on disk), not
+   one per file.
 
-  SOURCE_DIR      Where to watch for downloads    /mnt/media/Share
-  MOVIE_DEST_DIR  Where movies go                 /mnt/media/Movies
-  TV_DEST_DIR     Where TV shows go               /mnt/media/TV
-  INCOMPLETE_DIR  Incomplete downloads             /mnt/media/incomplete
-  POLL_INTERVAL   Scan frequency (seconds)         30
-  OMDB_API_KEY    API key for movie lookups        (set)
+
+WHAT IT NEVER DOES
+------------------
+- It never overwrites a file in the library. A name clash means "keep both, tell a person".
+- It never deletes media. After an import it removes only folders that are completely
+  empty. Anything it could not place (and the advertising text, posters and links that come
+  with releases) stays in the download folder. The Organizer page has a "Clear leftover
+  files" button that removes those text/image/link files, but only from releases it can see
+  were imported, and it checks again for every file just before deleting it.
+- It never files a half-copied file under a real name (see "Copying" below).
 
 
-REQUIREMENTS:
+TV PACKS AND BONUS VIDEOS
+-------------------------
+A season pack's episodes are filed as above. Videos in the pack with no episode number
+(featurettes, deleted scenes, promos) used to be left behind for good. They are now filed in
+the series' Extras folder, which the library ignores (so they never show up as bogus
+episodes) but keeps. Subfolders are kept (Extras/Featurettes/...); a season folder or a
+single-season pack becomes a "Season 02 - " prefix so the same title from two seasons
+cannot collide. Their subtitles follow them.
+
+This only happens when the pack is clearly a set of episodes of a series OMDb matched with
+confidence: one of its own episodes is being filed now, or the library already has episodes
+of that series. Doubtful files stay and are reported: samples, files much bigger than the
+episodes (more likely a separate film), names that carry a year from before the series began,
+empty files, and anything that has an episode number but no usable season.
+Set ORGANIZER_FILE_EXTRAS=0 to turn bonus filing off.
+
+
+COPYING (crash safety)
+----------------------
+Same drive: a hard link, instant. Another drive: the file is copied to a hidden
+".name.organizer-part" next to its destination, checked (size plus the first, middle and
+last megabyte), and only then published under its real name with a link that refuses to
+replace anything. The part file is listed in data/organizer-inflight.json while it exists,
+so after a crash or power cut the next start removes it. The library scanner ignores part
+files, so a half-copied file is never indexed.
+
+
+WHEN OMDb IS DOWN
+-----------------
+A failed request is not the same as "no match". If OMDb times out, errors, answers with an
+error page or says the key/limit is the problem, the organizer waits (20 seconds, doubling to
+5 minutes), leaves the release exactly where it is, logs one "WAIT:" line for it, and tries
+again by itself. Nothing is remembered as a failure, so nothing needs a restart. The Organizer
+page says plainly when this is happening. The free key allows 1,000 lookups a day; the page
+shows how many have been used. The API key is never written to a log.
+
+
+WHEN SOMETHING NEEDS A PERSON
+-----------------------------
+The organizer logs a "REVIEW: {...}" line (what, which release, which file, why). The
+Organizer page lists them under "Needs review" and the server can notify admins. From there:
+- "Fix & retry": save a correction ("parsed title" -> "title as OMDb knows it") and retry that
+  release only. Aliases are stored in organizer_aliases.json.
+- "Retry this release": try again after you fixed the files by hand.
+A note clears itself once the file it was about is imported later.
+
+
+THE SERVICE
+-----------
+Runs as a system service named tvclone-organizer (as user "blue"), through
+scripts/run-organizer-safe.sh, which allows one copy at a time and checks the drives are
+mounted before it does anything. It scans every 30 seconds and restarts itself if it stops.
+
+  systemctl status tvclone-organizer
+  sudo systemctl restart tvclone-organizer
+
+The Organizer page has a "Restart organizer" button for the same thing.
+
+
+LOGS AND STATUS
+---------------
+  Log:     media-organizer/media-organizer.log   (5 MB, 2 older copies kept)
+  Status:  data/organizer-status.json            (rewritten every 30 seconds)
+
+The log is for reading. Besides the human lines it writes two machine-readable kinds that
+the Organizer page relies on: "REVIEW: {...}" and "EVENT: {...}" (one per completed move, with
+release, source and destination). Unit tests never write to it. A copy on the Desktop is only
+made if ORGANIZER_DESKTOP_LOG=1.
+
+The status file says what the organizer is doing right now ("Importing X for 12 min"), when
+it last scanned and imported, and how OMDb is doing. The page uses it to show that the
+organizer is alive, so a long copy no longer looks like a hang. The log also gets a
+"Still watching..." line, hourly (every 5 minutes if the status file cannot be written).
+
+Other files it keeps in data/:
+  organizer-omdb-seasons.json   episode titles already looked up
+  organizer-omdb-usage.json     today's OMDb request count
+  organizer-inflight.json       copies in progress (see Copying)
+  organizer-retries/            "retry this release" requests from the page
+  download-readiness.json       written by the media server, read by the organizer
+
+
+STORAGE (MERGERFS)
+------------------
+All the USB drives are combined into one /mnt/media with mergerfs, so the organizer sees one
+folder tree. New episodes of a show already on a drive go to that drive; new content goes to
+the drive with the most free space. Moving a file between two drives is a real copy (slow for
+big files); moving within one drive is instant.
+
+
+CONFIGURATION
 -------------
-- Python 3
-- pip packages: requests, parse-torrent-name (installed via requirements.txt)
-- OMDb API key (free tier: 1,000 lookups/day)
+Defaults are in config.py; each can be overridden by an ORGANIZER_ environment variable (the
+service reads media-organizer/.env).
+
+  SOURCE_DIR       Downloads folder                 /mnt/media/Share
+  MOVIE_DEST_DIR   Movies                           /mnt/media/Movies
+  TV_DEST_DIR      TV                               /mnt/media/TV
+  POLL_INTERVAL    Seconds between scans            30
+  FILE_EXTRAS      File TV bonus videos             on
+  OMDB_API_KEY     OMDb key (in .env, never logged)
+  STATUS_FILE      Status document                  data/organizer-status.json
+
+qBittorrent's real work-in-progress folder is /downloads/incomplete inside its container,
+which is Share/incomplete on the server. The container also still mounts the empty folder
+/mnt/media/incomplete as /incomplete. Nothing uses it any more, and the organizer no longer
+looks at it. It can be removed from the container's volumes whenever convenient.
+
+
+THE CODE
+--------
+  movie_renamer.py   the loop: find releases, look them up, plan, file them
+  titles.py          reading and building names (pure: no network, files or logging)
+  extras.py          the rules for TV bonus videos (pure)
+  safe_copy.py       crash-safe, never-overwrite import
+  omdb_support.py    OMDb back-off, episode-title cache, usage count, key redaction
+  organizer_status.py  the status file
+  organizer_readiness.py  is this download finished and stable?
+  movie_import_guard.py   sample / truncated movie check (ffprobe)
+  organizer_retry_spool.py  "retry this release" requests from the page
+  organizer_testing.py     shared setup for tests
+
+Tests (no network, no real media; temporary folders only):
+  cd media-organizer && python3 -m unittest discover -s . -p "test_*.py"
+
+
+REQUIREMENTS
+------------
+- Python 3, with the packages in requirements.txt (requests, parse-torrent-name)
+- an OMDb API key (the free tier is 1,000 lookups a day)
+- ffprobe (part of ffmpeg)
 - mergerfs mounted at /mnt/media
