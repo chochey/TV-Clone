@@ -1282,6 +1282,7 @@ def move_tv_show(show: dict, series_info: dict, dry_run: bool = False) -> bool:
     # planned again on the next scan, and these notes must not be repeated every time.
     reviews = []
     bonus, loose_subtitles = [], []   # what is left over once the episodes are placed
+    titles_by_episode = {}            # (season, episode) -> the title the video was given
     for file in videos + show.get("subtitle_files", []):
         info = resolve_tv_file(file, show)
         if not info:
@@ -1298,6 +1299,7 @@ def move_tv_show(show: dict, series_info: dict, dry_run: bool = False) -> bool:
             continue
         season, episode = info["season"], info["episode"]
         is_video = file in videos
+        episode_key = (season, tuple(episode) if isinstance(episode, list) else episode)
         ep_title = None
         # Combined episodes keep every number and omit a misleading single title.
         if is_video and not isinstance(episode, list) and series_info.get("imdbID"):
@@ -1305,6 +1307,12 @@ def move_tv_show(show: dict, series_info: dict, dry_run: bool = False) -> bool:
             ep_title = (ep_info or {}).get("episode_title")
         if ep_title and re.match(r"^Episode\s+#?\d+(?:\.\d+)?$", ep_title):
             ep_title = None
+        if is_video:
+            titles_by_episode[episode_key] = ep_title
+        else:
+            # The media server attaches a subtitle to a video only when the subtitle's name starts with
+            # the video's name, so a subtitle takes the title its video was given.
+            ep_title = titles_by_episode.get(episode_key)
         stem, suffix = get_file_parts(file)
         name = create_tv_filename(title, season, episode, ep_title, suffix,
                                   "" if is_video else extract_language_suffix(stem))

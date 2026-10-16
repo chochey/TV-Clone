@@ -264,3 +264,44 @@ class Scanning(Packs):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SubtitlesFollowTheirEpisode(Packs):
+    """The media server attaches an external subtitle to a video only if the subtitle's name starts with the
+    video's name, so a subtitle must carry the same episode title as its video."""
+
+    def setUp(self):
+        super().setUp()
+        self.episode_titles.side_effect = lambda title, season, episode, imdb: {"episode_title": f"Title {episode}"}
+
+    def test_subtitles_get_the_same_title_as_their_video_and_keep_their_language(self):
+        show = self.pack({"Narcos.S01E01.mkv": 1000, "Narcos.S01E01.eng.srt": 5, "Narcos.S01E01.es.srt": 5,
+                          "Narcos.S01E02.mkv": 1000, "Narcos.S01E02.srt": 5}, name="Narcos.S01")
+        self.run_pack(show)
+        self.assertEqual(self.library(), [
+            "Season 01/Narcos - S01E01 - Title 1.eng.srt", "Season 01/Narcos - S01E01 - Title 1.es.srt",
+            "Season 01/Narcos - S01E01 - Title 1.mkv",
+            "Season 01/Narcos - S01E02 - Title 2.mkv", "Season 01/Narcos - S01E02 - Title 2.srt"])
+
+    def test_the_lookup_happens_once_per_episode_not_once_per_subtitle(self):
+        show = self.pack({"Narcos.S01E01.mkv": 1000, "Narcos.S01E01.eng.srt": 5, "Narcos.S01E01.es.srt": 5}, name="Narcos.S01")
+        self.run_pack(show)
+        self.assertEqual(self.episode_titles.call_count, 1)
+
+    def test_a_video_without_a_title_gives_its_subtitles_none_either(self):
+        self.episode_titles.side_effect = None
+        self.episode_titles.return_value = None
+        show = self.pack({"Narcos.S01E01.mkv": 1000, "Narcos.S01E01.eng.srt": 5}, name="Narcos.S01")
+        self.run_pack(show)
+        self.assertEqual(self.library(), ["Season 01/Narcos - S01E01.eng.srt", "Season 01/Narcos - S01E01.mkv"])
+
+    def test_a_combined_episode_has_no_single_title_for_video_or_subtitles(self):
+        show = self.pack({"Narcos.S01E01E02.mkv": 1000, "Narcos.S01E01E02.eng.srt": 5}, name="Narcos.S01")
+        self.run_pack(show)
+        self.assertEqual(self.library(), ["Season 01/Narcos - S01E01E02.eng.srt", "Season 01/Narcos - S01E01E02.mkv"])
+        self.episode_titles.assert_not_called()
+
+    def test_a_subtitle_whose_video_is_not_in_this_pack_stays_as_it_was(self):
+        show = self.pack({"Narcos.S01E01.mkv": 1000, "Narcos.S01E05.eng.srt": 5}, name="Narcos.S01")
+        self.run_pack(show)
+        self.assertIn("Season 01/Narcos - S01E05.eng.srt", self.library())
