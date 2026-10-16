@@ -10,15 +10,13 @@ Incomplete, failed, inconsistent, repeated, or oversized results cannot be
 treated as a unique match. Year-qualified lookups and import safeguards remain
 unchanged.
 
-Apply after `organizer-filename-year.patch` to the ignored `media-organizer`
-checkout. Back up the current source and test files first, preserving any
-existing local changes. The baseline SHA-256 of `movie_renamer.py` is
-`366481434fd87d09950ad366caa195222404f2789d47ba9d0bb58ad754235961`.
+This change is part of `media-organizer/` in this repository. The organizer used to be patched into a
+separate local checkout, and the patch file that did it was removed once it was obsolete (`git log` has it).
+
+Check it with:
 
 ```sh
 cd media-organizer
-patch --dry-run --forward -p0 < ../scripts/organizer-series-pagination.patch
-patch --forward -p0 < ../scripts/organizer-series-pagination.patch
 ORGANIZER_PREVIEW=1 python3 -m unittest test_movie_renamer test_import_safety -v
 ```
 

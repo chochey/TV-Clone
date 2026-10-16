@@ -15,14 +15,13 @@ title, or a filename without a year do not infer anything. Subtitle names cannot
 provide a year. Normal metadata validation, duplicate detection, single-video
 import checks, runtime checks, and file integrity safeguards remain in place.
 
-This incremental patch uses the ignored production organizer files accompanying
-media-server commit `e453b24` as its baseline. Apply once after the existing title
-separator and import-safety patches:
+This change is part of `media-organizer/` in this repository. The organizer used to be patched into a
+separate local checkout, and the patch file that did it was removed once it was obsolete (`git log` has it).
+
+Check it with:
 
 ```sh
 cd media-organizer
-patch --dry-run --forward -p0 < ../scripts/organizer-filename-year.patch
-patch --forward -p0 < ../scripts/organizer-filename-year.patch
 ORGANIZER_PREVIEW=1 python3 -m unittest test_movie_renamer -v
 ```
 

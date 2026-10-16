@@ -48,16 +48,7 @@ fix-queue response. The frontend calls `api.organizerRetry(id)` and polls until
 its request receives an attempted/rejected receipt, even if Live is off. Errors
 have a sanitized message and HTTP `status` (400/404/409/503).
 
-Install `scripts/organizer_retry_spool.py` beside the ignored live
-`movie_renamer.py`, then dry-run and apply the focused patch against the current
-ignored file. The patch was generated from production commit `8472dfd`'s ignored
-organizer, preserving its earlier safety/matching changes:
-
-```sh
-cd media-organizer
-patch --dry-run --forward -p0 < ../scripts/organizer-targeted-retry.patch
-patch --forward -p0 < ../scripts/organizer-targeted-retry.patch
-```
+The organizer imports `media-organizer/organizer_retry_spool.py`; there is nothing to patch or install. (It used to be copied beside a separate local checkout; the duplicate under `scripts/` and the patch file were removed.)
 
 Load the updated code at the next planned organizer start. Routine retries then
 need no restart. The watcher defaults to the same repo `data/organizer-retries`
@@ -101,11 +92,10 @@ enabling routine retries. No media files need to be moved for this check.
 
 ```sh
 node lib/organizer-retry.test.js
-python3 -m unittest discover -s scripts -p test_organizer_retry_spool.py -v
-ORGANIZER_RETRY_TEST_SOURCE=/absolute/path/to/staged/movie_renamer.py \
-  python3 -m unittest discover -s scripts -p test_organizer_retry_spool.py -v
+cd media-organizer && python3 -m unittest test_organizer_retry_spool -v
 ```
 
-The final command also exercises the actual patched import functions, extracted
-without importing private configuration or running the CLI. All queries and
+The integration checks in that file also exercise the organizer's real import functions, extracted from
+`movie_renamer.py` without importing private configuration or running the CLI (set
+`ORGANIZER_RETRY_TEST_SOURCE` to check another copy). All queries and
 media moves in those checks are mocked; files are temporary fixtures only.

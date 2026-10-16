@@ -23,12 +23,8 @@ import extras
 import omdb_support
 import organizer_status
 import safe_copy
-import sys
-from omdb_support import OMDbUnavailableError
-
-# Shared, versioned import guard from the media-server repository.
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 from movie_import_guard import check_movie
+from omdb_support import OMDbUnavailableError
 from organizer_readiness import ready_for_import, existing_series
 _download_observations = {}
 _DOWNLOAD_SNAPSHOT = Path(__file__).resolve().parent.parent / "data" / "download-readiness.json"
@@ -874,21 +870,6 @@ def get_all_files(directory: Path, extensions: list[str]) -> list[Path]:
     return files
 
 
-def is_still_transferring(name: str) -> bool:
-    """Check if a file/folder with the same name exists in the incomplete folder."""
-    incomplete_dir = Path(config.INCOMPLETE_DIR)
-    if not incomplete_dir.exists():
-        return False
-
-    for item in incomplete_dir.iterdir():
-        if item.name.lower() == name.lower():
-            return True
-        if item.stem.lower() == name.lower():
-            return True
-
-    return False
-
-
 def is_tv_show(parsed: dict) -> bool:
     """Check if parsed filename indicates a TV show (has season/episode info)."""
     return parsed.get("season") is not None or parsed.get("episode") is not None
@@ -1231,10 +1212,6 @@ def find_media_in_source() -> tuple[list[dict], list[dict]]:
         if not ready_for_import(item, _DOWNLOAD_SNAPSHOT, _download_observations):
             continue
         if item.is_file() and item.suffix.lower() in config.VIDEO_EXTENSIONS:
-            if is_still_transferring(item.stem):
-                log.info(f"SKIP: Still transferring: {item.name}")
-                continue
-
             # Check if it's a TV show
             tv_info = parse_tv_info(item.stem)
             if tv_info:
@@ -1253,9 +1230,6 @@ def find_media_in_source() -> tuple[list[dict], list[dict]]:
 
         elif item.is_dir():
             if item.name.lower() == "incomplete":
-                continue
-            if is_still_transferring(item.name):
-                log.info(f"SKIP: Still transferring: {item.name}")
                 continue
             # qBittorrent downloads in place with .!qb appended until each
             # file completes. A mid-download pack looks "complete but

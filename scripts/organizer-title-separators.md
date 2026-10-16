@@ -27,13 +27,13 @@ from being bypassed when the matched canonical title omits that separator. Words
 articles, sequel numbers, and years must all match; no fuzzy duplicate detection
 is used. Unreadable movie roots or matching folders pause import for review.
 
-`media-organizer` is a separate ignored local repository. Apply this tracked patch
-once after the movie-guard and downloader-readiness integrations:
+This change is part of `media-organizer/` in this repository. The organizer used to be patched into a
+separate local checkout, and the patch file that did it was removed once it was obsolete (`git log` has it).
+
+Check it with:
 
 ```sh
 cd media-organizer
-patch --dry-run --forward -p0 < ../scripts/organizer-title-separators.patch
-patch --forward -p0 < ../scripts/organizer-title-separators.patch
 ORGANIZER_PREVIEW=1 python3 -m unittest test_movie_renamer -v
 ```
 

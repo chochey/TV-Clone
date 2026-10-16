@@ -396,13 +396,18 @@ class SharedSpoolTest(SpoolFixture, unittest.TestCase):
         self.assertFalse(claim.exists())
 
 
-@unittest.skipUnless(os.environ.get('ORGANIZER_RETRY_TEST_SOURCE'), 'Set the staged organizer source for integration checks')
-class PatchedImportTest(SpoolFixture, unittest.TestCase):
+# These run the organizer's own retry-handling functions, taken from its source, against stand-ins for
+# everything else. They check the real movie_renamer.py unless another file is named (a staged copy).
+ORGANIZER_SOURCE = Path(os.environ.get('ORGANIZER_RETRY_TEST_SOURCE') or Path(__file__).with_name('movie_renamer.py'))
+
+
+@unittest.skipUnless(ORGANIZER_SOURCE.is_file(), 'The organizer source file is missing')
+class ImportIntegrationTest(SpoolFixture, unittest.TestCase):
     def setUp(self):
         super().setUp()
         selected = {'_consume_targeted_retries', '_targeted_retry_item', '_complete_targeted_retry',
                     'process_movies_list', 'process_tv_shows_list'}
-        tree = ast.parse(Path(os.environ['ORGANIZER_RETRY_TEST_SOURCE']).read_text())
+        tree = ast.parse(ORGANIZER_SOURCE.read_text())
         module = ast.Module(body=[node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in selected], type_ignores=[])
         self.moves, self.queries = [], []
         consumer = self.consumer()
@@ -415,7 +420,7 @@ class PatchedImportTest(SpoolFixture, unittest.TestCase):
                       'move_movie':lambda movie, info, dry_run=False: self.move(movie),
                       'query_omdb_series':lambda title, year: self.query(title, year),
                       'move_tv_show':lambda show, info, dry_run=False: self.move(show)}
-        exec(compile(module, '<staged-organizer-functions>', 'exec'), self.scope)
+        exec(compile(module, '<organizer-functions>', 'exec'), self.scope)
 
     def query(self, title, year):
         self.queries.append((title, year))

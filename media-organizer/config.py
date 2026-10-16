@@ -31,7 +31,6 @@ _load_dotenv()
 
 # Source and staging directories
 SOURCE_DIR      = os.environ.get('ORGANIZER_SOURCE_DIR',      '/mnt/media/Share')
-INCOMPLETE_DIR  = os.environ.get('ORGANIZER_INCOMPLETE_DIR',  '/mnt/media/incomplete')
 
 # Primary destinations (default for new content with no existing folder)
 MOVIE_DEST_DIR  = os.environ.get('ORGANIZER_MOVIE_DEST',      '/mnt/media/Movies')

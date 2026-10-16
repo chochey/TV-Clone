@@ -236,8 +236,7 @@ class TestSeriesSearchPagination(OrganizerTestCase):
             for number in range(1, 7):
                 (folder / f"Below.S01E{number:02d}.1080p.mkv").write_bytes(b"fixture")
             with patch.object(config, "SOURCE_DIR", str(source)), \
-                    patch("movie_renamer.ready_for_import", return_value=True), \
-                    patch("movie_renamer.is_still_transferring", return_value=False):
+                    patch("movie_renamer.ready_for_import", return_value=True):
                 movies, shows = find_media_in_source()
             self.assertEqual(movies, [])
             self.assertEqual(len(shows), 1)
@@ -334,8 +333,7 @@ class TestMissingMovieYear(OrganizerTestCase):
         movie = self._movie()
         metadata = {"title": "Iron Man", "year": "2008", "type": "movie"}
         with patch.object(config, "SOURCE_DIR", str(self.source)), \
-                patch("movie_renamer.ready_for_import", return_value=True), \
-                patch("movie_renamer.is_still_transferring", return_value=False):
+                patch("movie_renamer.ready_for_import", return_value=True):
             movies, shows = find_media_in_source()
         self.assertEqual(shows, [])
         self.assertEqual(len(movies), 1)
