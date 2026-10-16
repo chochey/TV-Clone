@@ -3,6 +3,7 @@
   import { createRefreshLoop } from '../lib/refresh-loop.js';
   import { api } from '../lib/api.js';
   import { describeClearResult, leftoverSummary } from '../lib/organizer-clear.js';
+  import { describeStatus } from '../lib/organizer-status.js';
 
   let data = $state(null);   // {ok, lines, total, meta}
   let status = $state(null); // {ok, active}
@@ -189,6 +190,8 @@
   }
   // Heartbeat older than 10 minutes = the known silent-freeze failure mode.
   const stale = $derived(data?.meta?.lastHeartbeat ? Date.now() - data.meta.lastHeartbeat > 10 * 60000 : false);
+  // What the organizer says it is doing now (absent for an organizer that does not write a status file).
+  const liveStatus = $derived(describeStatus(data?.meta?.status));
 </script>
 
 <div class="page">
@@ -215,6 +218,12 @@
       <span class="chip">24h skips <strong>{data.meta.skips24h}</strong></span>
       <span class="chip">24h errors <strong class={data.meta.errors24h ? 'bad' : ''}>{data.meta.errors24h}</strong></span>
     </div>
+    {#if liveStatus}
+      <p class="doing" aria-label="What the organizer is doing now">{liveStatus.activity}
+        {#if liveStatus.requests}<span class={liveStatus.nearLimit ? 'bad' : 'rmeta'}> · {liveStatus.requests}</span>{/if}
+      </p>
+      {#if liveStatus.omdb}<p class="warn" role="status">{liveStatus.omdb}</p>{/if}
+    {/if}
   {/if}
 
   {#if fq?.ok}
@@ -306,7 +315,7 @@
             <div class="hrow">
               <span class="rtype">{e.type === 'show' ? 'Series' : 'Film'}</span>
               <span class="rtitle">{e.title}{e.year ? ` (${e.year})` : ''}</span>
-              <span class="rmeta">{e.resolved ? 'Resolved after retry' : 'No longer in Share'} · {e.reason} · {ago(e.lastSeen)}{e.suggestedAlias ? ` · alias → ${e.suggestedAlias}` : ''}</span>
+              <span class="rmeta">{e.resolved ? (e.resolution === 'Imported after review' ? 'Imported afterwards' : 'Resolved after retry') : 'No longer in Share'} · {e.reason} · {ago(e.lastSeen)}{e.suggestedAlias ? ` · alias → ${e.suggestedAlias}` : ''}</span>
             </div>
           {/each}
         </details>
@@ -414,6 +423,8 @@
   .rsave:hover:not(:disabled) { opacity: 0.85; }
   .rsave:disabled { opacity: 0.45; cursor: not-allowed; }
   .rdone { font-size: 0.85rem; color: #7ed491; }
+  .doing { font-size: 0.88rem; color: var(--ink-soft); margin: var(--s2) 0 var(--s3); }
+  .warn { font-size: 0.88rem; color: #f5c04a; background: rgba(245, 192, 74, 0.1); padding: var(--s2) var(--s3); border-radius: var(--r-sm); margin: 0 0 var(--s3); }
   .rclear { display: flex; gap: var(--s2); align-items: center; flex-wrap: wrap; padding: var(--s2) 0 var(--s2) var(--s3); }
   .rclear .rmeta { flex-basis: 100%; margin: 0; }
   .rcancel { color: var(--ink-soft); font-size: 0.85rem; padding: 8px 12px; border-radius: var(--r-sm); }

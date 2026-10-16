@@ -94,6 +94,8 @@ class FilingExtras(Packs):
             "Not filed as an extra (it looks like a sample): sample.mkv; source retained",
         ]))
         self.assertIn("Filing 4 extras from Narcos.S01-S03 under Narcos (2015)/Extras", capture.lines)   # videos; the subtitle rides along
+        self.assertEqual(sorted(r["file"] for r in capture.reviews()), ["Some Movie 2008.mkv", "sample.mkv"],
+                         "each note names the file it is about, so the page can clear it once that file is imported")
 
     def test_extras_never_cost_an_omdb_request(self):
         show = self.pack({"Narcos.S01E01.mkv": 1000, "Deleted Scenes.mkv": 100, "Behind the Scenes.mkv": 100})
@@ -129,6 +131,7 @@ class FilingExtras(Packs):
         self.assertTrue((show["path"] / "Deleted Scenes.mkv").exists(), "the new copy is kept for a human to compare")
         self.assertIn("Extras/Trivia.mkv", self.library())
         self.assertEqual([r["reason"].split(":")[0] for r in capture.reviews()], ["Destination conflict"])
+        self.assertEqual(capture.reviews()[0]["file"], "Deleted Scenes.mkv")
 
 
 class WhenNotToFile(Packs):
@@ -216,6 +219,25 @@ class BonusLeftBehindByAnEarlierImport(Packs):
         result, _ = self.run_pack(show)
         self.assertFalse(result)
         self.assertEqual(self.tree("share/Narcos.S01-S03"), ["Deleted Scenes.mkv"])
+
+
+class ReviewRecords(Packs):
+    def test_a_note_about_a_whole_release_names_no_file(self):
+        capture = Captured()
+        previous = m.log.level
+        m.log.setLevel(logging.INFO)
+        m.log.addHandler(capture)
+        try:
+            m.review_item({"path": Path("/share/Some.Film.2020"), "video_files": []}, "Some Film", "Multiple videos need individual identification; all source files retained")
+            m.review_item({"path": Path("/share/Pack"), "tv_info": {}}, "Show", "Missing or ambiguous season/episode: a.mkv; source retained", "a.mkv")
+        finally:
+            m.log.removeHandler(capture)
+            m.log.setLevel(previous)
+        whole, single = capture.reviews()
+        self.assertEqual(whole, {"type": "movie", "title": "Some Film", "source": "Some.Film.2020",
+                                 "reason": "Multiple videos need individual identification; all source files retained"})
+        self.assertEqual(single["file"], "a.mkv")
+        self.assertEqual(single["type"], "show")
 
 
 class Previews(Packs):

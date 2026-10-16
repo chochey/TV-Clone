@@ -50,6 +50,10 @@ _DATA = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OMDB_SEASON_CACHE = os.environ.get('ORGANIZER_OMDB_SEASON_CACHE', os.path.join(_DATA, 'organizer-omdb-seasons.json'))
 OMDB_USAGE_FILE = os.environ.get('ORGANIZER_OMDB_USAGE', os.path.join(_DATA, 'organizer-omdb-usage.json'))
 
+# What the organizer is doing right now, for the Organizer page (see organizer_status.py)
+STATUS_FILE = os.environ.get('ORGANIZER_STATUS_FILE', os.path.join(_DATA, 'organizer-status.json'))
+STATUS_INTERVAL = float(os.environ.get('ORGANIZER_STATUS_INTERVAL', '30'))
+
 # Part-files being written right now (see safe_copy.py), so an interrupted run can clean up
 INFLIGHT_FILE = os.environ.get('ORGANIZER_INFLIGHT_FILE',
     os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data', 'organizer-inflight.json'))

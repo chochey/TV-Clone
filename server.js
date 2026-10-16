@@ -3800,6 +3800,8 @@ app.post('/api/metadata/refresh-missing', requirePermission('canScan'), async (r
 
 // ── Media Organizer ──────────────────────────────────────────────────────
 const ORGANIZER_LOG     = process.env.ORGANIZER_LOG     || '/home/blue/Desktop/Repos/TV-Clone-prod/media-organizer/media-organizer.log';
+const organizerStatus = require('./lib/organizer-status');
+const ORGANIZER_STATUS_FILE = process.env.ORGANIZER_STATUS_FILE || path.join(DATA_DIR, 'organizer-status.json');
 const ORGANIZER_SERVICE = process.env.ORGANIZER_SERVICE || 'tvclone-organizer.service';
 
 // Auto-rescan when the organizer files new content. The media folders are on
@@ -3873,11 +3875,14 @@ app.get('/api/organizer/logs', requirePermission('canOrganizer'), async (req, re
     if (!fs.existsSync(ORGANIZER_LOG)) return res.json({ ok: false, error: 'Log file not found' });
     const allLines = readOrganizerLogLines();
     const isHeartbeat = l => /Still watching\.\.\./.test(l);
+    // "EVENT: {...}" lines are the machine-readable twins of the lines around them: never shown, never counted.
+    const isEvent = l => /(?:^|\] )EVENT: \{/.test(l);
 
     // Activity summary over the tail: heartbeat freshness + last 24h counts
-    const meta = { lastHeartbeat: 0, lastActivity: 0, moves24h: 0, skips24h: 0, errors24h: 0 };
+    const meta = { lastHeartbeat: 0, lastActivity: 0, moves24h: 0, skips24h: 0, errors24h: 0, status: null };
     const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
     for (const l of allLines) {
+      if (isEvent(l)) continue;
       const ts = organizerLogTimestamp(l);
       if (isHeartbeat(l)) { if (ts > meta.lastHeartbeat) meta.lastHeartbeat = ts; continue; }
       if (ts > meta.lastActivity) meta.lastActivity = ts;
@@ -3887,11 +3892,17 @@ app.get('/api/organizer/logs', requirePermission('canOrganizer'), async (req, re
       else if (/ERROR|FAIL|rate limit/i.test(l)) meta.errors24h++;
     }
 
+    // The status file the organizer keeps current is a better sign of life than a log line: it keeps
+    // updating during a long copy. Without it (an older organizer, an unwritable folder) the log heartbeat stands.
+    const status = organizerStatus.readStatus(ORGANIZER_STATUS_FILE);
+    if (status) { meta.lastHeartbeat = status.updatedAt; meta.status = status; }
+
+    const shown = allLines.filter(l => !isEvent(l));
     let out;
-    if (filter === 'moves') out = allLines.filter(l => /Moved ->|MOVIE.*Found|TV.*Found|Parsed:|OMDb match:|Scan complete/.test(l));
-    else if (filter === 'errors') out = allLines.filter(l => /SKIP|ERROR|FAIL|No confident|rate limit|REVIEW: \{/i.test(l));
-    else if (filter === 'scans') out = allLines.filter(l => /Scan complete|Watching|============/.test(l));
-    else out = allLines.filter(l => !isHeartbeat(l)); // 'all' still hides heartbeats
+    if (filter === 'moves') out = shown.filter(l => /Moved ->|MOVIE.*Found|TV.*Found|Parsed:|OMDb match:|Scan complete/.test(l));
+    else if (filter === 'errors') out = shown.filter(l => /SKIP|ERROR|FAIL|No confident|rate limit|REVIEW: \{/i.test(l));
+    else if (filter === 'scans') out = shown.filter(l => /Scan complete|Watching|============/.test(l));
+    else out = shown.filter(l => !isHeartbeat(l)); // 'all' still hides heartbeats
     if (q) out = out.filter(l => l.toLowerCase().includes(q));
 
     res.json({ ok: true, lines: out.slice(-lines), total: out.length, meta });

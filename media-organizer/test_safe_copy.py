@@ -307,8 +307,9 @@ if __name__ == "__main__":
 
 
 class LogContract(Base):
-    """Other parts of the app read these two lines: lib/organizer-share.js pairs them to
-    know what was imported, and lib/organizer-watch.js rescans the library on "Moved ->"."""
+    """Other parts of the app read these lines: lib/organizer-share.js pairs them to know what was
+    imported, lib/organizer-watch.js rescans the library on "Moved ->", and the EVENT line says the
+    same thing in one machine-readable piece."""
 
     def test_the_organizer_still_logs_the_source_then_the_move(self):
         import movie_renamer as m
@@ -322,8 +323,12 @@ class LogContract(Base):
                             m.move_without_overwrite(src, dst)
                     else:
                         m.move_without_overwrite(src, dst)
-                self.assertEqual([r.getMessage() for r in logs.records],
-                                 [f"Import source: {src} -> {dst}", f"Moved -> {dst}"])
+                messages = [r.getMessage() for r in logs.records]
+                self.assertEqual(messages[:2], [f"Import source: {src} -> {dst}", f"Moved -> {dst}"])
+                self.assertEqual(len(messages), 3)
+                self.assertTrue(messages[2].startswith("EVENT: "))
+                self.assertEqual(json.loads(messages[2][len("EVENT: "):]),
+                                 {"event": "moved", "release": src.name, "source": str(src), "destination": str(dst)})
 
     def test_a_failed_import_logs_no_move(self):
         import movie_renamer as m
@@ -333,4 +338,4 @@ class LogContract(Base):
         with self.assertLogs("movie_renamer", level="INFO") as logs, self.assertRaises(FileExistsError):
             m.log.info("start")
             m.move_without_overwrite(src, dst)
-        self.assertFalse([r for r in logs.records if r.getMessage().startswith(("Moved ->", "Import source:"))])
+        self.assertFalse([r for r in logs.records if r.getMessage().startswith(("Moved ->", "Import source:", "EVENT:"))])

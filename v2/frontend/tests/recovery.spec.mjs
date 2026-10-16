@@ -612,6 +612,44 @@ test('folders left alone are reported honestly', async ({ page }) => {
   await expect(page.getByRole('status').filter({ hasText: 'Removed 2 leftover files from 1 folder. 1 was left alone because it changed.' })).toBeVisible();
 });
 
+test('the organizer page shows what it is doing, and says plainly when OMDb is down', async ({ page }) => {
+  const now = Date.now();
+  const meta = (status) => ({ lastHeartbeat: now - 5_000, lastActivity: now - 60_000, moves24h: 3, skips24h: 0, errors24h: 0, status });
+  const status = (over = {}) => ({ updatedAt: now - 5_000, scans: 10, activity: { state: 'importing', detail: 'Narcos.S01-S03', since: now - 12 * 60_000 },
+    lastScan: { at: now - 40_000, ms: 300, imported: 0 }, lastImport: null,
+    omdb: { failing: false, since: null, reason: null, retryInSeconds: 0, waiting: 0, requestsToday: 412 }, ...over });
+  let current = status();
+  await mockApi(page, {
+    '/api/organizer/logs': route => route.fulfill({ json: { ok: true, lines: [], total: 0, meta: meta(current) } }),
+    '/api/organizer/fix-queue': route => route.fulfill({ json: { ok: true, queue: [], aliases: [], leftovers: [] } }),
+  });
+  await page.goto(`${origin}/organizer`);
+  // A long copy is work in progress: the heartbeat is fresh, the page is not alarmed.
+  await expect(page.getByLabel('What the organizer is doing now')).toContainText('Importing Narcos.S01-S03 for 12 min.');
+  await expect(page.getByLabel('What the organizer is doing now')).toContainText('412 of 1,000 OMDb lookups used today');
+  await expect(page.getByText('Heartbeat stale')).toHaveCount(0);
+  await expect(page.getByText('has not been responding')).toHaveCount(0);
+
+  current = status({ activity: { state: 'idle', detail: '', since: now }, omdb: { failing: true, since: now - 9 * 60_000, reason: 'timed out', retryInSeconds: 40, waiting: 2, requestsToday: 412 } });
+  await page.reload();
+  await expect(page.getByRole('status').filter({ hasText: 'has not been responding for 9 min (timed out). 2 downloads are waiting for it' })).toBeVisible();
+});
+
+test('a review note cleared by a later import is listed as imported, not as retried', async ({ page }) => {
+  await mockApi(page, {
+    '/api/organizer/logs': route => route.fulfill({ json: { ok: true, lines: [], total: 0 } }),
+    '/api/organizer/fix-queue': route => route.fulfill({ json: { ok: true, aliases: [], leftovers: [], queue: [
+      { id: 'a', type: 'show', title: 'Narcos', source: 'Narcos.S01-S03', stillPresent: true, resolved: true, resolution: 'Imported after review', manualReview: true,
+        reason: 'Missing or ambiguous season/episode: Deleted Scenes.mkv; source retained', lastSeen: 1 },
+    ] } }),
+  });
+  await page.goto(`${origin}/organizer`);
+  await expect(page.locator('.review .rrow')).toHaveCount(0);
+  await page.getByText('1 past review item', { exact: true }).click();
+  await expect(page.getByText(/Imported afterwards/)).toBeVisible();
+  await expect(page.getByText(/Resolved after retry/)).toHaveCount(0);
+});
+
 test('a sole surviving retained original can be restored but cannot be deleted', async ({ page }) => {
   let restored = 0;
   const original = { name: 'Test film.mkv', retainedPath: '/virtual/.converted-originals/Test film.mkv', canRestore: true, replacementExists: false, restorable: false, ageDays: 1, size: 1e9 };

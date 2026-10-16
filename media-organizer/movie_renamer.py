@@ -21,6 +21,7 @@ from PTN import parse
 import config
 import extras
 import omdb_support
+import organizer_status
 import safe_copy
 import sys
 from omdb_support import OMDbUnavailableError
@@ -122,6 +123,7 @@ _omdb_backoff = omdb_support.Backoff()
 _season_cache = omdb_support.SeasonCache()
 _omdb_usage = omdb_support.UsageCounter()
 _omdb_wait_logged: set[str] = set()   # releases already reported as waiting for OMDb
+_omdb_trouble = {"since": None, "reason": None}   # while OMDb is failing: when it began and why
 
 
 def start_omdb_state() -> None:
@@ -140,11 +142,16 @@ def reset_omdb_state() -> None:
     _omdb_consecutive_401s = 0
     _omdb_wait_logged.clear()
     _omdb_no_match_cache.clear()
+    _omdb_trouble.update(since=None, reason=None)
 
 
-def _note_omdb_failure() -> None:
+def _note_omdb_failure(reason: str = "") -> None:
     first = _omdb_backoff.failures == 0
     _omdb_backoff.failed()
+    if first:
+        _omdb_trouble.update(since=int(time.time() * 1000), reason=reason or None)
+    elif reason:
+        _omdb_trouble["reason"] = reason
     if first:
         log.warning("OMDb is not responding; releases that need it will wait and be retried "
                     "(next attempt in %ds)", int(_omdb_backoff.remaining()))
@@ -165,8 +172,9 @@ def _omdb_get(params: dict) -> dict:
     try:
         response = requests.get(config.OMDB_BASE_URL, params=params, timeout=10)
     except requests.RequestException as error:
-        _note_omdb_failure()
-        raise OMDbUnavailableError(omdb_support.describe_request_error(error)) from None
+        reason = omdb_support.describe_request_error(error)
+        _note_omdb_failure(reason)
+        raise OMDbUnavailableError(reason) from None
     try:
         _check_omdb_rate_limit(response)
     except OMDbRateLimitError:
@@ -176,18 +184,28 @@ def _omdb_get(params: dict) -> dict:
         response.raise_for_status()
         data = response.json()
     except (requests.RequestException, ValueError) as error:
-        _note_omdb_failure()
-        raise OMDbUnavailableError(omdb_support.describe_request_error(error)) from None
+        reason = omdb_support.describe_request_error(error)
+        _note_omdb_failure(reason)
+        raise OMDbUnavailableError(reason) from None
     if not isinstance(data, dict):
         return {}   # readable but not an answer we understand: no verdict is accepted (fails closed)
     if data.get("Response") == "False" and re.search(r"api key|limit", str(data.get("Error", "")), re.I):
-        _note_omdb_failure()
-        raise OMDbUnavailableError(f"OMDb said: {omdb_support.redact(data.get('Error'))[:80]}")
+        reason = f"OMDb said: {omdb_support.redact(data.get('Error'))[:80]}"
+        _note_omdb_failure(reason)
+        raise OMDbUnavailableError(reason)
     if _omdb_backoff.failures:
         log.info("OMDb is responding again")
         _omdb_wait_logged.clear()
+        _omdb_trouble.update(since=None, reason=None)
     _omdb_backoff.succeeded()
     return data
+
+
+def omdb_snapshot() -> dict:
+    """What the Organizer page shows about OMDb: is it failing, why, and how much of the day is used."""
+    return {"omdb": {"failing": _omdb_backoff.failures > 0, "since": _omdb_trouble["since"],
+                     "reason": _omdb_trouble["reason"], "retryInSeconds": int(_omdb_backoff.remaining()),
+                     "waiting": len(_omdb_wait_logged), "requestsToday": _omdb_usage.today()}}
 
 
 def _wait_for_omdb(parse_name: str, error: Exception) -> None:
@@ -1279,9 +1297,13 @@ def find_media_in_source() -> tuple[list[dict], list[dict]]:
     return movies, tv_shows
 
 
-def review_item(item: dict, title: str, reason: str) -> None:
+def review_item(item: dict, title: str, reason: str, file: str | None = None) -> None:
+    """Report something a person must look at. `file` names the one file the note is about, so the
+    Organizer page can clear the note once that file has been imported."""
     record = {"type": "show" if "tv_info" in item else "movie", "title": title,
               "source": item["path"].name, "reason": reason}
+    if file:
+        record["file"] = file
     log.warning("REVIEW: %s", json.dumps(record, ensure_ascii=False))
 
 
@@ -1299,6 +1321,52 @@ def start_inflight_journal() -> None:
     _inflight_journal = journal
 
 
+# The live status file (see organizer_status.py). Set only by watch mode; None everywhere
+# else, so tests, previews and one-off runs write nothing.
+_status = None
+
+
+def start_status() -> None:
+    global _status
+    status = organizer_status.StatusFile(config.STATUS_FILE, interval=config.STATUS_INTERVAL)
+    status._warn = log.warning
+    status.add_provider(omdb_snapshot)
+    status.start()
+    _status = status
+
+
+def stop_status() -> None:
+    global _status
+    status, _status = _status, None
+    if status is not None:
+        status.stop(final="stopped")
+
+
+def _activity(state: str, detail: str = "") -> None:
+    if _status is not None:
+        _status.activity(state, detail)
+
+
+def _release_of(source: Path) -> str:
+    """The download a file came from: its first folder below Share, or its own name."""
+    try:
+        return Path(source).relative_to(config.SOURCE_DIR).parts[0]
+    except (ValueError, IndexError):
+        return Path(source).name
+
+
+def _record_move(source: Path, destination: Path) -> None:
+    """One machine-readable line per completed move, next to the human-readable ones.
+
+    The Organizer page pairs a release with what was filed from it, and clears review notes for
+    files that were later imported, from these lines rather than from the wording of the others."""
+    release = _release_of(source)
+    log.info("EVENT: %s", json.dumps({"event": "moved", "release": release, "source": str(source),
+                                      "destination": str(destination)}, ensure_ascii=False))
+    if _status is not None:
+        _status.update(lastImport={"at": int(time.time() * 1000), "release": release, "name": Path(destination).name})
+
+
 def move_without_overwrite(source: Path, destination: Path) -> None:
     """Move a file into the library without ever replacing anything.
 
@@ -1309,8 +1377,10 @@ def move_without_overwrite(source: Path, destination: Path) -> None:
         # Keep original and destination paths in the activity log for corrections.
         log.info("Import source: %s -> %s", source, destination)
 
+    _activity("importing", _release_of(source))
     safe_copy.import_file(source, destination, journal=_inflight_journal, before_unlink=announce)
     log.info("Moved -> %s", destination)
+    _record_move(source, destination)
 
 
 def execute_import(item: dict, title: str, plan: list, dry_run: bool) -> bool:
@@ -1321,7 +1391,7 @@ def execute_import(item: dict, title: str, plan: list, dry_run: bool) -> bool:
     moved = 0
     for source, destination in plan:
         if destination.exists() or destination.is_symlink() or counts[destination] > 1:
-            review_item(item, title, f"Destination conflict: {source.name} -> {destination}; source retained")
+            review_item(item, title, f"Destination conflict: {source.name} -> {destination}; source retained", source.name)
             continue
         if dry_run:
             log.info("[DRY RUN] Would move: %s -> %s", source, destination)
@@ -1331,7 +1401,7 @@ def execute_import(item: dict, title: str, plan: list, dry_run: bool) -> bool:
             move_without_overwrite(source, destination)
             moved += 1
         except Exception as error:
-            review_item(item, title, f"Could not import {source.name}: {error}; source retained")
+            review_item(item, title, f"Could not import {source.name}: {error}; source retained", source.name)
     if not dry_run and item["type"] == "folder":
         cleanup_source_folder(item["path"])
     return moved > 0
@@ -1359,8 +1429,9 @@ def resolve_tv_file(file: Path, show: dict) -> dict | None:
     return info
 
 
-def _ambiguous_note(file: Path) -> str:
-    return f"Missing or ambiguous season/episode: {file.name}; source retained"
+def _ambiguous_note(file: Path) -> tuple[str, str]:
+    """(review reason, file name)"""
+    return f"Missing or ambiguous season/episode: {file.name}; source retained", file.name
 
 
 def _names_no_episode(file: Path) -> bool:
@@ -1398,7 +1469,7 @@ def _plan_extras(show: dict, series_info: dict, base: Path, plan: list, bonus: l
     paired = extras.pair_subtitles(filed, subtitles, extract_language_suffix)
     entries = [(source, destination.joinpath(*parts)) for source, parts in filed + paired]
     taken = {subtitle for subtitle, _ in paired}
-    notes = [f"Not filed as an extra ({why}): {source.name}; source retained" for source, why in declined]
+    notes = [(f"Not filed as an extra ({why}): {source.name}; source retained", source.name) for source, why in declined]
     notes += [_ambiguous_note(file) for file in subtitles if file not in taken]
     if filed:
         log.info("Filing %d extra%s from %s under %s/%s", len(filed), "" if len(filed) == 1 else "s",
@@ -1428,7 +1499,7 @@ def move_tv_show(show: dict, series_info: dict, dry_run: bool = False) -> bool:
             continue
         file_title = info.get("title")
         if file_title and not is_good_series_match(file_title, info.get("year"), series_info):
-            reviews.append(f"File belongs to a different or uncertain series: {file.name}; source retained")
+            reviews.append((f"File belongs to a different or uncertain series: {file.name}; source retained", file.name))
             continue
         season, episode = info["season"], info["episode"]
         is_video = file in videos
@@ -1446,8 +1517,8 @@ def move_tv_show(show: dict, series_info: dict, dry_run: bool = False) -> bool:
             plan.append((file, base / f"Season {season:02d}" / name))
     extra_plan, extra_notes = _plan_extras(show, series_info, base, plan, bonus, loose_subtitles)
     plan += extra_plan
-    for reason in reviews + extra_notes:
-        review_item(show, title, reason)
+    for reason, name in reviews + extra_notes:
+        review_item(show, title, reason, name)
     return execute_import(show, title, plan, dry_run)
 
 
@@ -2405,21 +2476,35 @@ def run_watch() -> None:
     log.info(f"Watching {config.SOURCE_DIR} (polling every {config.POLL_INTERVAL}s)")
     log.info("Press Ctrl+C to stop")
 
-    heartbeat_interval = 300  # 5 minutes
+    start_status()
     last_heartbeat = time.time()
+    scans = imported = 0
 
     try:
         while True:
-            process_all(quiet=True)
+            _activity("scanning")
+            begun = time.time()
+            movies_done, _, tv_done, _ = process_all(quiet=True)
+            scans += 1
+            imported += movies_done + tv_done
+            if _status is not None:
+                _status.update(scans=scans, lastScan={"at": int(time.time() * 1000),
+                                                      "ms": int((time.time() - begun) * 1000), "imported": movies_done + tv_done})
+            _activity("idle")
 
+            # The status file carries liveness, so the log line is only a courtesy once an hour. If the
+            # file cannot be written, the line stays every 5 minutes: it is then the only signal.
+            heartbeat_interval = 3600 if _status is not None and _status.healthy else 300
             if time.time() - last_heartbeat >= heartbeat_interval:
-                log.info("Still watching...")
+                log.info("Still watching... %d scan%s, %d import%s since start", scans, "" if scans == 1 else "s",
+                         imported, "" if imported == 1 else "s")
                 last_heartbeat = time.time()
 
             time.sleep(config.POLL_INTERVAL)
     except KeyboardInterrupt:
         log.info("Watch mode stopped.")
     finally:
+        stop_status()
         if _retry_queue is not None:
             _retry_queue.close()
             _retry_queue = None
