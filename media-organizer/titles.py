@@ -173,6 +173,14 @@ def parse_tv_info(filename: str) -> dict | None:
     }
 
 
+def clean_episode_title(episode_title: str) -> str:
+    """An OMDb episode title made safe to use in a file name."""
+    text = html.unescape(episode_title)      # OMDb sends HTML entities (&gt; -> >)
+    text = text.replace("/", "-")            # not allowed in file names
+    text = re.sub(r'[<>:"/\\|?*]', "", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
 def create_tv_filename(
     series_title: str,
     season: int,
@@ -193,13 +201,7 @@ def create_tv_filename(
     ep_code = f"S{season:02d}" + "".join(f"E{ep:02d}" for ep in episodes)
 
     if episode_title:
-        # Decode HTML entities from OMDb (e.g., &gt; -> >)
-        episode_title = html.unescape(episode_title)
-        # Replace / with - (not allowed in Windows filenames)
-        episode_title = episode_title.replace("/", "-")
-        clean_ep_title = re.sub(r'[<>:"/\\|?*]', "", episode_title)
-        clean_ep_title = re.sub(r"\s+", " ", clean_ep_title).strip()
-        base = f"{clean_title} - {ep_code} - {clean_ep_title}"
+        base = f"{clean_title} - {ep_code} - {clean_episode_title(episode_title)}"
     else:
         base = f"{clean_title} - {ep_code}"
 

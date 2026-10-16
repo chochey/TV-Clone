@@ -222,11 +222,13 @@ class TestSeriesSearchPagination(OrganizerTestCase):
             with self.assertRaises(OMDbRateLimitError):
                 _query_omdb_series_single("Below")
 
-    def test_local_verified_series_still_avoids_network(self):
+    def test_local_verified_series_keeps_its_folders_identity_and_gains_omdbs_id(self):
+        """The folder's title and year still decide the names; OMDb is asked only for its id (see test_local_series)."""
         local = {"title": "Below", "year": "2026", "type": "series", "imdbID": None}
+        omdb = {"title": "Below", "year": "2026", "type": "series", "imdbID": "tt1234567"}
         with patch("movie_renamer.existing_series", return_value=local), \
-                patch("movie_renamer.requests.get", side_effect=AssertionError("unexpected network")):
-            self.assertEqual(query_omdb_series("Below"), local)
+                patch("movie_renamer._query_omdb_series_single", return_value=omdb):
+            self.assertEqual(query_omdb_series("Below"), {**local, "imdbID": "tt1234567"})
 
     def test_real_release_shape_reaches_existing_import_path_without_losing_identity(self):
         with tempfile.TemporaryDirectory() as directory:

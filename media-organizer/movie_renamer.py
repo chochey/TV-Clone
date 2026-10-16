@@ -18,6 +18,7 @@ from pathlib import Path
 import requests
 from PTN import parse
 
+import backfill
 import config
 import extras
 import omdb_support
@@ -137,6 +138,7 @@ _season_cache = omdb_support.SeasonCache()
 _omdb_usage = omdb_support.UsageCounter()
 _omdb_wait_logged: set[str] = set()   # releases already reported as waiting for OMDb
 _omdb_trouble = {"since": None, "reason": None}   # while OMDb is failing: when it began and why
+_local_series_ids: dict = {}                      # (folder title, year) -> OMDb's id for it, or None if OMDb does not know it
 
 
 def start_omdb_state() -> None:
@@ -156,6 +158,7 @@ def reset_omdb_state() -> None:
     _omdb_wait_logged.clear()
     _omdb_no_match_cache.clear()
     _omdb_trouble.update(since=None, reason=None)
+    _local_series_ids.clear()
 
 
 def _note_omdb_failure(reason: str = "") -> None:
@@ -957,6 +960,26 @@ def _query_omdb_series_single(title: str, year: str | None = None) -> dict | Non
     return None
 
 
+def _with_omdb_id(local: dict) -> dict:
+    """A series already in the library: its folder's title and year decide the names, as before, plus OMDb's
+    id for it so episode titles can be looked up.
+
+    Without an id the importer skipped the episode-title step for every episode of an existing series, so
+    they were filed untitled (and a lookup by name fails for folders like "Da Vincis Demons", which lack
+    OMDb's apostrophe). OMDb saying it does not know the series is remembered and the import goes on
+    without titles; OMDb being unreachable is not, so the release waits like any other lookup."""
+    key = (local["title"].lower(), local["year"])
+    if key not in _local_series_ids:
+        found = None
+        for variant in get_series_title_variations(local["title"]):
+            result = _query_omdb_series_single(variant, local["year"])
+            if result and is_good_series_match(local["title"], local["year"], result):
+                found = result
+                break
+        _local_series_ids[key] = found.get("imdbID") if found else None
+    return {**local, "imdbID": _local_series_ids[key]}
+
+
 def query_omdb_series(title: str, year: str | None = None) -> dict | None:
     """Query OMDb API for a TV series, trying title variations.
 
@@ -965,7 +988,7 @@ def query_omdb_series(title: str, year: str | None = None) -> dict | None:
     """
     local = existing_series(title, year, config.TV_DEST_DIRS)
     if local:
-        return local
+        return _with_omdb_id(local)
     cache_key = (f"series:{title.lower().strip()}", year)
     cached_time = _omdb_no_match_cache.get(cache_key)
     if cached_time and (time.time() - cached_time) < _OMDB_CACHE_TTL:
@@ -1224,6 +1247,11 @@ def resolve_tv_file(file: Path, show: dict) -> dict | None:
     return info
 
 
+def _usable_episode_title(title: str | None) -> str | None:
+    """An episode title worth putting in a file name. OMDb's "Episode #1.1" placeholders are not."""
+    return None if not title or re.match(r"^Episode\s+#?\d+(?:\.\d+)?$", title) else title
+
+
 def _ambiguous_note(file: Path) -> tuple[str, str]:
     """(review reason, file name)"""
     return f"Missing or ambiguous season/episode: {file.name}; source retained", file.name
@@ -1305,8 +1333,7 @@ def move_tv_show(show: dict, series_info: dict, dry_run: bool = False) -> bool:
         if is_video and not isinstance(episode, list) and series_info.get("imdbID"):
             ep_info = query_omdb_episode(title, season, episode, series_info["imdbID"])
             ep_title = (ep_info or {}).get("episode_title")
-        if ep_title and re.match(r"^Episode\s+#?\d+(?:\.\d+)?$", ep_title):
-            ep_title = None
+        ep_title = _usable_episode_title(ep_title)
         if is_video:
             titles_by_episode[episode_key] = ep_title
         else:
@@ -2176,6 +2203,51 @@ def run_once(dry_run: bool = False) -> None:
     process_all(quiet=False, dry_run=dry_run)
 
 
+def run_backfill(dry_run: bool = False) -> None:
+    """Give library episodes their titles, and subtitles the same name as their video (see backfill.py)."""
+    start_omdb_state()    # keep the per-season answers even for a preview, so applying afterwards costs no lookups
+    journal = Path(config.BACKFILL_DIR) / f"organizer-backfill-{time.strftime('%Y%m%d-%H%M%S')}.jsonl"
+    prefix = "[DRY RUN] " if dry_run else ""
+    log.info("%s[BACKFILL] Adding episode titles in %s", prefix, ", ".join(config.TV_DEST_DIRS))
+
+    def episode_title(series: dict, season: int, episode: int) -> str | None:
+        info = query_omdb_episode(series["title"], season, episode, series.get("imdbID"))
+        return _usable_episode_title((info or {}).get("episode_title"))
+
+    try:
+        summary = backfill.run([Path(folder) for folder in config.TV_DEST_DIRS], find_series=query_omdb_series,
+                               episode_title=episode_title, apply_changes=not dry_run, journal=journal)
+    except (OMDbRateLimitError, OMDbUnavailableError) as error:
+        log.error("[BACKFILL] Stopped: OMDb is not available (%s). What was already renamed stays renamed (journal: %s); "
+                  "run it again to continue.", error, journal)
+        return
+    for item in summary.planned:
+        log.info("[DRY RUN] Would rename: %s -> %s", item.source, item.destination.name)
+    for item in summary.applied:
+        log.info("[BACKFILL] Renamed: %s -> %s", item.source, item.destination.name)
+    for path, why in summary.skipped:
+        log.warning("[BACKFILL] Not renamed: %s (%s)", path, why)
+    for note in summary.notes:
+        log.info("[BACKFILL] Left alone: %s", note)
+    for name in summary.unmatched:
+        log.info("[BACKFILL] OMDb does not know this series, so its episodes were left alone: %s", name)
+    if summary.untitled:
+        log.info("[BACKFILL] Still without a title (OMDb has none, or only a placeholder): %s",
+                 ", ".join(f"{series}: {count}" for series, count in sorted(summary.untitled.items())))
+    log.info("%s[BACKFILL] %d video%s %s a title, %d subtitle%s renamed to match, in %d season folder%s.", prefix,
+             summary.titled, "" if summary.titled == 1 else "s", "would get" if dry_run else "got",
+             summary.subtitles, "" if summary.subtitles == 1 else "s", summary.folders, "" if summary.folders == 1 else "s")
+    if summary.applied:
+        log.info("[BACKFILL] To undo this run: python3 movie_renamer.py --undo-backfill %s", journal)
+
+
+def run_undo_backfill(journal: Path) -> None:
+    result = backfill.undo(journal)
+    for path, why in result.skipped:
+        log.warning("[BACKFILL] Not put back: %s (%s)", path, why)
+    log.info("[BACKFILL] Put back %d name%s from %s", result.done, "" if result.done == 1 else "s", journal)
+
+
 def run_watch() -> None:
     """Run the renamer in watch mode."""
     global _retry_queue
@@ -2258,6 +2330,17 @@ def main() -> None:
         choices=["movies", "tv", "all"],
         help="Clear library progress tracking so folders are re-processed from scratch",
     )
+    parser.add_argument(
+        "--backfill-titles",
+        action="store_true",
+        help="Add the episode title to library episode files that lack it, and rename their subtitles to match "
+             "(a subtitle only shows when its name starts with its video's). Use --dry-run to preview",
+    )
+    parser.add_argument(
+        "--undo-backfill",
+        metavar="JOURNAL",
+        help="Put back the names changed by an earlier --backfill-titles run (the journal file it printed)",
+    )
     args = parser.parse_args()
     setup_logging()
 
@@ -2273,6 +2356,17 @@ def main() -> None:
     # Library reset mode
     if args.library_reset:
         clear_library_progress(args.library_reset)
+        return
+
+    if args.undo_backfill:
+        run_undo_backfill(Path(args.undo_backfill))
+        return
+
+    if args.backfill_titles:
+        if args.watch:
+            log.error("Cannot combine --watch and --backfill-titles")
+            return
+        run_backfill(dry_run=args.dry_run)
         return
 
     if args.watch and args.dry_run:

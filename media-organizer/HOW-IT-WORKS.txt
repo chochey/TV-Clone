@@ -47,7 +47,11 @@ WHAT IT NEVER DOES
 
 TV PACKS AND BONUS VIDEOS
 -------------------------
-A season pack's episodes are filed as above. Videos in the pack with no episode number
+A season pack's episodes are filed as above. An episode's subtitles get the same title as its video,
+because the media server only attaches an external subtitle whose name starts with the video's.
+A series already in the library keeps its folder's name, but the organizer also asks OMDb for the
+series' id (once per series per run) so it can look episode titles up. If OMDb does not know the
+series, its episodes are filed without titles; if OMDb cannot be reached, the release waits. Videos in the pack with no episode number
 (featurettes, deleted scenes, promos) used to be left behind for good. They are now filed in
 the series' Extras folder, which the library ignores (so they never show up as bogus
 episodes) but keeps. Subfolders are kept (Extras/Featurettes/...); a season folder or a
@@ -159,6 +163,7 @@ THE CODE
   movie_renamer.py   the loop: find releases, look them up, plan, file them
   titles.py          reading and building names (pure: no network, files or logging)
   extras.py          the rules for TV bonus videos (pure)
+  backfill.py        --backfill-titles: add missing episode titles to library files, keep subtitles attached
   safe_copy.py       crash-safe, never-overwrite import
   omdb_support.py    OMDb back-off, episode-title cache, usage count, key redaction
   organizer_status.py  the status file

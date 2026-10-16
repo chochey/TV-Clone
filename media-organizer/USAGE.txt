@@ -56,6 +56,23 @@ python3 movie_renamer.py --library
 python3 movie_renamer.py --library-tv
 
 
+ADD EPISODE TITLES TO FILES THAT LACK THEM:
+-------------------------------------------
+# Preview (changes nothing; reports what OMDb has no title for):
+python3 movie_renamer.py --backfill-titles --dry-run
+
+# Do it (renames only, inside each season folder; writes a journal of every rename):
+python3 movie_renamer.py --backfill-titles
+
+# Put the names back, using the journal path it printed (data/organizer-backfill-....jsonl):
+python3 movie_renamer.py --undo-backfill data/organizer-backfill-YYYYMMDD-HHMMSS.jsonl
+
+Subtitles are renamed together with their video, because the media server only shows an
+external subtitle whose name starts with the video's. The same run also repairs episodes whose
+subtitles never got the title (no OMDb needed for those). The ChocheyTV library picks the new
+names up at its next rescan; watch history is kept.
+
+
 STOP WATCH MODE:
 ----------------
 Press Ctrl+C

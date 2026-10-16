@@ -53,6 +53,9 @@ OMDB_USAGE_FILE = os.environ.get('ORGANIZER_OMDB_USAGE', os.path.join(_DATA, 'or
 STATUS_FILE = os.environ.get('ORGANIZER_STATUS_FILE', os.path.join(_DATA, 'organizer-status.json'))
 STATUS_INTERVAL = float(os.environ.get('ORGANIZER_STATUS_INTERVAL', '30'))
 
+# Where a --backfill-titles run writes its journal of renames (so --undo-backfill can reverse it)
+BACKFILL_DIR = os.environ.get('ORGANIZER_BACKFILL_DIR', _DATA)
+
 # Part-files being written right now (see safe_copy.py), so an interrupted run can clean up
 INFLIGHT_FILE = os.environ.get('ORGANIZER_INFLIGHT_FILE',
     os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data', 'organizer-inflight.json'))
