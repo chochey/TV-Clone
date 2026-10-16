@@ -19,6 +19,7 @@ import requests
 from PTN import parse
 
 import config
+import safe_copy
 import sys
 
 # Shared, versioned import guard from the media-server repository.
@@ -1224,40 +1225,31 @@ def review_item(item: dict, title: str, reason: str) -> None:
     log.warning("REVIEW: %s", json.dumps(record, ensure_ascii=False))
 
 
+# Names the part-files being written so a crash cannot leave them behind. Set only by
+# real runs (see start_inflight_journal); None in tests and previews, which touch no
+# shared state.
+_inflight_journal = None
+
+
+def start_inflight_journal() -> None:
+    """Clean up after an interrupted run, then start tracking this run's copies."""
+    global _inflight_journal
+    journal = safe_copy.InflightJournal(config.INFLIGHT_FILE)
+    journal.recover()
+    _inflight_journal = journal
+
+
 def move_without_overwrite(source: Path, destination: Path) -> None:
-    """Exclusive creation, verified copy, then removal; never replace a destination."""
-    if source.is_symlink() or not source.is_file():
-        raise ValueError("Source must be a regular file")
-    before = source.stat()
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    created = False
-    try:
-        try:
-            # Same-filesystem imports can publish a link without copying gigabytes.
-            # link() atomically refuses an existing destination.
-            os.link(source, destination)
-            created = True
-        except OSError as error:
-            if error.errno not in (errno.EXDEV, errno.EPERM, errno.EOPNOTSUPP, errno.ENOSYS):
-                raise
-            with source.open("rb") as src, destination.open("xb") as dst:
-                created = True
-                shutil.copyfileobj(src, dst, 1024 * 1024)
-                dst.flush()
-                os.fsync(dst.fileno())
-        after = source.stat()
-        if (before.st_size, before.st_mtime_ns) != (after.st_size, after.st_mtime_ns):
-            raise OSError("Source changed during import; left for review")
-        if destination.stat().st_size != before.st_size:
-            raise OSError("Incomplete destination copy")
-        shutil.copystat(source, destination)
+    """Move a file into the library without ever replacing anything.
+
+    Same-drive moves are an instant hard link. Cross-drive moves are copied to a hidden
+    part-file, verified, then published atomically (see safe_copy.py), so a crash
+    cannot leave a truncated file under the real name."""
+    def announce() -> None:
         # Keep original and destination paths in the activity log for corrections.
         log.info("Import source: %s -> %s", source, destination)
-        source.unlink()
-    except Exception:
-        if created:
-            destination.unlink(missing_ok=True)
-        raise
+
+    safe_copy.import_file(source, destination, journal=_inflight_journal, before_unlink=announce)
     log.info("Moved -> %s", destination)
 
 
@@ -2373,6 +2365,8 @@ def main() -> None:
         if drive_dir != config.TV_DEST_DIR and Path(drive_dir).exists():
             log.info(f"Additional TV drive available: {drive_dir}")
 
+    if not args.dry_run:
+        start_inflight_journal()
     if args.watch:
         run_watch()
     else:

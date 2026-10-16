@@ -45,6 +45,10 @@ TV_DEST_DIRS    = [d.strip() for d in os.environ.get('ORGANIZER_TV_DEST_DIRS',  
 OMDB_API_KEY  = os.environ.get('OMDB_API_KEY', '')
 OMDB_BASE_URL = os.environ.get('OMDB_BASE_URL', 'http://www.omdbapi.com/')
 
+# Part-files being written right now (see safe_copy.py), so an interrupted run can clean up
+INFLIGHT_FILE = os.environ.get('ORGANIZER_INFLIGHT_FILE',
+    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data', 'organizer-inflight.json'))
+
 # Watch mode
 POLL_INTERVAL = int(os.environ.get('ORGANIZER_POLL_INTERVAL', '30'))
 
