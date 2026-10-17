@@ -37,6 +37,7 @@ const SUPPORTED_EXT = [...VIDEO_EXTENSIONS, ...AUDIO_EXTENSIONS];
 const audioMetadata = require('./lib/audio-metadata')();
 const audioReadAlong = require('./lib/audio-read-along')({ DATA_DIR });
 const readAlongBodies = require('./lib/compressed-json')();
+const audioLite = require('./lib/audio-lite')({ DATA_DIR, log: message => console.log(`[DATA-SAVER] ${message}`) });
 const SUBTITLE_EXT = ['.srt', '.vtt'];
 const POSTER_EXT = ['.jpg', '.jpeg', '.png', '.webp'];
 
@@ -1255,6 +1256,9 @@ app.post('/api/progress', requireAuth, (req, res) => {
   if (data.history.length > MAX_HISTORY_ITEMS) data.history = data.history.slice(0, MAX_HISTORY_ITEMS);
 
   saveProfileData(profileId, data);
+  // Listening anywhere prepares the data saver copy a phone has asked for before.
+  const audioFile = fileIndex[id];
+  if (audioFile && isAudioFile(audioFile) && !playbackIssueForFile(audioFile)) audioLite.warm(id, audioFile).catch(() => {});
   res.json({ ok: true });
 });
 
@@ -1914,6 +1918,34 @@ app.get('/api/browse', requireAdmin, (req, res) => {
 // ── Streaming & File serving ─────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════
 
+// Data saver: a smaller copy of an audiobook for listening on mobile data
+// (lib/audio-lite.js). The player asks for one, follows its preparation, and
+// switches to it once it is ready; the original keeps playing until then.
+function audiobookFile(id) {
+  const filePath = fileIndex[id];
+  return /^[a-f0-9]{16}$/.test(id) && scanLibrary().some(item => item.id === id && item.mediaKind === 'audio') &&
+    filePath && isAudioFile(filePath) && !playbackIssueForFile(filePath) ? filePath : null;
+}
+async function audioLiteRoute(req, res, action) {
+  res.set('Cache-Control', 'private, no-store');
+  if (!getRequestProfile(req)) return res.status(403).json({ error: 'Cannot access other profiles' });
+  const id = req.params.id, filePath = audiobookFile(id);
+  if (!filePath) return res.status(404).json({ error: 'Audiobook not found' });
+  try {
+    const value = await action(id, filePath);
+    res.json(value.state === 'ready'
+      ? { variant: value.variant, state: 'ready', bytes: value.bytes, url: `/stream/${id}?variant=${value.variant}&v=${value.version}` }
+      : value);
+  } catch (error) {
+    if (error.code === 'EINVAL') return res.status(400).json({ error: 'Unknown data saver format' });
+    res.status(404).json({ error: 'Audiobook not found' });
+  }
+}
+app.get('/api/audio/lite/:id', requireAuth, ensureLibrary, (req, res) =>
+  audioLiteRoute(req, res, (id, filePath) => audioLite.status(id, filePath, String(req.query.variant || ''))));
+app.post('/api/audio/lite/:id', requireAuth, ensureLibrary, (req, res) =>
+  audioLiteRoute(req, res, (id, filePath) => audioLite.prepare(id, filePath, String(req.body?.variant || ''))));
+
 const { streamMediaFile } = require('./lib/direct-stream');
 app.get('/stream/:id', requireAuth, ensureLibrary, async (req, res) => {
   const filePath = fileIndex[req.params.id];
@@ -1921,6 +1953,16 @@ app.get('/stream/:id', requireAuth, ensureLibrary, async (req, res) => {
   const playbackIssue = playbackIssueForFile(filePath);
   if (playbackIssue) return res.status(415).send(playbackIssue);
   lastPlaybackAt = Date.now(); // pause sprite gen during direct play
+  if (req.query.variant !== undefined) {
+    // The version in the URL changes whenever a copy is remade, and a stale one
+    // is refused, so the browser may keep what it downloaded for good.
+    const copy = audiobookFile(req.params.id) &&
+      await audioLite.file(req.params.id, filePath, String(req.query.variant), String(req.query.v || ''));
+    if (!copy) return res.status(404).send('Data saver copy is not ready');
+    return streamMediaFile(req, res, copy.path, { onError: err => recordError('direct-stream', err.message),
+      headers: { 'Content-Type': copy.type, 'Cache-Control': 'private, max-age=31536000, immutable', ETag: `"${copy.version}"`,
+        'Last-Modified': new Date(copy.mtimeMs).toUTCString() } });
+  }
   await streamMediaFile(req, res, filePath, { onError: err => recordError('direct-stream', err.message) });
 });
 
@@ -4316,6 +4358,7 @@ app.post('/api/restart', requirePermission('canRestart'), (_req, res) => {
 // ── Graceful shutdown ───────────────────────────────────────────────────
 function shutdown() {
   Object.keys(transcodeSessions).forEach(id => cleanupSession(id));
+  audioLite.stop();
   process.exit(0);
 }
 process.on('SIGTERM', shutdown);

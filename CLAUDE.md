@@ -95,6 +95,29 @@ The Svelte session store tears down live updates and rejects old in-flight
 responses on account changes. Series cards and details share series-playback.js;
 explicit episode selection must continue to play the selected episode.
 
+### Audiobook data saver and read-along caching (October 2026)
+`lib/audio-lite.js` makes smaller copies of audiobooks in `data/audio-lite/` on request
+(`POST /api/audio/lite/:id`), one ffmpeg at a time: nice 10 while a listener waits, 19 when
+prepared ahead (from `/api/progress`, only for formats someone used in the last 60 days).
+Copies live within a 10 GiB least-recently-listened budget. The formats were chosen by
+measuring Chrome; do not swap them back:
+- Opus 32 kbps mono in **WebM, not Ogg**: Chrome seeks Ogg by bisecting the file, which
+  downloaded 3-8 MB per seek. WebM's cues (at the end, ~14 KB an hour) make a seek one request.
+- **CBR MP3** 48 kbps mono as the fallback, **not AAC in MP4**: an MP4's index holds ~4 bytes
+  per audio frame and is downloaded before playback starts (10.6 MB for book 3's M4B).
+The stream URL carries the copy's version (`/stream/:id?variant=opus&v=...`) and is served
+`immutable`; a stale version is a 404 and the player asks for the current one. Media error
+code 4 also means a 404/502 or a dropped connection, so a failed copy marks its format
+unplayable on that device only if the server still offers it AND a 1 KB range of it downloads
+as audio; otherwise the player plays the original and retries the copy with backoff. A switch
+never happens while the page is hidden (locked phones lose their media controls on a source
+change). ffmpeg is killed after 5 minutes without progress (stalled pool drive).
+
+`/api/audio/read-along/:id` sends a weak ETag (file identity + boot epoch) with
+`private, no-cache`, and a brotli/gzip body compressed once per version
+(`lib/compressed-json.js`). `MAX_FILE_BYTES` (16 MiB) is shared with `lib/verified-backup.js`:
+one read-along document over the backup's limit fails the entire snapshot.
+
 ### Stream modes (getStreamMode)
 - `direct`: h264 + aac/mp3/opus in .mp4 -- served as-is via byte-range
 - `remux`: h264 in .mkv or with non-browser audio -- copy video, transcode/copy audio

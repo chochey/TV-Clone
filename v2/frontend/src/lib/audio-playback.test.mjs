@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { audioMimeType, audioPlaybackError, audioResumePosition, audioProgressPayload, audioTime, startAudioPlayback } from './audio-playback.js';
 
-function fixture({ supported = true, start = 12, item = { id: 'podcast/id', filename: 'Episode.mp3', streamMode: 'hls' } } = {}) {
+function fixture({ supported = true, start = 12, item = { id: 'podcast/id', filename: 'Episode.mp3', streamMode: 'hls' }, options = {} } = {}) {
   const events = new Map(), jobs = new Map();
   let playCalls = 0, id = 0, error = '', ready = 0, current = true;
   const audio = {
@@ -14,7 +14,7 @@ function fixture({ supported = true, start = 12, item = { id: 'podcast/id', file
   };
   const timers = { setTimeout(fn) { jobs.set(++id, fn); return id; }, clearTimeout(value) { jobs.delete(value); } };
   const cancel = startAudioPlayback(audio, item, start, { timers, isCurrent: () => current,
-    onMetadata() { ready++; }, onBlocked() {}, onTimeout() {}, onError(message) { error = message; } });
+    onMetadata() { ready++; }, onBlocked() {}, onTimeout() {}, onError(message) { error = message; }, ...options });
   return { audio, events, jobs, cancel, stale() { current = false; }, get playCalls() { return playCalls; }, get error() { return error; }, get ready() { return ready; } };
 }
 
@@ -77,4 +77,20 @@ test('audio progress uses the same finite resume contract and marks natural comp
   assert.match(audioPlaybackError({ code: 2 }), /server connection.*retry/i);
   assert.match(audioPlaybackError({ code: 4 }), /unsupported.*another browser/i);
   assert.equal(audioTime(3671), '1:01:11');
+});
+
+test('a data saver copy loads from its own URL and is checked against its own format', () => {
+  const source = { url: '/stream/book?variant=opus&v=abc', type: 'audio/ogg; codecs="opus"' };
+  const f = fixture({ item: { id: 'book', filename: 'Book.m4b' }, options: { source } });
+  assert.equal(f.audio.src, source.url); assert.equal(f.audio.checkedType, source.type);
+  assert.equal(f.playCalls, 1);
+  f.cancel();
+});
+
+test('switching source while paused keeps the position and does not start playback', () => {
+  const f = fixture({ start: 30, options: { source: { url: '/stream/x?variant=mp3&v=1', type: 'audio/mpeg' }, autoplay: false } });
+  assert.equal(f.playCalls, 0); assert.equal(f.jobs.size, 0, 'no startup watchdog for a paused switch');
+  f.events.get('loadedmetadata')();
+  assert.equal(f.audio.currentTime, 30); assert.equal(f.ready, 1);
+  f.cancel(); assert.equal(f.events.has('loadedmetadata'), false);
 });

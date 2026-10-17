@@ -47,10 +47,14 @@ export function audioTime(seconds) {
 }
 
 // Native audio only: no HLS session, video engine, sprite, or subtitle work.
+// options.source is a data saver copy ({ url, type }) to play instead of the
+// original; options.autoplay false loads it without starting playback (a
+// source switch while paused).
 export function startAudioPlayback(audio, item, start, options) {
   const issue = audioPlaybackIssue(item);
   if (issue) { options.onError?.(issue); return () => {}; }
-  const mime = audioMimeType(item);
+  const source = options.source;
+  const mime = source ? source.type : audioMimeType(item);
   if (mime && audio.canPlayType && !audio.canPlayType(mime)) {
     options.onError?.(`This browser does not support this audio format. Try another browser or a supported copy.`);
     return () => {};
@@ -65,8 +69,8 @@ export function startAudioPlayback(audio, item, start, options) {
   };
   audio.pause();
   audio.addEventListener('loadedmetadata', metadata, { once: true });
-  audio.src = audioStreamUrl(item);
-  const cancelWatchdog = startPlayback(audio, { ...options, isCurrent });
+  audio.src = source ? source.url : audioStreamUrl(item);
+  const cancelWatchdog = options.autoplay === false ? () => {} : startPlayback(audio, { ...options, isCurrent });
   return () => {
     active = false;
     audio.removeEventListener('loadedmetadata', metadata);

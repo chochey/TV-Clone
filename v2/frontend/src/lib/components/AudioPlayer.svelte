@@ -6,6 +6,8 @@
   import { audioPresentation, audioRemaining, audioChapters, activeAudioChapter, audioChapterLabel } from '../audio-presentation.js';
   import { mergeAudioDetail } from '../audio-detail.js';
   import { AUDIO_SPEEDS, rememberedAudioSpeed, rememberedAudioVolume, rememberAudioVolume, rememberedAudioMuted, rememberAudioMuted, audioBookmarks, createSleepTimer } from '../listening-tools.js';
+  import { DATA_SAVER_POLL_MS, DATA_SAVER_MAX_BACKOFF_MS, DATA_SAVER_RETRY_FAILED_MS, rememberedDataSaver, rememberDataSaver, dataSaverFormat, rememberDataSaverFailure,
+    forgetDataSaverFailures, dataSaverCopy, dataSaverMessage, originalMegabytesPerHour, copyDownloads } from '../audio-data-saver.js';
   import AudioReadAlong from './AudioReadAlong.svelte';
 
   let { item, onclose, minimized = false, onminimize, onexpand } = $props();
@@ -14,6 +16,13 @@
   let currentTime = $state(0), duration = $state(0), speed = $state(1), volume = $state(rememberedAudioVolume()), muted = $state(rememberedAudioMuted());
   let playing = $state(false), ready = $state(false), full = $state(null), artworkIndex = $state(0);
   let readAlongOpen = $state(false);
+  // Data saver: liteSource is the smaller copy now loaded (null = the original);
+  // pendingLite is a ready copy waiting for a safe moment to switch to.
+  let dataSaver = $state(rememberedDataSaver()), liteFormat = $state(null), liteStatus = $state(null);
+  let liteSource = $state(null), pendingLite = $state(null), litePoll, liteAttempt = 0, startPending = false;
+  // unreachableWait backs off status checks while the server can't be reached;
+  // liteBlocked holds back a copy whose download just failed ({ url, wait, until }).
+  let unreachableWait = DATA_SAVER_POLL_MS, liteBlocked = null, loadAutoplay = true;
   const book = $derived(mergeAudioDetail(item, full));
   const presentation = $derived(audioPresentation(book));
   const title = $derived(presentation.title);
@@ -27,6 +36,8 @@
   const percent = $derived(totalTime ? Math.max(0, Math.min(100, position / totalTime * 100)) : 0);
   const chapters = $derived(audioChapters(book.audioMetadata?.chapters, totalTime));
   const chapterIndex = $derived(activeAudioChapter(chapters, position));
+  const dataSaverText = $derived(dataSaverMessage({ on: dataSaver, format: liteFormat, status: liteStatus, active: !!liteSource,
+    pending: !!pendingLite, original: originalMegabytesPerHour(book, totalTime) }));
   let sleepChoice = $state('off'), sleepPlan = $state(null), clock = $state(Date.now());
   const sleepRemaining = $derived(sleepPlan?.deadline ? Math.max(0, Math.ceil((sleepPlan.deadline - clock) / 60000)) : 0);
   let bookmarks = $state([]), bookmarkLabel = $state(''), bookmarkBusy = $state(false), bookmarksLoading = $state(true);
@@ -63,23 +74,137 @@
     });
   }
 
-  function load(start = 0) {
+  function load(start = 0, source = null, autoplay = true) {
     const attempt = ++sequence;
     cancelStartup(); ready = false; error = ''; notice = 'Loading audio…';
     if (playbackIssue) { notice = ''; return; }
-    resumePoint = start;
-    cancelStartup = startAudioPlayback(audio, item, start, {
+    resumePoint = start; liteSource = source; loadAutoplay = autoplay;
+    cancelStartup = startAudioPlayback(audio, item, start, { source, autoplay,
       isCurrent: () => !destroyed && sequence === attempt,
       onMetadata: value => {
         duration = value;
         audio.currentTime = value > 0 && resumePoint >= value ? 0 : resumePoint;
         currentTime = audio.currentTime; ready = true; audio.playbackRate = speed; audio.volume = volume; audio.muted = muted;
+        if (!autoplay) notice = '';
       },
       onBlocked: () => { notice = 'Press Play to listen.'; },
       onSlow: () => { notice = 'Waiting for audio…'; },
       onTimeout: () => { error = 'Audio is taking longer than expected. Retry or check the server connection.'; notice = ''; },
       onError: message => { error = message; notice = ''; },
     });
+  }
+  // Where to continue from when the source changes: the live position once
+  // playing, otherwise the resume point that a load is still heading for.
+  const switchPoint = () => ready && audio ? audio.currentTime || currentTime : resumePoint;
+  // Whether the listener wants sound: what the element is doing once a source
+  // has loaded, otherwise what the load under way was asked to do. ("Not ready"
+  // alone says nothing: a paused source switch is not ready either.)
+  const wantsPlayback = () => ready ? playing : loadAutoplay;
+  async function liteRequest(prepare) {
+    const attempt = liteAttempt, format = liteFormat;
+    try {
+      const value = await (prepare ? api.audioLitePrepare(item.id, format.variant) : api.audioLite(item.id, format.variant));
+      if (destroyed || attempt !== liteAttempt) return null;
+      liteStatus = value; return value;
+    } catch {
+      if (!destroyed && attempt === liteAttempt) liteStatus = { state: 'unreachable' };
+      return null;
+    }
+  }
+  // Asks for this book's smaller copy if needed, follows its preparation, and
+  // moves to it once it is ready. The original keeps playing meanwhile.
+  async function followLite(known = null) {
+    clearTimeout(litePoll);
+    if (!dataSaver || !liteFormat || playbackIssue) return;
+    const attempt = liteAttempt;
+    let status = known || await liteRequest(false);
+    if (status && (status.state === 'none' || status.state === 'failed')) status = await liteRequest(true);
+    if (destroyed || attempt !== liteAttempt) return;
+    const copy = dataSaverCopy(status, liteFormat);
+    const blockedFor = copy && liteBlocked?.url === copy.url ? liteBlocked.until - Date.now() : 0;
+    if (copy && blockedFor <= 0) { useLite(copy); return; }
+    if (blockedFor > 0) liteStatus = { state: 'retrying' };
+    // Keep following: the copy may still be in the making, the server may be
+    // restarting (it forgets a copy in the making, and the request above asks
+    // again), or the copy's last download failed and gets another go later.
+    let delay;
+    if (!status) { delay = unreachableWait; unreachableWait = Math.min(unreachableWait * 2, DATA_SAVER_MAX_BACKOFF_MS); }
+    else {
+      unreachableWait = DATA_SAVER_POLL_MS;
+      delay = blockedFor > 0 ? blockedFor : status.state === 'failed' ? DATA_SAVER_RETRY_FAILED_MS : DATA_SAVER_POLL_MS;
+    }
+    litePoll = setTimeout(() => followLite(), delay);
+  }
+  function useLite(copy) {
+    if (liteSource?.url === copy.url) { pendingLite = null; return; }
+    // Nothing to gain in the last seconds, and a copy a few ms shorter than the
+    // original would restart a finished book from 0.
+    if (audio?.ended || (ready && duration > 0 && switchPoint() > duration - 2)) { pendingLite = null; return; }
+    // Changing the source behind a locked screen can cost the phone its
+    // lock-screen controls (the next headphone "play" does nothing), so the
+    // switch waits until the listener looks at the player, playing or paused.
+    if (document.visibilityState === 'hidden') { pendingLite = copy; return; }
+    pendingLite = null;
+    load(switchPoint(), copy, wantsPlayback());
+  }
+  function useOriginal(autoplay) {
+    pendingLite = null;
+    load(switchPoint(), null, autoplay);
+  }
+  async function startWithDataSaver(start) {
+    resumePoint = start; notice = 'Loading audio…'; startPending = true;
+    // Checking first means a ready copy plays without touching the original,
+    // whose index alone is ~10 MB for a long book. A slow answer must not hold
+    // up listening, though.
+    const status = await Promise.race([liteRequest(false), new Promise(resolve => setTimeout(resolve, 3000, null))]);
+    startPending = false;
+    if (destroyed) return;
+    // The switch may have been flipped meanwhile: whatever it says now wins.
+    const copy = dataSaver ? dataSaverCopy(status, liteFormat) : null;
+    load(resumePoint, copy);
+    if (dataSaver && !copy) followLite(status?.variant === liteFormat?.variant ? status : null);
+  }
+  function setDataSaver(on) {
+    dataSaver = rememberDataSaver(on);
+    if (on) forgetDataSaverFailures();
+    liteAttempt++; clearTimeout(litePoll); pendingLite = null; liteStatus = null; liteBlocked = null;
+    liteFormat = dataSaver ? dataSaverFormat(audio) : null;
+    if (startPending) return;   // the start under way reads the switch when it finishes
+    if (dataSaver) followLite();
+    else if (liteSource) useOriginal(wantsPlayback());
+  }
+  // A copy the browser rejected. If the copy was remade meanwhile, its old link
+  // simply went away: play the new one. Otherwise fetch a small part of it: if
+  // that arrives as audio, this device cannot play the format (canPlayType only
+  // promises "maybe"), so remember that and try the next format; if it does
+  // not, the download failed (server restarting, signal lost), so play the
+  // original for now and give the copy another go later.
+  async function liteFailed() {
+    const failed = liteSource, at = switchPoint(), resume = wantsPlayback();
+    liteAttempt++; clearTimeout(litePoll);
+    const attempt = liteAttempt;
+    sequence++; cancelStartup(); notice = 'Loading audio…';
+    const status = await liteRequest(false);
+    if (destroyed || attempt !== liteAttempt) return;
+    const copy = dataSaverCopy(status, liteFormat);
+    if (copy && copy.url !== failed.url) { load(at, copy, resume); return; }
+    let next = null;
+    if (copy) {
+      const downloads = await copyDownloads(failed.url);
+      if (destroyed || attempt !== liteAttempt) return;
+      if (downloads) {
+        rememberDataSaverFailure(failed.variant); liteFormat = dataSaverFormat(audio);
+        if (dataSaver && liteFormat) { next = await liteRequest(false); if (destroyed || attempt !== liteAttempt) return; }
+        const nextCopy = dataSaverCopy(next, liteFormat);
+        if (nextCopy) { load(at, nextCopy, resume); return; }
+        liteStatus = { state: 'unplayable' };
+      } else {
+        const wait = Math.min(liteBlocked?.url === failed.url ? liteBlocked.wait * 2 : DATA_SAVER_POLL_MS, DATA_SAVER_MAX_BACKOFF_MS);
+        liteBlocked = { url: failed.url, wait, until: Date.now() + wait };
+      }
+    }
+    load(at, null, resume);
+    if (dataSaver && liteFormat) followLite(next || (copy ? null : status));
   }
   function stopUnsupportedAudio() {
     sequence++; cancelStartup(); ready = false; notice = ''; error = '';
@@ -155,7 +280,10 @@
   function minimize() { saveProgress(); onminimize?.(); if (opener?.isConnected) opener.focus?.(); }
   async function expand() { onexpand?.(); await tick(); closeButton?.focus(); }
   function close() { saveProgress(); onclose?.(); }
-  function onHidden() { if (document.visibilityState === 'hidden') saveProgress(false, true); }
+  function onHidden() {
+    if (document.visibilityState === 'hidden') saveProgress(false, true);
+    else if (pendingLite) useLite(pendingLite);
+  }
   function onPageHide() { saveProgress(false, true); }
   function keydown(event) {
     if (minimized && !dialog?.contains(event.target)) return;
@@ -178,7 +306,9 @@
   onMount(() => {
     profile = $session?.profileId; opener = document.activeElement;
     closeButton?.focus();
-    load(audioResumePosition(item.progress));
+    liteFormat = dataSaver ? dataSaverFormat(audio) : null;
+    if (dataSaver && liteFormat && !playbackIssue) startWithDataSaver(audioResumePosition(item.progress));
+    else load(audioResumePosition(item.progress));
     api.audioPreferences().then(value => {
       if (!destroyed && $session?.profileId === profile && !speedTouched) {
         speed = rememberedAudioSpeed(value?.speed); if (audio) audio.playbackRate = speed;
@@ -202,7 +332,7 @@
     document.addEventListener('visibilitychange', onHidden);
   });
   onDestroy(() => {
-    saveProgress(); destroyed = true; sequence++; cancelStartup(); clearInterval(timer); clearInterval(clockTimer); sleep.destroy();
+    saveProgress(); destroyed = true; sequence++; cancelStartup(); clearInterval(timer); clearInterval(clockTimer); clearTimeout(litePoll); sleep.destroy();
     window.removeEventListener('pagehide', onPageHide); window.removeEventListener('keydown', keydown);
     document.removeEventListener('visibilitychange', onHidden);
     audio?.pause(); audio?.removeAttribute('src'); audio?.load();
@@ -242,14 +372,19 @@
             ondurationchange={() => { duration = Number.isFinite(audio.duration) ? audio.duration : 0; }}
             ontimeupdate={() => { if (ready) { currentTime = audio.currentTime; teardownSaved = false; sleep.position(currentTime); } }}
             onplay={() => { playing = !audio.paused; }}
-            onplaying={() => { playing = true; notice = ''; error = ''; audio.playbackRate = speed; }}
+            onplaying={() => { playing = true; notice = ''; error = ''; audio.playbackRate = speed; if (liteSource) liteBlocked = null; }}
             onwaiting={() => { if (!error) notice = 'Buffering audio…'; }}
             onpause={() => { playing = false; saveProgress(); }}
             onseeked={() => { currentTime = audio.currentTime; saveProgress(); }}
             onvolumechange={() => { volume = audio.volume; muted = audio.muted; }}
             onratechange={() => { speed = audio.playbackRate; }}
             onended={() => { playing = false; sleep.clear(); sleepChoice = 'off'; notice = 'Finished listening.'; saveProgress(true); }}
-            onerror={() => { cancelStartup(); playing = !audio.paused; error = audioPlaybackError(audio?.error); notice = ''; }}
+            onerror={() => {
+              // Only a format or decode error says the copy is unplayable here; a
+              // network drop on a walk is retried like any other.
+              if (liteSource && [3, 4].includes(audio?.error?.code)) { liteFailed(); return; }
+              cancelStartup(); playing = !audio.paused; error = audioPlaybackError(audio?.error); notice = '';
+            }}
           ></audio>
           <div class="timeline">
             <input class="position" type="range" min="0" max={totalTime || 1} step="1" value={position} disabled={!ready || !totalTime}
@@ -286,6 +421,10 @@
             </select></label>
           {/if}
           <div class="listening-tools">
+            <div class="data-saver">
+              <label class="data-saver-toggle"><span>Data saver <small>smaller audio for mobile data</small></span><input type="checkbox" role="switch" checked={dataSaver} onchange={(event) => setDataSaver(event.currentTarget.checked)} /></label>
+              {#if dataSaverText}<p class="data-saver-status" role="status">{dataSaverText}</p>{/if}
+            </div>
             <label class="sleep-picker">Sleep timer <select aria-label="Sleep timer" value={sleepChoice} onchange={(event) => setSleep(event.currentTarget.value)}>
               <option value="off">Off</option><option value="15">15 minutes</option><option value="30">30 minutes</option><option value="60">60 minutes</option>
               {#if chapters[chapterIndex]?.end}<option value="chapter">End of this chapter</option>{/if}
@@ -300,7 +439,7 @@
             </section>
           </div>
           {#if notice && !error}<p class="notice" role="status">{notice}</p>{/if}
-          {#if error}<div class="error" role="alert"><p>{error}</p><button onclick={() => load(currentTime)}>Retry</button></div>{/if}
+          {#if error}<div class="error" role="alert"><p>{error}</p><button onclick={() => load(switchPoint(), liteSource)}>Retry</button></div>{/if}
         {/if}
       </div>
     </div>
@@ -334,6 +473,16 @@
   .listening-tools {border-top:1px solid #ffffff15;margin-top:16px;padding-top:16px;}
   .sleep-picker {display:flex;align-items:center;justify-content:space-between;gap:12px;color:#c2b5ce;font-size:.85rem;}
   .sleep-status {margin-top:8px;color:#bfb2d0;font-size:.8rem;}
+  .data-saver {margin-bottom:14px;}
+  .data-saver-toggle {display:flex;align-items:center;justify-content:space-between;gap:12px;color:#c2b5ce;font-size:.85rem;min-height:40px;cursor:pointer;}
+  .data-saver-toggle span {display:flex;flex-direction:column;gap:2px;}
+  .data-saver-toggle small {color:#9d91aa;font-size:.74rem;}
+  .data-saver-toggle input {appearance:none;-webkit-appearance:none;position:relative;flex:none;width:44px;height:26px;margin:0;border-radius:13px;background:#ffffff26;cursor:pointer;transition:background .15s;}
+  .data-saver-toggle input::after {content:'';position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;background:#e9e2f2;transition:transform .15s;}
+  .data-saver-toggle input:checked {background:#8b5cf6;}
+  .data-saver-toggle input:checked::after {transform:translateX(18px);}
+  .data-saver-toggle input:focus-visible {outline:3px solid #cba6ff;outline-offset:3px;}
+  .data-saver-status {margin-top:6px;color:#bfb2d0;font-size:.8rem;line-height:1.45;}
   .bookmarks {margin-top:20px;}
   .bookmarks h2 {font-size:.95rem;margin-bottom:10px;}
   .bookmark-add {display:flex;gap:8px;flex-wrap:wrap;}
