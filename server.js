@@ -36,6 +36,7 @@ const { FolderError, validateFolderPath, normalizeFolder, publicSections, sectio
 const SUPPORTED_EXT = [...VIDEO_EXTENSIONS, ...AUDIO_EXTENSIONS];
 const audioMetadata = require('./lib/audio-metadata')();
 const audioReadAlong = require('./lib/audio-read-along')({ DATA_DIR });
+const readAlongBodies = require('./lib/compressed-json')();
 const SUBTITLE_EXT = ['.srt', '.vtt'];
 const POSTER_EXT = ['.jpg', '.jpeg', '.png', '.webp'];
 
@@ -980,7 +981,13 @@ app.get('/api/audio/read-along/:id', requireAuth, ensureLibrary, async (req, res
       !filePath || !isAudioFile(filePath) || playbackIssueForFile(filePath)) {
     return res.status(404).json({ error: 'Audiobook not found' });
   }
-  res.json(await audioReadAlong.get(id, filePath));
+  const document = await audioReadAlong.get(id, filePath), tag = audioReadAlong.etag(document);
+  if (!tag) return res.json(document);
+  // A prepared book is several MB. The browser keeps it and asks whether it is
+  // still current, so reopening the reader on a phone costs a few hundred bytes.
+  res.set({ ETag: tag, 'Cache-Control': 'private, no-cache' });
+  if (req.fresh) return res.status(304).end();
+  await readAlongBodies.send(req, res, tag, document);
 });
 
 app.put('/api/subtitle-offset/:id', requireAuth, (req, res) => {
