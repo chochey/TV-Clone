@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { DATA_SAVER_FORMATS, rememberedDataSaver, rememberDataSaver, dataSaverFormat, rememberDataSaverFailure, forgetDataSaverFailures,
+import { DATA_SAVER_FORMATS, dataSaverDefault, rememberedDataSaver, rememberDataSaver, dataSaverFormat, rememberDataSaverFailure, forgetDataSaverFailures,
   dataSaverCopy, dataSaverMessage, originalMegabytesPerHour, copyDownloads } from './audio-data-saver.js';
 
 function storage(values = {}) {
@@ -94,4 +94,31 @@ test('a copy counts as downloadable only if a small part of it really arrives as
   assert.equal(await copyDownloads('/x', answer(404, 'text/plain')), false);
   assert.equal(await copyDownloads('/x', answer(206, 'text/html')), false);
   assert.equal(await copyDownloads('/x', async () => { throw new TypeError('Failed to fetch'); }), false);
+});
+
+const IPHONE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1';
+const ANDROID_PHONE = 'Mozilla/5.0 (Linux; Android 15; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36';
+const ANDROID_TABLET = 'Mozilla/5.0 (Linux; Android 15; Pixel Tablet) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36';
+const DESKTOP = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36';
+const IPAD = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15';
+
+test('data saver starts on for phones and for browsers asking to save data, off elsewhere', () => {
+  assert.equal(dataSaverDefault({ userAgent: IPHONE }), true);
+  assert.equal(dataSaverDefault({ userAgent: ANDROID_PHONE }), true);
+  assert.equal(dataSaverDefault({ userAgent: DESKTOP, userAgentData: { mobile: true } }), true);
+  assert.equal(dataSaverDefault({ userAgent: DESKTOP, connection: { saveData: true } }), true);
+  assert.equal(dataSaverDefault({ userAgent: DESKTOP }), false);
+  assert.equal(dataSaverDefault({ userAgent: ANDROID_TABLET }), false, 'tablets are usually on Wi-Fi');
+  assert.equal(dataSaverDefault({ userAgent: IPAD }), false);
+  assert.equal(dataSaverDefault({ userAgent: ANDROID_PHONE, userAgentData: { mobile: false } }), false, 'client hints win when present');
+  assert.equal(dataSaverDefault(undefined), false);
+});
+
+test('a choice made on this device always beats the default', () => {
+  const phone = { userAgent: IPHONE }, desktop = { userAgent: DESKTOP };
+  assert.equal(rememberedDataSaver(storage(), phone), true);
+  assert.equal(rememberedDataSaver(storage(), desktop), false);
+  assert.equal(rememberedDataSaver(storage({ 'tvclone.audio.dataSaver': 'off' }), phone), false);
+  assert.equal(rememberedDataSaver(storage({ 'tvclone.audio.dataSaver': 'on' }), desktop), true);
+  assert.equal(rememberedDataSaver(broken, phone), true, 'blocked storage falls back to the default');
 });

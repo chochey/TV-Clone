@@ -305,3 +305,22 @@ test('Retry after an early failure resumes from the saved place, not the start',
   expect(await position(page)).toBeGreaterThanOrEqual(7.9);
   expect(state.progress.every(entry => entry.currentTime >= 7.9), 'the server position was never overwritten with 0').toBe(true);
 });
+
+test('a phone that never chose starts on the smaller copy; a desktop keeps the original', async ({ browser }) => {
+  const phone = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true,
+    userAgent: 'Mozilla/5.0 (Linux; Android 15; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36' });
+  const page = await phone.newPage();
+  const state = await fixture(page, { lite: variant => ({ variant, state: 'ready', bytes: 240000, url: OPUS_URL }) });
+  await listen(page);
+  expect(await source(page)).toBe(OPUS_URL);
+  expect(state.streams.includes(''), 'the original was never downloaded').toBe(false);
+  await expect(page.getByRole('dialog', { name: 'Audio player' }).getByRole('switch', { name: 'Data saver' })).toBeChecked();
+  expect(await page.evaluate(() => localStorage.getItem('tvclone.audio.dataSaver')), 'the default is not stored as a choice').toBe(null);
+  await phone.close();
+  const desktop = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const desk = await desktop.newPage();
+  await fixture(desk, { lite: variant => ({ variant, state: 'ready', bytes: 240000, url: OPUS_URL }) });
+  await listen(desk);
+  expect(await source(desk)).toBe('/stream/book');
+  await desktop.close();
+});

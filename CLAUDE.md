@@ -96,6 +96,8 @@ responses on account changes. Series cards and details share series-playback.js;
 explicit episode selection must continue to play the selected episode.
 
 ### Audiobook data saver and read-along caching (October 2026)
+Data saver is a per-device switch, on by default only for phones (and Save-Data browsers; `dataSaverDefault` in
+v2/frontend/src/lib/audio-data-saver.js) until the listener chooses.
 `lib/audio-lite.js` makes smaller copies of audiobooks in `data/audio-lite/` on request
 (`POST /api/audio/lite/:id`), one ffmpeg at a time: nice 10 while a listener waits, 19 when
 prepared ahead (from `/api/progress`, only for formats someone used in the last 60 days).

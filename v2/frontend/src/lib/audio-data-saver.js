@@ -10,9 +10,21 @@ export const DATA_SAVER_MAX_BACKOFF_MS = 120000;
 export const DATA_SAVER_RETRY_FAILED_MS = 10 * 60 * 1000;   // the server retries a failed copy after 10 minutes
 const KEY = 'tvclone.audio.dataSaver', FAILED_KEY = 'tvclone.audio.dataSaver.failed';
 
+// Until someone chooses on this device, data saver is on for phones (the ones
+// used on mobile data) and for browsers whose user asked to save data, and off
+// for desktops, TVs and tablets, which are usually on home internet. Client
+// hints answer directly where they exist (Chromium); otherwise the user agent's
+// "Mobile" token marks a phone (Android tablets and iPads omit it).
+export function dataSaverDefault(nav = globalThis.navigator) {
+  if (nav?.connection?.saveData === true) return true;
+  if (typeof nav?.userAgentData?.mobile === 'boolean') return nav.userAgentData.mobile;
+  return /\bMobile\b|iPhone|iPod/.test(nav?.userAgent || '');
+}
 // Storage throws in private windows and when site data is blocked.
-export function rememberedDataSaver(storage = globalThis.localStorage) {
-  try { return storage?.getItem(KEY) === 'on'; } catch { return false; }
+export function rememberedDataSaver(storage = globalThis.localStorage, nav = globalThis.navigator) {
+  let value = null;
+  try { value = storage?.getItem(KEY); } catch { /* Storage may be disabled. */ }
+  return value === 'on' || value === 'off' ? value === 'on' : dataSaverDefault(nav);
 }
 export function rememberDataSaver(value, storage = globalThis.localStorage) {
   const on = !!value;
