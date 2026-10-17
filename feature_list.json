@@ -479,13 +479,13 @@
       "id": "audio-013",
       "category": "audiobooks",
       "description": "Data saver: a smaller copy of an audiobook (Opus in WebM, or CBR MP3) for mobile data, prepared ahead and switched to without losing the place",
-      "passes": false
+      "passes": true
     },
     {
       "id": "audio-014",
       "category": "audiobooks",
       "description": "Reopening read-along revalidates the document (ETag/304) instead of downloading it again, and the first download is brotli-compressed",
-      "passes": false
+      "passes": true
     }
   ]
 }
