@@ -258,3 +258,21 @@ for (const viewport of [{ width: 1280, height: 800 }, { width: 390, height: 844 
     await page.screenshot({ path: test.info().outputPath(`player-${viewport.width}.png`) });
   });
 }
+
+test.describe('on a touch screen', () => {
+  test.use({ hasTouch: true, viewport: { width: 844, height: 390 } });
+  test('one tap pauses, and a double tap on the right or left half seeks ten seconds', async ({ page }) => {
+    await openFilm(page);
+    await page.touchscreen.tap(420, 150);
+    await expect.poll(async () => (await videoState(page)).paused).toBe(true);
+    await page.touchscreen.tap(420, 150);
+    await expect.poll(async () => (await videoState(page)).paused).toBe(false);
+    const before = await videoTime(page);
+    await page.touchscreen.tap(700, 150); await page.touchscreen.tap(700, 150);
+    await expect.poll(() => videoTime(page)).toBeGreaterThan(before + 8);
+    expect((await videoState(page)).paused, 'a double tap does not also pause').toBe(false);
+    const ahead = await videoTime(page);
+    await page.touchscreen.tap(100, 150); await page.touchscreen.tap(100, 150);
+    await expect.poll(() => videoTime(page)).toBeLessThan(ahead - 8);
+  });
+});
