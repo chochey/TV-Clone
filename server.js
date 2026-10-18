@@ -4236,6 +4236,7 @@ const { organizerServiceCmd, dockerCmd, dockerInspect, dockerComposeRepair } = s
 // bounces a frozen-but-active organizer; the hourly rescan catches the rest.
 const organizerWatchdog = require('./lib/organizer-watchdog')({
   logPath: ORGANIZER_LOG,
+  statusPath: ORGANIZER_STATUS_FILE,
   isActive: async () => (await organizerServiceCmd('status')).ok,
   restart: () => organizerServiceCmd('restart'),
   onRestart: (ageMs, result) => {
