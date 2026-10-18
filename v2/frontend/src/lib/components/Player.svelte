@@ -14,6 +14,7 @@
   import { hevcMaxLevel, demoteHevc, isFirefoxDesktopLinux } from '../hevc-probe.js';
   import { createStallWatchdog, RESUME_GRACE_MS } from '../stall-watchdog.js';
   import { createQualityWatchdog } from '../quality-watchdog.js';
+  import { hlsSettings } from '../hls-settings.js';
   import { playerKeyAction } from '../player-keys.js';
   import { createTapGestures } from '../tap-gestures.js';
   import { createVolumeBoost, savedVolumePercent } from '../volume-boost.js';
@@ -243,18 +244,7 @@
     bufferedEnd = seekOffset;
     hlsRetries = 0;
 
-    // Start at segment zero with a reserve suited to the actual segment length.
-    // Completed short streams bypass the live-playlist minimum in hls.js.
-    hls = new H({
-      maxBufferLength: 30, maxMaxBufferLength: 120, startFragPrefetch: true,
-      startPosition: 0, initialLiveManifestSize: startupFragments,
-      highBufferWatchdogPeriod: 2, nudgeOffset: 0.2, nudgeMaxRetry: 5,
-      // Firefox/Linux MSE has flashed garbage on worker transmux appends.
-      // Main-thread mux + fMP4 from the server avoids that path.
-      enableWorker: !forceCompositorLayer,
-      fragLoadingTimeOut: 30000, fragLoadingMaxRetry: 4, fragLoadingRetryDelay: 1000,
-      autoStartLoad: false,
-    });
+    hls = new H(hlsSettings({ startupFragments, worker: !forceCompositorLayer }));
     hls.loadSource(url);
     hls.attachMedia(video);
     // Fresh measurement window per session — a seek restarts the decoder, and

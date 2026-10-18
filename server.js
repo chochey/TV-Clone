@@ -238,7 +238,7 @@ const storageHealth = require('./lib/storage-health')({
 
 const { findPosterInDir: _findPoster, createDirectoryLookup } = require('./lib/fs-helpers');
 const { preserveFailedEntries, libraryChanged, publicScanState } = require('./lib/library-scan-state');
-const { buildFfmpegArgs } = require('./lib/ffmpeg-args');
+const { buildFfmpegArgs, QUALITY_PRESETS } = require('./lib/ffmpeg-args');
 const { selectAudioTrack, selectAudioTrackIndex, audioTrackFromStream, hasAudioTrackMetadata } = require('./lib/audio-track-selection');
 const { embeddedTracks, BITMAP_CODECS } = require('./lib/subtitle-tracks');
 const findPosterInDir = (dir, baseName) => _findPoster(dir, baseName, POSTER_EXT);
@@ -1297,15 +1297,7 @@ function cleanupSession(id, keepFiles) {
   fs.rm(deadDir, { recursive: true, force: true, maxRetries: 3 }, () => {});
 }
 
-const QUALITY_PRESETS = {
-  // maxH caps the OUTPUT height so browsers (esp. Firefox software-decoding
-  // H.264) aren't force-fed full 4K/1440p. 'high' = null → source resolution
-  // untouched (pick it for genuine 4K playback). min(maxH,ih) never upscales.
-  // capBitrate: Data Saver's ceiling is enforced (CPU encode, never copied) — see lib/ffmpeg-args.js.
-  low:  { vaapiQp: 32, maxrate: '2M', bufsize: '4M', crf: 28, maxH: 720, capBitrate: true },
-  auto: { vaapiQp: 22, maxrate: '4M', bufsize: '8M', crf: 23, maxH: 1080 },
-  high: { vaapiQp: 18, maxrate: '8M', bufsize: '16M', crf: 18, maxH: null },
-};
+// QUALITY_PRESETS (low/auto/high) live in lib/ffmpeg-args.js with the code that uses them.
 
 const VAAPI_DECODE_CODECS = new Set(['h264', 'hevc', 'vp8', 'vp9']);
 

@@ -83,6 +83,11 @@ exposes the low-power H.264 encoder with constant QP, which ignores -maxrate (a 
 out at 28.8 Mbps), and the i965 driver's encoder crashes on this chip. Measured: 2.17 Mbps on that
 source, about 4x real time while the box was busy. The player offers Data Saver on every video,
 including direct-play files, which then stream through HLS. Auto and Full quality are unchanged.
+**Auto is QP 25 (October 2026).** The same constant-QP limit means QP, not -maxrate, sets Auto's
+bitrate: a grainy 10-bit Friends episode (5.9 Mbps file) streamed at 10.5 Mbps at QP 22 and 6.6 Mbps
+at QP 25 (SSIM 0.941 -> 0.938). The presets live in lib/ffmpeg-args.js with their tests.
+**Player buffer:** v2/frontend/src/lib/hls-settings.js holds 2 minutes ahead (up to 10, 150 MB) and
+drops watched video older than 30 s. The server already encodes the whole file ahead on disk.
 
 ### saveJSON is async, saveJSONSync is for startup only
 `saveJSON()` does non-blocking writes (async fs.writeFile + atomic rename).
