@@ -43,6 +43,9 @@ export const api = {
   item: (id) => fetch(`/api/item/${encodeURIComponent(id)}`, opts('GET')).then(json),
   librarySections: () => fetch('/api/library/sections', opts('GET')).then(json),
   libraryCredits: () => fetch('/api/library/credits', opts('GET')).then(json),
+  // Raw file body; the server checks the format and size.
+  subtitleUpload: (id, lang, file) => fetch(`/api/subtitles/${encodeURIComponent(id)}?lang=${encodeURIComponent(lang)}`,
+    { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/octet-stream' }, body: file }).then(json),
   libraryLocations: () => fetch('/api/config', opts('GET')).then(json),
   libraryLocationAdd: (body) => fetch('/api/config/add', opts('POST', body)).then(json),
   libraryLocationRemove: (path) => fetch('/api/config/remove', opts('POST', { path })).then(json),

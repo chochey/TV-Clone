@@ -8,6 +8,7 @@
   import { audioPlaybackIssue } from '../lib/audio-playback.js';
   import { audioPresentation } from '../lib/audio-presentation.js';
   import { mergeAudioDetail, audioDetailArtwork, audioDetailDuration } from '../lib/audio-detail.js';
+  import SubtitleUpload from '../lib/components/SubtitleUpload.svelte';
 
   let { id, onplay } = $props();
 
@@ -105,6 +106,7 @@
 
   // ── Delete ─────────────────────────────────────────────────────────
   let showDeleteConfirm = $state(false);
+  let showSubtitleUpload = $state(false);
   let deleting = $state(false);
   let deleteError = $state('');
 
@@ -203,6 +205,9 @@
                 {m.watched ? (isAudio ? '✓ Listened' : '✓ Watched') : (isAudio ? 'Mark Listened' : 'Mark Watched')}
               </button>
             {/if}
+            {#if $session?.role === 'admin' && !isAudio}
+              <button class="ghost" onclick={() => { showSubtitleUpload = true; }}>Add subtitles</button>
+            {/if}
             {#if $session?.role === 'admin'}
               <button class="ghost danger" onclick={() => { showDeleteConfirm = true; }}>
                 <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
@@ -261,6 +266,11 @@
       {/if}
     </div>
   </div>
+
+  {#if showSubtitleUpload}
+    <SubtitleUpload {title} items={isShow ? episodes : [m]} initialId={isShow ? (nextUp?.id || episodes[0]?.id) : m.id}
+                    onclose={() => { showSubtitleUpload = false; }} />
+  {/if}
 
   {#if showDeleteConfirm}
     <div class="modal-backdrop" onclick={() => { if (!deleting) showDeleteConfirm = false; }}

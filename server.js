@@ -794,6 +794,18 @@ require('./lib/routes/media-delete')(app, {
   saveMediaInfo, saveLibraryCache, bumpLibraryVersion: () => { libraryVersion++; }, notifyClients: event => notifyClients(event),
 });
 
+// ── Subtitle upload (admin): saved as a sidecar beside the video (lib/routes/subtitle-upload.js) ──
+require('./lib/routes/subtitle-upload')(app, {
+  requireAdminSession, ensureLibrary, scanLibrary, fileFor: id => fileIndex[id],
+  // Raw body for this route only; the handler enforces the 2 MB limit with a clear message.
+  textBody: express.raw({ type: () => true, limit: '3mb' }),
+  // A scan already running may have read the folder before the file existed.
+  refreshLibrary: reason => (async () => {
+    if (rescanPromise) { try { await rescanPromise; } catch {} }
+    await rescanLibraryAsync(reason);
+  })().catch(error => console.warn(`[Subtitles] Library refresh failed: ${error.message}`)),
+});
+
 // ── Metadata overrides, OMDb details and posters (lib/routes/metadata.js) ──
 require('./lib/routes/metadata')(app, {
   requireAuth, requireAdminSession, scanLibrary, isAudioFile, parseYearFromName, stripYearFromName, omdb, fetchOmdbData, saveOmdbCache, metadataOverrides,
