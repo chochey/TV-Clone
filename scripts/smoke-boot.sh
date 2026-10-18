@@ -27,6 +27,10 @@ for _ in $(seq 1 60); do
       code="$(curl -s -o /dev/null -w '%{http_code}' -X "${route%% *}" "http://127.0.0.1:$PORT${route#* }")"
       case "$code" in 401|403) ;; *) fail "$route answered $code instead of refusing an anonymous request";; esac
     done
+    # Sign-in answers: nobody is signed in, and a wrong password is refused.
+    curl -s "http://127.0.0.1:$PORT/api/me" | grep -q '"loggedIn":false' || fail "/api/me did not report a signed-out visitor"
+    code="$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' -d '{"username":"smoke-nobody","password":"x"}' "http://127.0.0.1:$PORT/api/login")"
+    [ "$code" = 403 ] || fail "a login for an unknown user answered $code instead of 403"
     echo "smoke boot ok"; exit 0
   fi
   sleep 0.5
