@@ -26,6 +26,12 @@ git -C "$APP" checkout -q --detach "$NEW"
 if changed package.json package-lock.json; then (cd "$APP" && npm ci --omit=dev --no-audit --no-fund); fi
 if changed v2/frontend/package.json v2/frontend/package-lock.json; then (cd "$APP/v2/frontend" && npm ci --no-audit --no-fund); fi
 if changed v2/frontend; then (cd "$APP/v2/frontend" && npm run -s build); fi
+# Boot the new code on a spare port before touching the live server.
+if ! "$APP/scripts/smoke-boot.sh" "$APP"; then
+  git -C "$APP" checkout -q --detach "$OLD"
+  if changed v2/frontend; then (cd "$APP/v2/frontend" && npm run -s build); fi
+  echo "Not deployed: the new version failed to start. Still live: ${OLD:0:7}" >&2; exit 1
+fi
 echo "$OLD" > "$STATE/previous-release"
 
 restart=()

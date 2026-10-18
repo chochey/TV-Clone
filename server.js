@@ -948,49 +948,10 @@ function getRequestProfile(req) {
 }
 
 // Listening preferences and bookmarks belong to the signed-in profile.
-const audioProfile = require('./lib/audio-profile');
-function audioProfileRoute(mutator) {
-  return async (req, res) => {
-    const profileId = getRequestProfile(req);
-    if (!profileId) return res.status(403).json({error:'Cannot access other profiles'});
-    if (req.params.id && !scanLibrary().some(item => item.id === req.params.id && item.mediaKind === 'audio')) {
-      return res.status(404).json({error:'Audiobook not found'});
-    }
-    try {
-      const before = loadProfileData(profileId);
-      const next = mutator(before,req);
-      if (next !== before) await saveProfileDataStrict(profileId,next);
-      res.set('Cache-Control','private, no-store');
-      res.json(req.params.id ? {bookmarks:audioProfile.bookmarks(next,req.params.id)} : audioProfile.preferences(next));
-    } catch(error) {
-      const invalid = /speed|bookmark|200/.test(error.message);
-      res.status(invalid ? 400 : 503).json({error:invalid ? error.message : 'Could not save listening settings. Please try again.'});
-    }
-  };
-}
-app.get('/api/audio/preferences',requireAuth,audioProfileRoute(data=>data));
-app.put('/api/audio/preferences',requireAuth,audioProfileRoute((data,req)=>audioProfile.updatePreferences(data,req.body)));
-app.get('/api/audio/bookmarks/:id',requireAuth,ensureLibrary,audioProfileRoute(data=>data));
-app.post('/api/audio/bookmarks/:id',requireAuth,ensureLibrary,audioProfileRoute((data,req)=>audioProfile.addBookmark(data,req.params.id,req.body)));
-app.delete('/api/audio/bookmarks/:id/:bookmarkId',requireAuth,ensureLibrary,audioProfileRoute((data,req)=>audioProfile.removeBookmark(data,req.params.id,req.params.bookmarkId)));
-
-// Prepared book text is loaded only when a listener opens the reader.
-app.get('/api/audio/read-along/:id', requireAuth, ensureLibrary, async (req, res) => {
-  res.set('Cache-Control', 'private, no-store');
-  if (!getRequestProfile(req)) return res.status(403).json({ error: 'Cannot access other profiles' });
-  const id = req.params.id;
-  const filePath = fileIndex[id];
-  if (!/^[a-f0-9]{16}$/.test(id) || !scanLibrary().some(item => item.id === id && item.mediaKind === 'audio') ||
-      !filePath || !isAudioFile(filePath) || playbackIssueForFile(filePath)) {
-    return res.status(404).json({ error: 'Audiobook not found' });
-  }
-  const document = await audioReadAlong.get(id, filePath), tag = audioReadAlong.etag(document);
-  if (!tag) return res.json(document);
-  // A prepared book is several MB. The browser keeps it and asks whether it is
-  // still current, so reopening the reader on a phone costs a few hundred bytes.
-  res.set({ ETag: tag, 'Cache-Control': 'private, no-cache' });
-  if (req.fresh) return res.status(304).end();
-  await readAlongBodies.send(req, res, tag, document);
+// Audiobook API (lib/routes/audio.js): preferences, bookmarks, read-along text, Data saver copies.
+const { audiobookFile } = require('./lib/routes/audio')(app, {
+  requireAuth, ensureLibrary, getRequestProfile, scanLibrary, fileFor: id => fileIndex[id], isAudioFile, playbackIssueForFile,
+  loadProfileData, saveProfileDataStrict, audioProfile: require('./lib/audio-profile'), audioReadAlong, readAlongBodies, audioLite,
 });
 
 app.put('/api/subtitle-offset/:id', requireAuth, (req, res) => {
@@ -1919,34 +1880,6 @@ app.get('/api/browse', requireAdmin, (req, res) => {
 // ══════════════════════════════════════════════════════════════════════
 // ── Streaming & File serving ─────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════
-
-// Data saver: a smaller copy of an audiobook for listening on mobile data
-// (lib/audio-lite.js). The player asks for one, follows its preparation, and
-// switches to it once it is ready; the original keeps playing until then.
-function audiobookFile(id) {
-  const filePath = fileIndex[id];
-  return /^[a-f0-9]{16}$/.test(id) && scanLibrary().some(item => item.id === id && item.mediaKind === 'audio') &&
-    filePath && isAudioFile(filePath) && !playbackIssueForFile(filePath) ? filePath : null;
-}
-async function audioLiteRoute(req, res, action) {
-  res.set('Cache-Control', 'private, no-store');
-  if (!getRequestProfile(req)) return res.status(403).json({ error: 'Cannot access other profiles' });
-  const id = req.params.id, filePath = audiobookFile(id);
-  if (!filePath) return res.status(404).json({ error: 'Audiobook not found' });
-  try {
-    const value = await action(id, filePath);
-    res.json(value.state === 'ready'
-      ? { variant: value.variant, state: 'ready', bytes: value.bytes, url: `/stream/${id}?variant=${value.variant}&v=${value.version}` }
-      : value);
-  } catch (error) {
-    if (error.code === 'EINVAL') return res.status(400).json({ error: 'Unknown data saver format' });
-    res.status(404).json({ error: 'Audiobook not found' });
-  }
-}
-app.get('/api/audio/lite/:id', requireAuth, ensureLibrary, (req, res) =>
-  audioLiteRoute(req, res, (id, filePath) => audioLite.status(id, filePath, String(req.query.variant || ''))));
-app.post('/api/audio/lite/:id', requireAuth, ensureLibrary, (req, res) =>
-  audioLiteRoute(req, res, (id, filePath) => audioLite.prepare(id, filePath, String(req.body?.variant || ''))));
 
 const { streamMediaFile } = require('./lib/direct-stream');
 app.get('/stream/:id', requireAuth, ensureLibrary, async (req, res) => {
