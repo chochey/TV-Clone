@@ -2100,148 +2100,16 @@ app.post('/api/sprites/resume', requireAdminSession, (req, res) => {
   res.json({ ok: true, enabled: true });
 });
 
-// ── Corrupted file registry API ─────────────────────────────────────────
-// GET /api/corrupted — return all corrupted file entries as array
-app.get('/api/corrupted', requireAdminSession, (_req, res) => {
-  const entries = Object.entries(corruptedFiles).map(([id, info]) => ({ id, ...info }));
-  res.json(entries);
-});
-
-// POST /api/corrupted/:id/retry — clear marker/artifacts and queue sprite retry
-app.post('/api/corrupted/:id/retry', requireAdminSession, ensureLibrary, (req, res) => {
-  const { id } = req.params;
-  const entry = corruptedFiles[id];
-  if (!entry) return res.status(404).json({ error: 'Not found' });
-  const filePath = fileIndex[id] || entry.filePath;
-  if (!filePath || !fs.existsSync(filePath)) return res.status(404).json({ error: 'Media file not found' });
-  delete corruptedFiles[id];
-  persistCorrupted();
-  const removed = clearSpriteArtifacts(id, filePath);
-  const started = requestSpriteQueue();
-  console.log(`[CORRUPT] Retrying sprite generation for ${entry.title || id} (${removed} stale file(s) removed)`);
-  res.json({ ok: true, started, requeueRequested: spriteRequeueRequested, removed });
-});
-
-// POST /api/corrupted/retry-all — retry every corrupted sprite entry
-app.post('/api/corrupted/retry-all', requireAdminSession, ensureLibrary, (_req, res) => {
-  const entries = Object.entries(corruptedFiles);
-  let removedEntries = 0;
-  let removedArtifacts = 0;
-  for (const [id, entry] of entries) {
-    const filePath = fileIndex[id] || entry.filePath;
-    if (!filePath || !fs.existsSync(filePath)) continue;
-    delete corruptedFiles[id];
-    removedEntries++;
-    removedArtifacts += clearSpriteArtifacts(id, filePath);
-  }
-  persistCorrupted();
-  const started = removedEntries > 0 ? requestSpriteQueue() : false;
-  console.log(`[CORRUPT] Retrying ${removedEntries} corrupted sprite entr${removedEntries === 1 ? 'y' : 'ies'} (${removedArtifacts} stale file(s) removed)`);
-  res.json({ ok: true, retried: removedEntries, started, requeueRequested: spriteRequeueRequested, removed: removedArtifacts });
-});
-
-// DELETE /api/corrupted/:id — remove a file from the corrupted registry
-app.delete('/api/corrupted/:id', requireAdminSession, (req, res) => {
-  const { id } = req.params;
-  if (!corruptedFiles[id]) return res.status(404).json({ error: 'Not found' });
-  delete corruptedFiles[id];
-  persistCorrupted();
-  console.log(`[CORRUPT] Removed entry ${id} from registry`);
-  res.json({ ok: true });
-});
-
-// GET /api/now-watching — who is actively watching (progress ping within last 60s)
-app.get('/api/now-watching', requirePermission('canLogs'), (_req, res) => {
-  const cutoff = Date.now() - 60000;
-  const active = Object.values(nowWatching).filter(w => w.updatedAt >= cutoff).map(w => {
-    // The live session is the source of truth: it reflects the path actually
-    // taken, including a passthrough that fell back to transcoding mid-play,
-    // which the item's static streamMode would not show. Direct play never
-    // creates a session, so fall back to the computed mode for those.
-    const sess = Object.values(transcodeSessions).find(s => s.mediaId === w.id && s.profileName === w.profileName);
-    const fp = fileIndex[w.id];
-    const delivery = sess?.delivery
-      || (fp && getStreamMode(fp) === 'direct' ? 'direct' : null);
-    return { ...w, delivery };
-  });
-  res.json(active);
-});
-
-// GET /api/admin/logs — combined watch history for all profiles
-app.get('/api/admin/logs', requirePermission('canLogs'), (_req, res) => {
-  const entries = [];
-  for (const profile of config.profiles) {
-    const data = loadProfileData(profile.id);
-    for (const h of (data.history || [])) {
-      const prog = data.progress[h.id];
-      entries.push({
-        profileId: profile.id,
-        profileName: profile.name || profile.id,
-        id: h.id,
-        title: h.title || h.id,
-        timestamp: h.timestamp,
-        currentTime: prog?.currentTime || 0,
-        duration: prog?.duration || 0,
-        percent: prog?.percent || 0,
-        watched: !!data.watched[h.id],
-      });
-    }
-  }
-  entries.sort((a, b) => b.timestamp - a.timestamp);
-  res.json(entries);
-});
-
-// GET /api/admin/login-logs — recent login attempts
-app.get('/api/admin/login-logs', requirePermission('canLogs'), (_req, res) => {
-  res.json(loginLog);
-});
-
-// GET /api/admin/scan-logs — library scan history
-app.get('/api/admin/scan-logs', requirePermission('canLogs'), (_req, res) => {
-  res.json(scanLog);
-});
-
-// GET /api/admin/stream-logs — HLS session starts
-app.get('/api/admin/stream-logs', requirePermission('canLogs'), (_req, res) => {
-  res.json(streamLog);
-});
-
-// GET /api/admin/error-logs — server/ffmpeg errors
-app.get('/api/admin/error-logs', requirePermission('canLogs'), (_req, res) => {
-  res.json(errorLog);
-});
-
-const systemStats = require('./lib/system-stats')();
-app.get('/api/system/stats', requirePermission('canDashboard'), async (_req, res) => {
-  try { res.json({ ...(await systemStats.snapshot({ activeTranscodes: Object.keys(transcodeSessions).length })),
-    libraryScan: publicScanState(libraryScanState) }); }
-  catch { res.status(503).json({ error: 'System status is temporarily unavailable' }); }
-});
-
-// Pool + per-drive fill, SMART health, fill-rate projection.
-app.get('/api/storage', requirePermission('canDashboard'), async (_req, res) => {
-  try {
-    res.json({ ok: true, ...(await storageHealth.snapshot()), libraryScan: libraryScanState });
-  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
-});
-
-// Duplicate copies of the same movie/episode — sorted by reclaimable bytes.
-const { findDuplicates } = require('./lib/duplicates');
-app.get('/api/duplicates', requireAdminSession, (_req, res) => {
-  const lib = scanLibrary();
-  const enriched = lib.map((i) => {
-    // Directory relative to the library root — shown to the admin and used
-    // to distrust filenames whose folder says a different season.
-    const fp = fileIndex[i.id];
-    const relDir = fp && i.folderPath ? path.dirname(path.relative(i.folderPath, fp)) : null;
-    const base = relDir && relDir !== '.' ? { ...i, relDir } : i;
-    if (base.type !== 'movie') return base;
-    const meta = getMetadataForItem(base);
-    return meta?.imdbID ? { ...base, imdbID: meta.imdbID, omdbTitle: meta.omdbTitle } : base;
-  });
-  const groups = findDuplicates(enriched);
-  const totalWasted = groups.reduce((s, g) => s + g.wasted, 0);
-  res.json({ ok: true, groups: groups.slice(0, 200), groupCount: groups.length, totalWasted });
+// ── Admin status: corrupted registry, now watching, logs, storage, duplicates (lib/routes/admin-status.js) ──
+require('./lib/routes/admin-status')(app, {
+  requireAdminSession, ensureLibrary, requirePermission,
+  corruptedFiles, persistCorrupted, fileIndex: () => fileIndex, clearSpriteArtifacts, requestSpriteQueue,
+  spriteRequeueRequested: () => spriteRequeueRequested,
+  nowWatching, transcodeSessions: () => transcodeSessions,
+  getStreamMode, config, loadProfileData,
+  logs: { login: loginLog, scan: scanLog, stream: streamLog, error: errorLog },
+  systemStats: require('./lib/system-stats')(), storageHealth,
+  libraryScanState: () => libraryScanState, publicScanState, scanLibrary, getMetadataForItem,
 });
 
 // Library conversion — phase 1, read-only (MEDIA_CONVERSION_PLAN.md). The
