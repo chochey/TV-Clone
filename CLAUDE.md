@@ -75,6 +75,14 @@ which is where ~all 4K lands since 4K is near-always 10-bit HEVC/AV1); the 8-bit
 fast GPU path stays uncapped (zero regression, and >1080p 8-bit there is rare).
 Do not "optimize" this to scale_vaapi or bump back to High profile.
 
+**Data Saver is a real bitrate cap (October 2026).** The `low` preset has `capBitrate`: it always
+re-encodes (never copies or passes through) and always on the CPU (libx264 ultrafast, crf 28,
+maxrate 2M, bufsize 4M, 720p, 2 encoder threads). This GPU cannot cap bitrate: the iHD driver only
+exposes the low-power H.264 encoder with constant QP, which ignores -maxrate (a grainy source came
+out at 28.8 Mbps), and the i965 driver's encoder crashes on this chip. Measured: 2.17 Mbps on that
+source, about 4x real time while the box was busy. The player offers Data Saver on every video,
+including direct-play files, which then stream through HLS. Auto and Full quality are unchanged.
+
 ### saveJSON is async, saveJSONSync is for startup only
 `saveJSON()` does non-blocking writes (async fs.writeFile + atomic rename).
 `saveJSONSync()` exists only for startup/migration code that must complete before

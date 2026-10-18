@@ -24,7 +24,10 @@
   // Remounted per item via {#key} in App — `item` is static for this mount.
   let { item, next = null, prev = null, onclose, onnext, onprev } = $props();
 
-  const isDirect = $derived((full?.streamMode || item.streamMode) === 'direct' && !full?.subtitles?.[subIdx]?.bitmap);
+  // Data Saver promises a bitrate ceiling, so it streams a capped encode even
+  // for files the browser could play as they are.
+  const isDirect = $derived((full?.streamMode || item.streamMode) === 'direct' && quality !== 'low'
+    && !full?.subtitles?.[subIdx]?.bitmap);
   // HEVC can be copied straight through to a browser that can decode it,
   // instead of being re-encoded to H.264 for the whole runtime.
   const isHevc = (item.codec || '').toLowerCase() === 'hevc';
@@ -199,7 +202,7 @@
     // costs nothing after the first HEVC play. The server still applies its own
     // level ceiling, so a claim here is a request, not a guarantee.
     passthroughActive = false;
-    if (isHevc && !hevcBlocked && !selectedSub?.bitmap) {
+    if (isHevc && !hevcBlocked && !selectedSub?.bitmap && quality !== 'low') {
       const lvl = await hevcMaxLevel();
       if (seq !== loadSeq) return;  // a seek landed while probing
       if (lvl > 0) { params.set('hevcMaxLevel', String(lvl)); passthroughActive = true; }
@@ -539,17 +542,8 @@
     const selected = full?.subtitles?.[i];
     if (!initial && (wasBitmap || selected?.bitmap)) {
       error = '';
-      if ((full?.streamMode || item.streamMode) === 'direct' && !selected?.bitmap) {
-        ++loadSeq;
-        cancelStartup();
-        clearTimeout(retryTimer);
-        startupPending = false;
-        destroyHls();
-        if (playbackId) fetch(`/api/hls/${playbackId}/stop`, { method: 'POST', credentials: 'same-origin' }).catch(() => {});
-        playbackId = null;
-        seekOffset = 0;
-        loadDirect(cur);
-      } else loadHlsSession(cur);
+      if (isDirect) switchToDirect(cur);
+      else loadHlsSession(cur);
     }
     if (!selected || selected.bitmap) return;
     try {
@@ -562,10 +556,25 @@
 
   // ── Menus / controls chrome ─────────────────────────────────────────
   function setQuality(q) {
+    const wasDirect = isDirect;
     quality = q;
     localStorage.setItem('v2Quality', q);
     openMenu = '';
+    error = '';
     if (!isDirect) loadHlsSession(cur);
+    else if (!wasDirect) switchToDirect(cur);
+  }
+  // Leave an HLS session for direct play of the file (subtitle or quality change).
+  function switchToDirect(t) {
+    ++loadSeq;
+    cancelStartup();
+    clearTimeout(retryTimer);
+    startupPending = false;
+    destroyHls();
+    if (playbackId) fetch(`/api/hls/${playbackId}/stop`, { method: 'POST', credentials: 'same-origin' }).catch(() => {});
+    playbackId = null;
+    seekOffset = 0;
+    loadDirect(t);
   }
   function setAudio(idx) {
     audioTrack = idx;

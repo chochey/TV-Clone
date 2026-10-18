@@ -60,6 +60,8 @@ async function setup(page, { items = [film, episode(1), episode(2)], detail = {}
   await page.route('**/backdrop/**', route => route.fulfill({ status: 404 }));
   await page.route('**/poster/**', route => route.fulfill({ status: 404 }));
   await page.route('**/subtitle/**', route => route.fulfill({ body: vtt, contentType: 'text/vtt' }));
+  calls.hls = [];
+  await page.route('**/hls/**', route => { calls.hls.push(route.request().url()); return route.fulfill({ status: 404 }); });
   await page.route('**/stream/**', route => {
     calls.streams++;
     const range = /bytes=(\d+)-(\d*)/.exec(route.request().headers().range || '');
@@ -275,4 +277,23 @@ test.describe('on a touch screen', () => {
     await page.touchscreen.tap(100, 150); await page.touchscreen.tap(100, 150);
     await expect.poll(() => videoTime(page)).toBeLessThan(ahead - 8);
   });
+});
+
+test('Data Saver caps a film that would play directly, and Auto goes back to direct play', async ({ page }) => {
+  const calls = await openFilm(page);
+  const streamsBefore = calls.streams;
+  await player(page).getByRole('button', { name: 'Quality' }).click();
+  await player(page).locator('.menu').getByRole('button', { name: /Data Saver/ }).click();
+  await expect.poll(() => calls.hls.length).toBeGreaterThan(0);
+  const url = new URL(calls.hls[0]);
+  expect(url.pathname).toMatch(/^\/hls\/film\/[0-9a-f]{32}\/master\.m3u8$/);
+  expect(url.searchParams.get('quality')).toBe('low');
+  expect(url.searchParams.has('hevcMaxLevel')).toBe(false);
+  expect(await page.evaluate(() => localStorage.getItem('v2Quality'))).toBe('low');
+  await player(page).getByRole('button', { name: 'Quality' }).click();
+  await expect(player(page).locator('.menu button.active')).toHaveText(/Data Saver/);
+  await player(page).locator('.menu').getByRole('button', { name: /Auto/ }).click();
+  await expect.poll(() => calls.streams).toBeGreaterThan(streamsBefore);
+  await expect(player(page).locator('.error')).toHaveCount(0);
+  await expect.poll(() => videoTime(page), { timeout: 10000 }).toBeGreaterThan(0.5);
 });
