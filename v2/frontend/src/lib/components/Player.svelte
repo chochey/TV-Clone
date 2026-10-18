@@ -13,6 +13,7 @@
   import { isSeriesItem } from '../series-playback.js';
   import { hevcMaxLevel, demoteHevc, isFirefoxDesktopLinux } from '../hevc-probe.js';
   import { createStallWatchdog, RESUME_GRACE_MS } from '../stall-watchdog.js';
+  import { createQualityWatchdog } from '../quality-watchdog.js';
 
   // Remounted per item via {#key} in App — `item` is static for this mount.
   let { item, next = null, prev = null, onclose, onnext, onprev } = $props();
@@ -356,32 +357,19 @@
   // intervention — a decoder warming up, or a burst of segment fetches
   // competing with decode. Demoting on that would have permanently disabled a
   // tier that was about to work fine. Only sustained trouble counts.
-  const QUALITY_WINDOW_MS = 6000;
-  const BAD_WINDOWS_BEFORE_DEMOTING = 3;   // ~18s of continuous breakage
-  const MIN_PRESENTED_FPS = 14;   // well under any real source (23.976 lowest)
-  const MAX_DROP_RATIO = 0.15;
-  // Give a new session time to settle before judging it at all.
-  const QUALITY_GRACE_MS = 8000;
-  let presentedFrames = 0;
-  let qualityWindowAt = 0;
-  let qualityBase = null;
-  let badWindows = 0;
+  // Dropped-frame judgement for passthrough (lib/quality-watchdog.js).
+  const qualityWatchdog = createQualityWatchdog();
   let rvfcHandle = null;
 
   function countPresentedFrame() {
-    presentedFrames++;
+    qualityWatchdog.frame();
     if (video?.requestVideoFrameCallback) {
       rvfcHandle = video.requestVideoFrameCallback(countPresentedFrame);
     }
   }
 
   function startFrameCounter() {
-    presentedFrames = 0;
-    // The window opens after the grace period, so start-up and post-seek
-    // catch-up are never sampled.
-    qualityWindowAt = Date.now() + QUALITY_GRACE_MS;
-    qualityBase = null;
-    badWindows = 0;
+    qualityWatchdog.start();
     if (video?.requestVideoFrameCallback && rvfcHandle === null) {
       rvfcHandle = video.requestVideoFrameCallback(countPresentedFrame);
     }
@@ -395,58 +383,20 @@
   }
 
   function qualityCheck() {
-    // Only passthrough is worth retreating from — a transcode already sends
-    // the easiest stream we can produce, so dropping frames there means the
-    // machine is simply too slow and switching paths would not help.
+    if (!video) return;
     // `paused` is our reactive mirror; video.paused is the truth. Measured on
     // Firefox, a paused element still fires requestVideoFrameCallback ~6 times
-    // a second while decoding nothing — indistinguishable from a decoder in
-    // trouble — so both are checked rather than trusting the mirror.
-    if (!passthroughActive || !video || paused || video.paused || error || scrubbing) return;
-    if (video.playbackRate !== 1) return;          // speed changes skew the count
-    // Buffering starves the screen of frames for reasons that have nothing to
-    // do with decode cost; that is the stall watchdog's job, not this one.
-    if (video.readyState < 3) { qualityWindowAt = Date.now(); badWindows = 0; return; }
-    // Browsers throttle rendering — and with it requestVideoFrameCallback — for
-    // hidden tabs, so a backgrounded player reports a frame rate that looks
-    // exactly like a failing decoder. Judging it then would demote a browser
-    // that is playing perfectly well the moment you look at it again.
-    if (document.visibilityState !== 'visible') { qualityWindowAt = Date.now(); badWindows = 0; return; }
-    const now = Date.now();
-    if (now - qualityWindowAt < QUALITY_WINDOW_MS) return;
-
-    const seconds = (now - qualityWindowAt) / 1000;
-    const fps = presentedFrames / seconds;
-    presentedFrames = 0;
-    qualityWindowAt = now;
-
-    // Corroborate with the decoder's own count where it is populated, so a
-    // browser that simply lacks requestVideoFrameCallback cannot be demoted
-    // on a count that was never incremented.
-    let dropRatio = 0;
+    // a second while decoding nothing, so both are checked.
     const q = video.getVideoPlaybackQuality?.();
-    if (q && q.totalVideoFrames > 0) {
-      if (qualityBase) {
-        const dd = q.droppedVideoFrames - qualityBase.dropped;
-        const dt = q.totalVideoFrames - qualityBase.total;
-        if (dt > 30) dropRatio = dd / dt;
-      }
-      qualityBase = { dropped: q.droppedVideoFrames, total: q.totalVideoFrames };
-    }
-
-    const starved = video.requestVideoFrameCallback && fps > 0 && fps < MIN_PRESENTED_FPS;
-    const dropping = dropRatio > MAX_DROP_RATIO;
-    if (!starved && !dropping) { badWindows = 0; return; }   // recovered on its own
-
-    if (++badWindows < BAD_WINDOWS_BEFORE_DEMOTING) return;
-
-    // Sustained across every window since it started going wrong — this is not
-    // a decoder settling in. Persist it, because the next episode would stutter
-    // identically.
-    fallbackFromPassthrough(
-      starved ? `only ${fps.toFixed(1)} fps reaching the screen` : `${Math.round(dropRatio * 100)}% of frames dropped`,
-      true,
-    );
+    const { action, reason } = qualityWatchdog.check({
+      active: passthroughActive && !paused && !video.paused && !error && !scrubbing,
+      playbackRate: video.playbackRate, readyState: video.readyState, hidden: document.visibilityState !== 'visible',
+      quality: q ? { dropped: q.droppedVideoFrames, total: q.totalVideoFrames } : null,
+      countsFrames: !!video.requestVideoFrameCallback,
+    });
+    // Sustained across every window since it started going wrong; persist it,
+    // because the next episode would stutter identically.
+    if (action === 'demote') fallbackFromPassthrough(reason, true);
   }
 
   // ── Stall watchdog ─────────────────────────────────────────────────
