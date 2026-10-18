@@ -15,6 +15,7 @@
   import { createStallWatchdog, RESUME_GRACE_MS } from '../stall-watchdog.js';
   import { createQualityWatchdog } from '../quality-watchdog.js';
   import { hlsSettings } from '../hls-settings.js';
+  import { createPlaybackReport } from '../playback-report.js';
   import { playerKeyAction } from '../player-keys.js';
   import { createTapGestures } from '../tap-gestures.js';
   import { createVolumeBoost, savedVolumePercent } from '../volume-boost.js';
@@ -138,6 +139,15 @@
   let recoverFromT = -1;   // position of the last auto-restart
   let root = $state(null);
   let progressTimer = null;
+  // What this viewing was like, for the dashboard; sent once when the player closes.
+  const report = createPlaybackReport();
+  let reportSent = false;
+  function sendReport() {
+    if (reportSent || !report.worthSending()) return;
+    reportSent = true;
+    api.playbackReport(report.finish({ itemId: item.id, direct: isDirect, playbackId, quality }));
+  }
+  $effect(() => { if (error) report.failed(); });
   let stallTimer = null;
   let idleTimer = null;
 
@@ -441,6 +451,7 @@
   }
 
   function seekTo(t) {
+    report.seeking();
     if (!total) return;
     t = Math.max(0, Math.min(t, Math.max(0, total - 1)));
     pauseBookmark.seek(t);
@@ -709,6 +720,7 @@
     // without ever firing it, and visibilitychange is the one that survives an
     // app switch or screen lock. flushProgressOnTeardown de-dupes.
     window.addEventListener('pagehide', flushProgressOnTeardown);
+    window.addEventListener('pagehide', sendReport);
     document.addEventListener('visibilitychange', onVisibilityChange);
     poke();
   });
@@ -732,6 +744,8 @@
     // closure over this item and could beacon a stale position later, clobbering
     // whatever the viewer moved on to.
     window.removeEventListener('pagehide', flushProgressOnTeardown);
+    window.removeEventListener('pagehide', sendReport);
+    sendReport();   // before the stop beacon, while the server still knows this stream
     document.removeEventListener('visibilitychange', onVisibilityChange);
     saveProgress();
     loadSeq++; // invalidate in-flight session loads
@@ -788,6 +802,7 @@
       try { if (!startupPending && hls) startHlsFromPosition(hls, video.currentTime); } catch {}
     }}
     onpause={() => {
+      report.paused();
       // load()/detach can deliver a late pause while the next stream starts.
       if (startupPending || !timelineReady) return;
       paused = true;
@@ -798,14 +813,14 @@
       // fragment even with the clock frozen and hardware decode off.
       try { hls?.stopLoad(); } catch {}
     }}
-    onwaiting={() => { buffering = true; }}
+    onwaiting={() => { buffering = true; report.waiting(); }}
     onstalled={() => { buffering = true; }}
-    onplaying={() => { if (!timelineReady) return; paused = false; clearStartupError(); startupPending = false; cancelStartup(); buffering = false; notice = ''; applySpeed(); }}
+    onplaying={() => { if (!timelineReady) return; report.playing(); paused = false; clearStartupError(); startupPending = false; cancelStartup(); buffering = false; notice = ''; applySpeed(); }}
     oncanplay={() => { if (!startupPending) buffering = false; applySpeed(); }}
     ontimeupdate={onTimeUpdate}
     onprogress={onProgress}
     ondurationchange={() => { videoDur = video?.duration || 0; }}
-    onended={handleEnded}
+    onended={() => { report.paused(); handleEnded(); }}
     onerror={onVideoError}
   ></video>
 

@@ -8,7 +8,7 @@ const os = require('os');
 const crypto = require('crypto');
 const http = require('http');
 const https = require('https');
-const { spawn, execFileSync } = require('child_process');
+const { spawn, execFile, execFileSync } = require('child_process');
 
 const app = express();
 // Trust reverse proxy headers (X-Forwarded-For) for accurate req.ip in rate limiting
@@ -794,10 +794,27 @@ require('./lib/routes/media-delete')(app, {
 
 // ── Film collections from Wikidata (lib/collections.js, lib/routes/collections.js) ──
 // Only IMDb IDs leave the server; answers are cached for 30 days.
+const collectionsService = require('./lib/collections')({ dataDir: DATA_DIR, loadJSON, saveJSON });
 const { refreshCollections } = require('./lib/routes/collections')(app, {
   requireAuth, scanLibrary, getMetadataForItem: item => getMetadataForItem(item), libraryVersion: () => libraryVersion,
   metadataRevision: () => `${omdb.cacheVersion || omdb.cacheSize}-${metadataOverrides.revision}`,
-  collections: require('./lib/collections')({ dataDir: DATA_DIR, loadJSON, saveJSON }),
+  collections: collectionsService,
+});
+
+// ── Dashboard: background jobs, streaming history, library growth (lib/routes/dashboard.js) ──
+const playbackHistory = require('./lib/playback-history')({ dataDir: DATA_DIR, loadJSON, saveJSON });
+require('./lib/routes/dashboard')(app, {
+  requireAuth, requirePermission, getSession, profileName: id => config.profiles.find(p => p.id === id)?.name,
+  scanLibrary, playbackHistory, storageHistory: () => storageHealth.history(),
+  jobs: require('./lib/dashboard-jobs')({
+    transcribeDir: process.env.READALONG_TRANSCRIBE_WORK || '/var/lib/tvclone-readalong-transcribe',
+    readAlongDir: path.join(DATA_DIR, 'read-along'), audioLiteDir: path.join(DATA_DIR, 'audio-lite'),
+    isActive: unit => new Promise(resolve => execFile('systemctl', ['is-active', unit], (_err, out) => resolve(String(out).trim() === 'active'))),
+    collections: () => collectionsService.status(),
+    sprites: () => ({ ...sprites.spriteQueue, enabled: sprites.isEnabled() }),
+    dataSaver: () => audioLite.snapshot(),
+    libraryScan: () => libraryRefresh.status(),
+  }),
 });
 
 // ── Subtitle upload (admin): saved as a sidecar beside the video (lib/routes/subtitle-upload.js) ──
@@ -1364,6 +1381,7 @@ function startFfmpeg(id, filePath, sessionDir, seekTime, startSegNum, audioStrea
     startedAt: Date.now(),
     delivery,
   });
+  playbackHistory.noteSession(id, { delivery, quality }); // for the player's end-of-viewing report
 }
 
 // A session ID belongs to one player attempt, not one media file. Restarting

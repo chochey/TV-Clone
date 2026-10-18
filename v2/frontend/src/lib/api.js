@@ -44,6 +44,9 @@ export const api = {
   librarySections: () => fetch('/api/library/sections', opts('GET')).then(json),
   libraryCredits: () => fetch('/api/library/credits', opts('GET')).then(json),
   collections: () => fetch('/api/collections', opts('GET')).then(json),
+  dashboardJobs: () => fetch('/api/dashboard/jobs', opts('GET')).then(json),
+  dashboardStreaming: (days = 30) => fetch(`/api/dashboard/streaming?days=${days}`, opts('GET')).then(json),
+  dashboardLibrary: () => fetch('/api/dashboard/library', opts('GET')).then(json),
   // Raw file body; the server checks the format and size.
   subtitleUpload: (id, lang, file) => fetch(`/api/subtitles/${encodeURIComponent(id)}?lang=${encodeURIComponent(lang)}`,
     { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/octet-stream' }, body: file }).then(json),
@@ -66,6 +69,11 @@ export const api = {
   // browser quit, phone locked). A fetch() in flight is cancelled when the
   // document goes away; sendBeacon is handed to the browser, which delivers it
   // regardless. Same-origin, so the session cookie still rides along.
+  // End-of-viewing report for the dashboard (lib/playback-report.js).
+  playbackReport: (body) => {
+    try { return navigator.sendBeacon('/api/playback/report', new Blob([JSON.stringify(body)], { type: 'application/json' })); }
+    catch { return false; }
+  },
   progressBeacon: (body) => {
     try {
       const blob = new Blob([JSON.stringify(body)], { type: 'application/json' });

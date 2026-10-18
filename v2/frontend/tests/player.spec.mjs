@@ -28,7 +28,7 @@ const episode = n => ({ id: `ep${n}`, title: `Episode ${n}`, showName: 'Test sho
 const vtt = 'WEBVTT\n\n00:00:00.000 --> 00:00:30.000\nHello there\n';
 
 async function setup(page, { items = [film, episode(1), episode(2)], detail = {}, segments = {} } = {}) {
-  const calls = { progress: [], streams: 0 };
+  const calls = { progress: [], streams: 0, reports: [] };
   const clipBytes = await fs.readFile(clip);
   await page.route('**/*', route => route.abort());
   await page.route(`${origin}/**`, async route => {
@@ -42,6 +42,7 @@ async function setup(page, { items = [film, episode(1), episode(2)], detail = {}
     const url = new URL(route.request().url()), pathname = url.pathname;
     if (pathname === '/api/events') return route.fulfill({ status: 204 });
     if (pathname === '/api/progress') { calls.progress.push(route.request().postDataJSON()); return route.fulfill({ json: { ok: true } }); }
+    if (pathname === '/api/playback/report') { calls.reports.push(route.request().postDataJSON()); return route.fulfill({ status: 204 }); }
     let body = {};
     if (pathname === '/api/health') body = { ready: true };
     else if (pathname === '/api/me') body = { loggedIn: true, role: 'admin', profileId: 'test', name: 'Test' };
@@ -296,4 +297,17 @@ test('Data Saver caps a film that would play directly, and Auto goes back to dir
   await expect.poll(() => calls.streams).toBeGreaterThan(streamsBefore);
   await expect(player(page).locator('.error')).toHaveCount(0);
   await expect.poll(() => videoTime(page), { timeout: 10000 }).toBeGreaterThan(0.5);
+});
+
+test('closing the player sends one report of how the viewing went', async ({ page }) => {
+  const calls = await openFilm(page);
+  await expect.poll(() => videoTime(page), { timeout: 10000 }).toBeGreaterThan(6);
+  await page.keyboard.press('Escape');   // the controls have faded by now
+  await expect(player(page)).toHaveCount(0);
+  await expect.poll(() => calls.reports.length).toBe(1);
+  const r = calls.reports[0];
+  expect(r).toMatchObject({ itemId: 'film', direct: true, quality: 'auto', failed: false, rebuffers: 0 });
+  expect(r.startupMs).toBeGreaterThan(0);
+  expect(r.startupMs).toBeLessThan(15000);
+  expect(r.watchedMs).toBeGreaterThan(5000);
 });
