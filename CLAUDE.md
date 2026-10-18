@@ -33,8 +33,9 @@ it rebuilds the frontend if it changed and restarts only what changed.
 `/home/blue/backups/tvclone-2026-10-18` (RESTORE.txt), git tag `backup-2026-10-18`.
 The server serves BOTH the API and the built SPA (`v2/frontend/dist`) with an
 SPA fallback, and binds alias port 4802 for the Cloudflare tunnel (chochey.tv)
-— set `V2_ALIAS_PORT=0` after repointing the tunnel to 4800. Retired (disabled,
-unit files kept): `tvclone-v2.service`, `tvclone-dev.service`. Remote:
+— set `V2_ALIAS_PORT=0` after repointing the tunnel to 4800. The old
+`tvclone-v2`/`tvclone-dev` services were removed 2026-10-18 (unit files kept in
+the backup folder, `retired-units/`). Remote:
 github.com/chochey/TV-Clone.
 Notifications are server-generated (lib/notify-log.js → /api/notifications,
 `notifications-updated` SSE): library adds from doRescan, downloads from the
