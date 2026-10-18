@@ -3210,134 +3210,10 @@ async function downloadsWithStatus(torrents) {
   });
 }
 
-// qBittorrent status
-app.get('/api/qbt/status', requirePermission('canDownload'), requireQbt, async (_req, res) => {
-  try {
-    const ok = await qbtAuth();
-    res.json({ connected: ok });
-  } catch { res.json({ connected: false }); }
-});
-
-// ── Mullvad time remaining ────────────────────────────────────────────
-// Downloads ride the Mullvad tunnel, and Mullvad is prepaid — when the
-// account runs dry the VPN (and every torrent behind it) silently dies.
-// Surface the paid-time expiry on the Downloads page. The account number
-// lives only in the service env (MULLVAD_ACCOUNT); expiry moves slowly,
-// so cache for 6 hours and serve stale data on API hiccups.
-const MULLVAD_ACCOUNT = (process.env.MULLVAD_ACCOUNT || '').replace(/\s+/g, '');
-let mullvadCache = { at: 0, data: null };
-async function fetchMullvadStatus() {
-  if (!MULLVAD_ACCOUNT) return { configured: false };
-  if (Date.now() - mullvadCache.at < 6 * 3600_000 && mullvadCache.data) return mullvadCache.data;
-  try {
-    // App API two-step: account number -> short-lived bearer -> account info.
-    // (The old www/accounts/<number>/ endpoint returns ACCOUNT_NOT_FOUND now.)
-    const tr = await fetch('https://api.mullvad.net/auth/v1/token', {
-      method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ account_number: MULLVAD_ACCOUNT }),
-      signal: AbortSignal.timeout(10_000),
-    });
-    const tok = await tr.json();
-    if (!tr.ok || !tok.access_token) throw new Error(tok.code || `auth HTTP ${tr.status}`);
-    const ar = await fetch('https://api.mullvad.net/accounts/v1/accounts/me', {
-      headers: { Authorization: `Bearer ${tok.access_token}` },
-      signal: AbortSignal.timeout(10_000),
-    });
-    const acct = await ar.json();
-    if (!ar.ok || !acct.expiry) throw new Error(acct.code || `account HTTP ${ar.status}`);
-    const daysLeft = Math.max(0, Math.floor((new Date(acct.expiry) - Date.now()) / 86400_000));
-    mullvadCache = { at: Date.now(), data: { configured: true, expires: acct.expiry, daysLeft, active: daysLeft > 0 } };
-    return mullvadCache.data;
-  } catch (e) {
-    // Serve the last good reading rather than flapping the UI.
-    if (mullvadCache.data) return mullvadCache.data;
-    return { configured: true, error: String(e.message || e) };
-  }
-}
-app.get('/api/vpn/status', requirePermission('canDownload'), async (_req, res) => {
-  res.json(await fetchMullvadStatus());
-});
-
-// Low-time alerts into the notification bell, same state-transition idea as
-// the storage alerts: fire once when paid time crosses 7 then 3 days left,
-// re-arm after a top-up. Without this the only warning is the Downloads
-// page chip — and the VPN dying takes every torrent down silently.
-const VPN_ALERT_FILE = path.join(DATA_DIR, 'vpn_alerts.json');
-let vpnAlertState = loadJSON(VPN_ALERT_FILE, { alertedAt: null });
-async function vpnAlertTick() {
-  const s = await fetchMullvadStatus();
-  if (!s.configured || s.daysLeft == null) return;
-  if (s.daysLeft > 7) {
-    // Topped up — re-arm both thresholds.
-    if (vpnAlertState.alertedAt != null) {
-      vpnAlertState = { alertedAt: null };
-      saveJSON(VPN_ALERT_FILE, vpnAlertState);
-    }
-    return;
-  }
-  const crossed = s.daysLeft <= 3 ? 3 : 7;
-  if (vpnAlertState.alertedAt != null && vpnAlertState.alertedAt <= crossed) return; // already alerted this tier
-  vpnAlertState = { alertedAt: crossed };
-  saveJSON(VPN_ALERT_FILE, vpnAlertState);
-  const when = s.expires ? new Date(s.expires).toLocaleDateString() : 'soon';
-  notifyLog.push({
-    type: 'vpn',
-    title: crossed === 3 ? 'Mullvad about to expire' : 'Mullvad running low',
-    body: `${s.daysLeft} day${s.daysLeft === 1 ? '' : 's'} of VPN time left (${when}) — top up or downloads stop.`,
-    audience: 'download',
-  });
-  notifyClients('notifications-updated');
-}
-
-// Search plugins
-app.get('/api/qbt/search/plugins', requirePermission('canDownload'), requireQbt, async (_req, res) => {
-  try {
-    const r = await qbt('GET', '/api/v2/search/plugins');
-    res.json(qbtJson(r));
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-// Start search
-app.post('/api/qbt/search/start', requirePermission('canDownload'), requireQbt, async (req, res) => {
-  try {
-    const { pattern, category, plugins } = req.body;
-    if (typeof pattern !== 'string' || !pattern.trim() || pattern.length > 300) return res.status(400).json({ error: 'Enter a search of 1–300 characters.' });
-    const body = `pattern=${encodeURIComponent(pattern)}&category=${encodeURIComponent(category || 'all')}&plugins=${encodeURIComponent(plugins || 'all')}`;
-    const r = await qbt('POST', '/api/v2/search/start', body);
-    res.json(qbtJson(r));
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-// Get search results
-app.get('/api/qbt/search/results', requirePermission('canDownload'), requireQbt, async (req, res) => {
-  try {
-    const { id } = req.query;
-    if (!/^\d+$/.test(String(id))) return res.status(400).json({ error: 'Invalid search ID' });
-    const offset = Math.max(0, parseInt(req.query.offset, 10) || 0);
-    const limit = Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 100));
-    const r = await qbt('GET', `/api/v2/search/results?id=${id}&offset=${offset}&limit=${limit}`);
-    res.json(qbtJson(r));
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-// Stop search
-app.post('/api/qbt/search/stop', requirePermission('canDownload'), requireQbt, async (req, res) => {
-  try {
-    if (!/^\d+$/.test(String(req.body.id))) return res.status(400).json({ error: 'Invalid search ID' });
-    await qbt('POST', '/api/v2/search/stop', `id=${encodeURIComponent(req.body.id)}`);
-    res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-// List torrents
-app.get('/api/qbt/torrents', requirePermission('canDownload'), requireQbt, async (_req, res) => {
-  try {
-    const r = await qbt('GET', '/api/v2/torrents/info');
-    const torrents = qbtJson(r);
-    if (!Array.isArray(torrents)) throw new Error('Downloader returned an invalid torrent list.');
-    res.json(await downloadsWithStatus(torrents));
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
+// Downloads API (lib/routes/downloads.js) and Mullvad paid time (lib/mullvad.js).
+const mullvad = require('./lib/mullvad')({ account: process.env.MULLVAD_ACCOUNT, alertFile: path.join(DATA_DIR, 'vpn_alerts.json'),
+  loadJSON, saveJSON, notifyLog, notifyClients });
+require('./lib/routes/downloads')(app, { requirePermission, requireQbt, qbt, qbtAuth, qbtJson, downloadsWithStatus, mullvad });
 
 // ── Server-side download watcher (lib/download-watcher.js) ─────────────
 const downloadWatcher = require('./lib/download-watcher')({
@@ -3351,83 +3227,6 @@ if (QBT_USERNAME && QBT_PASSWORD) downloadWatcher.start();
 // Notification history for the bell — filtered to what this user may see.
 app.get('/api/notifications', requireAuth, (req, res) => {
   res.json({ ok: true, notifications: notifyLog.list(req.session) });
-});
-
-// Add torrent
-const { classifyTorrentUrl } = require('./lib/torrent-url');
-const { splitTorrentAdds, duplicateAddResult } = require('./lib/torrent-add');
-app.post('/api/qbt/torrents/add', requirePermission('canDownload'), requireQbt, async (req, res) => {
-  try {
-    const { urls, savepath } = req.body;
-    if (!urls || typeof urls !== 'string') return res.status(400).json({ ok: false, error: 'Missing torrent URL' });
-    const cleanUrls = urls.trim();
-    // Classify every line (qBittorrent accepts newline-separated adds; the app
-    // only ever sends one, but validate them all rather than trust that).
-    // 'page' is the important reject: qBittorrent would accept a details-page
-    // URL, reply "Ok.", then silently fail to bdecode it, leaving the torrent
-    // stuck at "Fetching metadata" while the UI reported success. See
-    // lib/torrent-url.js for the torrentproject case that motivated this.
-    const requestedUrls = cleanUrls.split(/\r?\n/).map((u) => u.trim()).filter(Boolean);
-    const kinds = requestedUrls.map(classifyTorrentUrl);
-    if (kinds.some((k) => k === 'page')) {
-      return res.status(400).json({ ok: false, error: 'That result links to a web page, not a downloadable torrent. Pick a different result or paste a magnet link.' });
-    }
-    if (kinds.some((k) => k === 'invalid') || kinds.length === 0) {
-      return res.status(400).json({ ok: false, error: 'Use a magnet link or torrent URL' });
-    }
-    let newUrls = requestedUrls, duplicateResult = null;
-    if (kinds.includes('magnet')) {
-      const torrents = qbtJson(await qbt('GET', '/api/v2/torrents/info'));
-      const split = splitTorrentAdds(requestedUrls, torrents);
-      newUrls = split.newUrls;
-      if (split.existingIndexes.length) {
-        // Receipt reconciliation requires the complete authoritative snapshot.
-        // Passing only matched rows would incorrectly prune other receipts.
-        const decorated = await downloadsWithStatus(torrents);
-        duplicateResult = duplicateAddResult(split.existingIndexes.map(index => decorated[index]), newUrls.length);
-      }
-    }
-    if (!newUrls.length) return res.json(duplicateResult);
-    let body = `urls=${encodeURIComponent(newUrls.join('\n'))}`;
-    if (savepath) body += `&savepath=${encodeURIComponent(savepath)}`;
-    const r = await qbt('POST', '/api/v2/torrents/add', body);
-    if (r.status >= 400 || r.data !== 'Ok.') return res.status(502).json({ ok: false, error: r.data || 'qBittorrent rejected the torrent' });
-    res.json(duplicateResult || { ok: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-// Pause torrent
-app.post('/api/qbt/torrents/pause', requirePermission('canDownload'), requireQbt, async (req, res) => {
-  try {
-    if (typeof req.body.hashes !== 'string' || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?(?:\|[a-f0-9]{40}(?:[a-f0-9]{24})?)*$/i.test(req.body.hashes)) {
-      return res.status(400).json({ error: 'Select a valid download.' });
-    }
-    await qbt('POST', '/api/v2/torrents/stop', `hashes=${encodeURIComponent(req.body.hashes)}`);
-    res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-// Resume torrent
-app.post('/api/qbt/torrents/resume', requirePermission('canDownload'), requireQbt, async (req, res) => {
-  try {
-    if (typeof req.body.hashes !== 'string' || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?(?:\|[a-f0-9]{40}(?:[a-f0-9]{24})?)*$/i.test(req.body.hashes)) {
-      return res.status(400).json({ error: 'Select a valid download.' });
-    }
-    await qbt('POST', '/api/v2/torrents/start', `hashes=${encodeURIComponent(req.body.hashes)}`);
-    res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-// Delete torrent
-app.post('/api/qbt/torrents/delete', requirePermission('canDownload'), requireQbt, async (req, res) => {
-  try {
-    if (typeof req.body.hashes !== 'string' || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?(?:\|[a-f0-9]{40}(?:[a-f0-9]{24})?)*$/i.test(req.body.hashes)) {
-      return res.status(400).json({ error: 'Select a valid download.' });
-    }
-    const { hashes, deleteFiles } = req.body;
-    await qbt('POST', '/api/v2/torrents/delete', `hashes=${encodeURIComponent(hashes)}&deleteFiles=${deleteFiles === true ? 'true' : 'false'}`);
-    res.json({ ok: true });
-  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // ── File watchers ──────────────────────────────────────────────────────
@@ -3966,8 +3765,8 @@ app.listen(PORT, '0.0.0.0', async () => {
   setTimeout(() => { storageHealth.tick().catch(() => {}); }, 30_000);
   setInterval(() => { storageHealth.tick().catch(() => {}); }, 60 * 60 * 1000).unref();
   // Mullvad expiry check — cheap (6h-cached fetch), so twice a day is plenty.
-  setTimeout(() => { vpnAlertTick().catch(() => {}); }, 45_000);
-  setInterval(() => { vpnAlertTick().catch(() => {}); }, 12 * 60 * 60 * 1000).unref();
+  setTimeout(() => { mullvad.alertTick().catch(() => {}); }, 45_000);
+  setInterval(() => { mullvad.alertTick().catch(() => {}); }, 12 * 60 * 60 * 1000).unref();
   // New-episode tracker for ongoing shows — season lists are 24h-cached, so
   // a daily pass costs at most ~60 OMDb calls.
   setTimeout(() => { episodeTrackerTick().catch(() => {}); }, 90_000);
