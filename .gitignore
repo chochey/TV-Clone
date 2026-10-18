@@ -21,3 +21,4 @@ media-organizer/.claude/
 
 # Python import-guard bytecode
 lib/__pycache__/
+__pycache__/

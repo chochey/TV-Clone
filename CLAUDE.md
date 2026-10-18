@@ -104,6 +104,12 @@ The Svelte session store tears down live updates and rejects old in-flight
 responses on account changes. Series cards and details share series-playback.js;
 explicit episode selection must continue to play the selected episode.
 
+### Read-along tools (October 2026)
+How audiobooks get read-along text and word timings lives in `tools/readalong/` (README there): ebook
+text → paragraph alignment → word job → gap repair → held-back chapter checks, plus transcripts for
+books without an ebook. One canonical copy of each script; locations in `tools/readalong/settings.py`.
+They run by hand as `chocheytv` with the speech venv, never inside the server.
+
 ### Audiobook data saver and read-along caching (October 2026)
 Data saver is a per-device switch, on by default only for phones (and Save-Data browsers; `dataSaverDefault` in
 v2/frontend/src/lib/audio-data-saver.js) until the listener chooses.

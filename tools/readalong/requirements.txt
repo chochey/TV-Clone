@@ -1,0 +1,7 @@
+# Speech toolkit for the read-along tools (versions in use on this server, 2026-10).
+# The aeneas paragraph aligner (text/) has its own runtime; see README.
+faster-whisper==1.2.1
+ctranslate2==4.8.3
+onnxruntime==1.23.2
+numpy==1.26.4
+num2words
