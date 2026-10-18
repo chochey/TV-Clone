@@ -303,7 +303,7 @@
       "category": "search",
       "priority": "medium",
       "description": "Advanced search — filter by director, actor, IMDb rating range, genre",
-      "passes": false
+      "passes": true
     },
     {
       "id": "new-005",
@@ -317,7 +317,8 @@
       "category": "library",
       "priority": "medium",
       "description": "Collection grouping — group franchise films (e.g. all Marvel movies) into a collection view",
-      "passes": false
+      "passes": true,
+      "note": "Collections from Wikidata (series + franchise), Home row, /collections, /collection/:id, \"Part of\" links."
     },
     {
       "id": "new-007",
@@ -331,7 +332,8 @@
       "category": "playback",
       "priority": "low",
       "description": "Bandwidth/bitrate cap option for transcode sessions",
-      "passes": false
+      "passes": true,
+      "note": "Data Saver is a real 2 Mbps cap (CPU encode; this GPU cannot cap bitrate) and is offered on every video."
     },
     {
       "id": "new-009",
@@ -352,7 +354,7 @@
       "category": "subtitles",
       "priority": "low",
       "description": "External subtitle upload — allow uploading a .srt file for a specific item from the UI",
-      "passes": false
+      "passes": true
     },
     {
       "id": "new-012",
