@@ -3520,64 +3520,14 @@ app.get('/api/qbt/torrents', requirePermission('canDownload'), requireQbt, async
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-// ── Server-side download watcher ────────────────────────────────────────
-// One 10s poll for the whole household (clients used to each poll qbt
-// themselves, and missed everything while no tab was open). Transitions
-// land in the notification history; a completed download also schedules a
-// rescan for after the organizer has had time to move the file — the
-// organizer-watch usually beats it, and the rescan no-ops when so.
-const writeDownloadReadiness = (torrents) => saveJSONSync(path.join(DATA_DIR, 'download-readiness.json'), require('./lib/download-readiness').downloadReadiness(torrents));
-const downloadReviews = new Map();
-if (QBT_USERNAME && QBT_PASSWORD) {
-  let watcherBusy = false;
-  let prevTorrents = null; // hash -> {done, name}; null = baseline poll
-  const videoChecked = new Set(); // hashes whose file list we already inspected
-  setInterval(async () => {
-    if (watcherBusy) return;
-    watcherBusy = true;
-    try {
-    let torrents;
-    try { torrents = qbtJson(await qbt('GET', '/api/v2/torrents/info')); }
-    catch { return; } // qbt momentarily unreachable — skip this tick
-    if (!Array.isArray(torrents)) return;
-    writeDownloadReadiness(torrents);
-
-    let reviewChanged = false;
-    for (const t of torrents) {
-      if (!t.hash || videoChecked.has(t.hash)) continue;
-      if (t.state === 'metaDL' || t.state === 'checkingResumeData') continue;
-      let files;
-      try { files = qbtJson(await qbt('GET', `/api/v2/torrents/files?hash=${t.hash}`)); }
-      catch { continue; }
-      const hasVideo = torrentHasVideoFile(files);
-      if (hasVideo === null) continue;
-      videoChecked.add(t.hash);
-      if (hasVideo === false) {
-        // Classification is advisory only. Never pause or delete someone else's
-        // downloads (or intentional music/software) based on an extension list.
-        downloadReviews.set(t.hash, 'No recognized video files. Kept in downloads; automatic media import may not apply.');
-        reviewChanged = true;
-      }
-    }
-    const live = new Set(torrents.map((t) => t.hash));
-    for (const h of videoChecked) if (!live.has(h)) { videoChecked.delete(h); downloadReviews.delete(h); }
-    // Record fully confirmed imports even while no Downloads tab is open.
-    // This only changes visibility bookkeeping; qBittorrent keeps every entry.
-    await downloadsWithStatus(torrents);
-    if (reviewChanged) notifyClients('downloads-updated');
-
-    const now = notifyLogLib.torrentStates(torrents);
-    const events = notifyLogLib.diffDownloads(prevTorrents, now);
-    prevTorrents = now;
-    if (!events.length) return;
-    for (const e of events) notifyLog.push({ ...e, audience: 'download' });
-    notifyClients('notifications-updated');
-    if (events.some((e) => e.type === 'complete')) {
-      setTimeout(() => { rescanLibraryAsync('post-download').catch(() => {}); }, 90_000);
-    }
-    } finally { watcherBusy = false; }
-  }, 10_000).unref();
-}
+// ── Server-side download watcher (lib/download-watcher.js) ─────────────
+const downloadWatcher = require('./lib/download-watcher')({
+  qbt, qbtJson, downloadsWithStatus, torrentHasVideoFile, notifyLogLib, notifyLog, notifyClients, rescanLibraryAsync,
+  writeReadiness: torrents => saveJSONSync(path.join(DATA_DIR, 'download-readiness.json'), require('./lib/download-readiness').downloadReadiness(torrents)),
+  log: line => console.log(line),
+});
+const downloadReviews = downloadWatcher.reviews;
+if (QBT_USERNAME && QBT_PASSWORD) downloadWatcher.start();
 
 // Notification history for the bell — filtered to what this user may see.
 app.get('/api/notifications', requireAuth, (req, res) => {
