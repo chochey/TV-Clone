@@ -98,8 +98,8 @@ A note clears itself once the file it was about is imported later.
 
 THE SERVICE
 -----------
-Runs as a system service named tvclone-organizer (as user "blue"), through
-scripts/run-organizer-safe.sh, which allows one copy at a time and checks the drives are
+Runs as a system service named tvclone-organizer (as user "blue") from the live install
+(/srv/chocheytv/app), through scripts/run-organizer-safe.sh, which allows one copy at a time and checks the drives are
 mounted before it does anything. It scans every 30 seconds and restarts itself if it stops.
 
   systemctl status tvclone-organizer
@@ -110,8 +110,8 @@ The Organizer page has a "Restart organizer" button for the same thing.
 
 LOGS AND STATUS
 ---------------
-  Log:     media-organizer/media-organizer.log   (5 MB, 2 older copies kept)
-  Status:  data/organizer-status.json            (rewritten every 30 seconds)
+  Log:     /srv/chocheytv/organizer/media-organizer.log   (5 MB, 2 older copies kept)
+  Status:  /srv/chocheytv/data/organizer-status.json      (rewritten every 30 seconds)
 
 The log is for reading. Besides the human lines it writes two machine-readable kinds that
 the Organizer page relies on: "REVIEW: {...}" and "EVENT: {...}" (one per completed move, with
@@ -123,7 +123,7 @@ it last scanned and imported, and how OMDb is doing. The page uses it to show th
 organizer is alive, so a long copy no longer looks like a hang. The log also gets a
 "Still watching..." line, hourly (every 5 minutes if the status file cannot be written).
 
-Other files it keeps in data/:
+Other files it keeps in the data folder (/srv/chocheytv/data):
   organizer-omdb-seasons.json   episode titles already looked up
   organizer-omdb-usage.json     today's OMDb request count
   organizer-inflight.json       copies in progress (see Copying)

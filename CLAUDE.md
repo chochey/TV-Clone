@@ -8,24 +8,33 @@ Self-hosted media server (Node.js + Express, single-file `server.js` backend +
 Svelte 5 SPA in `v2/frontend/`). Serves 9000+ media files via direct play or
 HLS transcoding with FFmpeg.
 
-**Single-service architecture (July 2026):** `tvclone-prod.service` runs
-`server.js` from `/home/blue/Desktop/Repos/TV-Clone-prod` (branch `master`,
-port 4800) and serves BOTH the API and the built SPA (`v2/frontend/dist`)
-with an SPA fallback. It also binds alias port 4802 because the Cloudflare
-tunnel (chochey.tv) targets it — set `V2_ALIAS_PORT=0` after repointing the
-tunnel to 4800. Retired (disabled, unit files kept for rollback):
-`tvclone-v2.service` (the old dist+proxy hop) and `tvclone-dev.service`.
-The old `TV-Clone` (dev) and `TV-Clone-v2` worktree folders are DELETED —
-this directory is the standalone repo (the .git database moved here);
-frontend and backend both live on `master`. Remote: github.com/chochey/TV-Clone.
+**Live install vs workshop (October 2026):** `tvclone-prod.service` runs
+`server.js` from **`/srv/chocheytv/app`** (port 4800), a git worktree of this
+repository checked out at a released commit — nobody edits files there. This
+folder (`/home/blue/Desktop/Repos/TV-Clone-prod`, branch `master`) is the
+workshop: edit, test and commit here, then deploy. State lives beside the live
+code, never in it: `/srv/chocheytv/data` (this repo's `data/` is a symlink to
+it), `/srv/chocheytv/organizer` (organizer log, aliases, `.env`, progress),
+`/srv/chocheytv/transcode_tmp`. Locations come from `/etc/tvclone/tvclone.env`
+(TVCLONE_DATA_DIR etc., resolved in `lib/paths.js`); secrets (qBittorrent,
+Mullvad, OMDb) are in root-only `/etc/tvclone/secrets.env`, not in unit files.
+**Deploy:** `scripts/deploy-live.sh` (master) or `scripts/deploy-live.sh <commit>`;
+it rebuilds the frontend if it changed and restarts only what changed.
+**Rollback:** `scripts/deploy-live.sh --rollback`. Full pre-move backup:
+`/home/blue/backups/tvclone-2026-10-18` (RESTORE.txt), git tag `backup-2026-10-18`.
+The server serves BOTH the API and the built SPA (`v2/frontend/dist`) with an
+SPA fallback, and binds alias port 4802 for the Cloudflare tunnel (chochey.tv)
+— set `V2_ALIAS_PORT=0` after repointing the tunnel to 4800. Retired (disabled,
+unit files kept): `tvclone-v2.service`, `tvclone-dev.service`. Remote:
+github.com/chochey/TV-Clone.
 Notifications are server-generated (lib/notify-log.js → /api/notifications,
 `notifications-updated` SSE): library adds from doRescan, downloads from the
 server's own qbt watcher (which also schedules a post-download rescan),
 organizer failures from organizer-watch. Clients only keep read/cleared
 cursors locally.
 
-**Deploying frontend changes:** `cd v2/frontend && npm run build`, then
-restart `tvclone-prod` (or nothing — the shell is no-cache, assets hashed).
+**Deploying frontend changes:** commit, then `scripts/deploy-live.sh` (it
+builds `v2/frontend` in the live install; the shell is no-cache, assets hashed).
 **Frontend dev loop:** `npm run dev` in `v2/frontend` (launch.json `ui-dev`)
 — vite on 5173 proxying API calls to the live prod server, no service stops.
 

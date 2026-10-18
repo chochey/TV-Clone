@@ -14,15 +14,15 @@ sudo systemctl start tvclone-organizer     # start
 The Organizer page in ChocheyTV shows the same state, what it is doing right now, what needs
 review, and has a "Restart organizer" button.
 
-Log:     media-organizer/media-organizer.log   (inside the TV-Clone-prod folder)
-Status:  data/organizer-status.json
+Log:     /srv/chocheytv/organizer/media-organizer.log
+Status:  /srv/chocheytv/data/organizer-status.json
 
 
 SETUP (one-time):
 -----------------
 cd media-organizer
 pip3 install --break-system-packages -r requirements.txt
-(put OMDB_API_KEY=... in media-organizer/.env)
+(put OMDB_API_KEY=... in /srv/chocheytv/organizer/.env; media-organizer/.env links to it)
 
 
 RUN ONCE (process new downloads):
