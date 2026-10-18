@@ -1205,112 +1205,11 @@ const SKIP_SEGMENTS_FILE = path.join(DATA_DIR, 'skip_segments.json');
 let skipSegments = loadJSON(SKIP_SEGMENTS_FILE, {});
 // Format: { showName: { intro: { start, end }, outro: { start, end } }, mediaId: { intro: { start, end } } }
 
-// Intro detection (chromaprint + IntroDB lookup) → lib/intro-detect.js
-const introDetect = require('./lib/intro-detect')({
-  DATA_DIR, loadJSON, saveJSON,
-  getFilePath: id => fileIndex[id],
-  getLibrary: () => scanLibrary(),
-});
-const { fetchIntroDb, detectIntroForShow } = introDetect;
-
-// Background intro detection: run once per show that has 2+ episodes and no
-// skip-segment entry yet. Runs after a library scan completes. Gated on
-// fpcalc being available — skip if not installed.
-let bgIntroRunning = false;
-async function backgroundDetectIntros(library) {
-  if (bgIntroRunning) return;
-  bgIntroRunning = true;
-  try {
-    // Collect show names (dedupe) that have >= 2 episodes and no entry yet.
-    const showEpCount = new Map();
-    for (const item of library) {
-      if (item.mediaKind === 'audio' || isAudioFile(item._filePath || item.filename)
-          || (item.mediaKind !== 'show' && item.type !== 'show') || !item.showName) continue;
-      showEpCount.set(item.showName, (showEpCount.get(item.showName) || 0) + 1);
-    }
-    const candidates = [];
-    for (const [name, count] of showEpCount) {
-      if (count < 2) continue;
-      if (skipSegments['show:' + name]) continue;
-      candidates.push(name);
-    }
-    if (candidates.length === 0) return;
-    console.log(`  [intro] Auto-detecting intros for ${candidates.length} show(s)...`);
-    let detected = 0;
-    for (const name of candidates) {
-      try {
-        // Chromaprint fingerprinting spawns fpcalc across ~5 episodes per show
-        // and hammers the same USB disk read bandwidth a live transcode needs.
-        // Gate before each show the same way sprite generation does, so a
-        // viewer who presses play pauses the sweep within one show's work
-        // instead of contending with it (the "everything froze right after I
-        // clicked Scan" storm). Reuses the sprite backoff helper verbatim.
-        await waitForTranscodeIdle();
-        const intro = await detectIntroForShow(name);
-        if (intro) {
-          skipSegments['show:' + name] = { intro };
-          saveJSON(SKIP_SEGMENTS_FILE, skipSegments);
-          detected++;
-        }
-      } catch (e) { console.warn(`  [intro] ${name} failed: ${e.message}`); }
-    }
-    console.log(`  [intro] Complete — detected ${detected}/${candidates.length}`);
-  } finally { bgIntroRunning = false; }
-}
-
-app.get('/api/skip-segments/:id', requireAuth, async (req, res) => {
-  const id = req.params.id;
-  // Check for per-episode override first, then show-level
-  if (skipSegments[id]) return res.json(skipSegments[id]);
-  const lib = scanLibrary();
-  const item = lib.find(i => i.id === id);
-  if (item && item.showName && skipSegments['show:' + item.showName]) {
-    return res.json(skipSegments['show:' + item.showName]);
-  }
-
-  // Fallback: fetch from IntroDB using IMDB ID
-  if (item && item.type === 'show' && item.epInfo) {
-    const omdb = getMetadataForItem(item);
-    const imdbId = omdb?.imdbID;
-    if (imdbId) {
-      const introdb = await fetchIntroDb(imdbId, item.epInfo.season || 1, item.epInfo.episode || 1);
-      if (introdb?.intro?.start_sec != null && introdb?.intro?.end_sec != null) {
-        const result = { intro: { start: introdb.intro.start_sec, end: introdb.intro.end_sec }, source: 'introdb' };
-        // Also check recap and outro
-        if (introdb.recap?.start_sec != null) result.recap = { start: introdb.recap.start_sec, end: introdb.recap.end_sec };
-        if (introdb.outro?.start_sec != null) result.outro = { start: introdb.outro.start_sec, end: introdb.outro.end_sec };
-        return res.json(result);
-      }
-    }
-  }
-  res.json({});
-});
-
-app.post('/api/skip-segments/:id', requireAuth, (req, res) => {
-  const id = req.params.id;
-  const { intro, outro, applyToShow } = req.body;
-  const data = {};
-  if (intro && typeof intro.start === 'number' && typeof intro.end === 'number') data.intro = { start: intro.start, end: intro.end };
-  if (outro && typeof outro.start === 'number' && typeof outro.end === 'number') data.outro = { start: outro.start, end: outro.end };
-
-  if (applyToShow) {
-    // Apply to the whole show
-    const lib = scanLibrary();
-    const item = lib.find(i => i.id === id);
-    if (item && item.showName) {
-      skipSegments['show:' + item.showName] = data;
-    }
-  } else {
-    skipSegments[id] = data;
-  }
-  saveJSON(SKIP_SEGMENTS_FILE, skipSegments);
-  res.json({ ok: true });
-});
-
-app.delete('/api/skip-segments/:id', requireAuth, (req, res) => {
-  delete skipSegments[req.params.id];
-  saveJSON(SKIP_SEGMENTS_FILE, skipSegments);
-  res.json({ ok: true });
+// Routes, intro detection and the background sweep (lib/routes/skip-segments.js).
+const { backgroundDetectIntros, detectIntroForShow } = require('./lib/routes/skip-segments')(app, {
+  requireAuth, skipSegments, save: () => saveJSON(SKIP_SEGMENTS_FILE, skipSegments), scanLibrary, isAudioFile,
+  getMetadataForItem: item => getMetadataForItem(item), waitForTranscodeIdle: () => waitForTranscodeIdle(),
+  introDetect: require('./lib/intro-detect')({ DATA_DIR, loadJSON, saveJSON, getFilePath: id => fileIndex[id], getLibrary: () => scanLibrary() }),
 });
 
 // ── Delete media from server (admin only) ────────────────────────────
