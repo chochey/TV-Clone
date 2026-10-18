@@ -968,57 +968,14 @@ app.put('/api/subtitle-offset/:id', requireAuth, (req, res) => {
   res.json({ ok: true, offset });
 });
 
-// ── Content requests ─────────────────────────────────────────────────
-app.get('/api/requests', requireAuth, (req, res) => {
-  const session = getSession(req);
-  const isAdmin = session.role === 'admin';
-  res.json({ ok: true, isAdmin, requests: requests.list({ profileId: session.profileId, isAdmin }) });
+// ── Content requests (lib/routes/requests.js) ──────────────────────
+require('./lib/routes/requests')(app, {
+  requireAuth, ensureLibrary, requireAdminSession, getSession, profileName: id => config.profiles.find(p => p.id === id)?.name,
+  requests, libraryItems: () => libraryCache, fetchOmdbData, saveOmdbCache,
+  notifyClients: event => notifyClients(event),   // defined further down, with the event stream
 });
 
-app.post('/api/requests', requireAuth, ensureLibrary, async (req, res) => {
-  const session = getSession(req);
-  const profile = config.profiles.find(p => p.id === session.profileId);
-  const { title, type, note } = req.body || {};
-
-  const available = requests.findInLibrary(libraryCache, title, type);
-  if (available) {
-    return res.status(409).json({ ok: false, code: 'available', itemId: available.id, error: `"${available.showName || available.title}" is already in the library` });
-  }
-
-  const result = requests.create({ title, type, note, profileId: session.profileId, profileName: profile?.name || session.profileId });
-  if (!result.ok) {
-    const status = result.code === 'duplicate' ? 409 : (result.code === 'cap' ? 429 : 400);
-    return res.status(status).json({ ok: false, code: result.code, error: result.error, request: result.request });
-  }
-
-  // Best-effort poster/canonical title so the admin sees what's being asked.
-  try {
-    const omdb = await fetchOmdbData(result.request.title, result.request.year, result.request.type === 'unknown' ? undefined : result.request.type);
-    if (omdb && !omdb._miss) {
-      requests.attachOmdb(result.request.id, { title: omdb.omdbTitle || null, year: omdb.omdbYear || null, posterUrl: omdb.posterUrl || null });
-      saveOmdbCache();
-    }
-  } catch {}
-
-  notifyClients('requests-updated');
-  res.json({ ok: true, request: requests.get(result.request.id) });
-});
-
-app.patch('/api/requests/:id', requireAdminSession, (req, res) => {
-  const updated = requests.setStatus(req.params.id, req.body?.status);
-  if (!updated) return res.status(404).json({ ok: false, error: 'Unknown request or status' });
-  notifyClients('requests-updated');
-  res.json({ ok: true, request: updated });
-});
-
-app.delete('/api/requests/:id', requireAuth, (req, res) => {
-  const session = getSession(req);
-  const removed = requests.remove(req.params.id, { profileId: session.profileId, isAdmin: session.role === 'admin' });
-  if (!removed) return res.status(403).json({ ok: false, error: 'Only pending requests you created can be removed' });
-  notifyClients('requests-updated');
-  res.json({ ok: true });
-});
-
+// ── Library & item APIs ───────────────────────────────────────────────
 const libraryEtag = require('./lib/library-etag')();
 const { packCatalog, createCompactCache } = require('./lib/catalog-response');
 const compactCatalog = createCompactCache();
