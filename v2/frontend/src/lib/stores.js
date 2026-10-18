@@ -7,6 +7,7 @@ import { unpackCatalog } from './catalog-response.js';
 import { isSeriesItem, isAudioItem, mediaKindOf, seriesKey } from './series-playback.js';
 import { createAudioCardMetadataLoader, audioCardIdentity, mergeAudioCardMetadata } from './audio-card-metadata.js';
 import { EMPTY_FILTERS } from './search-filters.js';
+import { resetCollections } from './collections.js';
 
 export const session = writable(null);     // { loggedIn, profileId, name, role }
 const liveLibrary = writable([]);
@@ -241,6 +242,7 @@ export function resetSessionState() {
   searchQuery.set('');
   enrichAttempted.clear();
   resetNotifications();
+  resetCollections();
 }
 
 session.subscribe(value => {

@@ -1,5 +1,6 @@
 <script>
   import PosterCard from '../lib/components/PosterCard.svelte';
+  import { navigate } from '../lib/router.js';
   import { catalog, collapseShows } from '../lib/stores.js';
   import { mediaKindOf, isSeriesItem, isAudioItem } from '../lib/series-playback.js';
   import { audioPresentation } from '../lib/audio-presentation.js';
@@ -85,6 +86,7 @@
     <h1 class="display">{heading}</h1>
     <span class="count meta">{items.length}</span>
     <div class="controls">
+      {#if kind === 'movie' && !sectionId}<button class="collections-link" onclick={() => navigate('/collections')}>Collections</button>{/if}
       <select bind:value={genre} aria-label="Genre">
         <option value="">All genres</option>
         {#each genreOptions as g (g)}
@@ -139,6 +141,10 @@
     border-radius: var(--r-sm); padding: 8px 12px; outline: none; cursor: pointer;
   }
   select:focus { border-color: var(--ink-soft); }
+  .collections-link {
+    font-size: 0.88rem; font-weight: 600; color: var(--ink); background: var(--bg-raised);
+    border: 1px solid var(--line-strong); border-radius: var(--r-sm); padding: 8px 14px;
+  }
 
   .grid {
     display: grid;

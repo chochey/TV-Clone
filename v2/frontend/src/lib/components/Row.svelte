@@ -1,6 +1,7 @@
 <script>
   import PosterCard from './PosterCard.svelte';
-  let { title, items = [], onopen, onplay, size = 'md', resume = false, wide = false } = $props();
+  // card: optional snippet to render each item instead of a poster; onmore adds a "See all" link.
+  let { title, items = [], onopen, onplay, size = 'md', resume = false, wide = false, card = null, onmore = null } = $props();
 
   // The track hides its scrollbar, and a plain mouse has no horizontal wheel —
   // without these arrows the row is only reachable by trackpad or touch.
@@ -34,6 +35,7 @@
     <header>
       <h2>{title}</h2>
       <span class="count">{items.length}</span>
+      {#if onmore}<button class="more" onclick={onmore}>See all</button>{/if}
     </header>
     <div class="trackwrap">
       {#if !atStart}
@@ -43,7 +45,7 @@
       {/if}
       <div class="track" class:lg={size === 'lg'} class:wide={wide} bind:this={track} onscroll={measure}>
         {#each items as item (item.id)}
-          <div class="cell"><PosterCard {item} {onopen} {onplay} {resume} {wide} /></div>
+          <div class="cell">{#if card}{@render card(item)}{:else}<PosterCard {item} {onopen} {onplay} {resume} {wide} />{/if}</div>
         {/each}
       </div>
       {#if !atEnd}
@@ -56,6 +58,8 @@
 {/if}
 
 <style>
+  .more { margin-left: auto; font-size: 0.84rem; font-weight: 600; color: var(--ink-soft); }
+  .more:hover { color: var(--ink); }
   .row { margin: var(--s5) 0; }
   header {
     display: flex; align-items: baseline; gap: var(--s3);

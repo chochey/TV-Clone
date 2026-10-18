@@ -794,6 +794,14 @@ require('./lib/routes/media-delete')(app, {
   saveMediaInfo, saveLibraryCache, bumpLibraryVersion: () => { libraryVersion++; }, notifyClients: event => notifyClients(event),
 });
 
+// ── Film collections from Wikidata (lib/collections.js, lib/routes/collections.js) ──
+// Only IMDb IDs leave the server; answers are cached for 30 days.
+const { refreshCollections } = require('./lib/routes/collections')(app, {
+  requireAuth, scanLibrary, getMetadataForItem: item => getMetadataForItem(item), libraryVersion: () => libraryVersion,
+  metadataRevision: () => `${omdb.cacheVersion || omdb.cacheSize}-${metadataOverrides.revision}`,
+  collections: require('./lib/collections')({ dataDir: DATA_DIR, loadJSON, saveJSON }),
+});
+
 // ── Subtitle upload (admin): saved as a sidecar beside the video (lib/routes/subtitle-upload.js) ──
 require('./lib/routes/subtitle-upload')(app, {
   requireAdminSession, ensureLibrary, scanLibrary, fileFor: id => fileIndex[id],
@@ -2066,6 +2074,11 @@ app.listen(PORT, '0.0.0.0', async () => {
   // New-episode tracker for ongoing shows — season lists are 24h-cached, so
   // a daily pass costs at most ~60 OMDb calls.
   setTimeout(() => { episodeTrackerTick().catch(() => {}); }, 90_000);
+  if (process.env.COLLECTIONS_LOOKUP !== '0') {
+    const firstDelay = parseInt(process.env.COLLECTIONS_FIRST_DELAY_MS, 10) || 3 * 60_000;
+    setTimeout(() => { refreshCollections().catch(() => {}); }, firstDelay).unref();
+    setInterval(() => { refreshCollections().catch(() => {}); }, 24 * 60 * 60 * 1000).unref();
+  }
   setInterval(() => { episodeTrackerTick().catch(() => {}); }, 24 * 60 * 60 * 1000).unref();
   setTimeout(async () => {
     try {

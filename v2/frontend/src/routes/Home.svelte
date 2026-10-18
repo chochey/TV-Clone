@@ -8,7 +8,13 @@
   import { moods, moodMatches, discoveryPool, nextPick } from '../lib/home-discovery.js';
   import { mediaKindOf, isAudioItem } from '../lib/series-playback.js';
   import { continuePreview, filterContinue } from '../lib/continue-preview.js';
+  import CollectionCard from '../lib/components/CollectionCard.svelte';
+  import { collections, loadCollections, collectionCards } from '../lib/collections.js';
   let { onopen, onplay } = $props();
+
+  // Film collections from Wikidata; the row stays hidden until there are some.
+  $effect(() => { loadCollections(); });
+  const collectionRow = $derived(collectionCards($collections, $catalog));
   const featured = $derived($continueWatching.find(i => !isAudioItem(i)) || $recentlyAdded.find(i => !isAudioItem(i)) || null);
   const movies = $derived($catalog.filter(i => mediaKindOf(i) === 'movie'));
   const pool = $derived(discoveryPool(movies.map(i => ({ ...i, ...$watchState[i.id] })), featured?.id));
@@ -90,6 +96,7 @@
       {/if}
     {/if}
     <Row title="Fresh on your shelf" items={$recentlyAdded} {onopen} {onplay} size="lg" />
+    <Row title="Collections" items={collectionRow} card={collectionCell} onmore={() => navigate('/collections')} />
     {#each $genreClusters as cluster (cluster.name)}
       <Row title={cluster.name} items={cluster.items} {onopen} {onplay} />
     {/each}
@@ -100,6 +107,10 @@
     <button onclick={() => navigate('/shows')}>{$libraryStats.shows.toLocaleString()} shows</button>
   </footer>
 </div>
+
+{#snippet collectionCell(card)}
+  <CollectionCard {card} onopen={c => navigate(`/collection/${encodeURIComponent(c.id)}`)} />
+{/snippet}
 
 <style>
   .home { --cta:#7939f8; --cta-ink:#fff; padding-bottom:var(--s6); }

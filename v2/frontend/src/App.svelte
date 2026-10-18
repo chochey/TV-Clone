@@ -11,6 +11,8 @@
   import Detail from './routes/Detail.svelte';
   import Browse from './routes/Browse.svelte';
   import Search from './routes/Search.svelte';
+  import Collections from './routes/Collections.svelte';
+  import Collection from './routes/Collection.svelte';
   import History from './routes/History.svelte';
   import Requests from './routes/Requests.svelte';
   import Dashboard from './routes/Dashboard.svelte';
@@ -559,6 +561,10 @@
       <Browse sectionId={$route.id} section={selectedSection} {sectionsReady} sectionError={sectionsError} onretry={refreshSections} onopen={openItem} onplay={playItem} />
     {:else if $route.name === 'search'}
       <Search onopen={openItem} onplay={playItem} />
+    {:else if $route.name === 'collections'}
+      <Collections />
+    {:else if $route.name === 'collection'}
+      <Collection id={$route.id} onopen={openItem} onplay={playItem} />
     {:else if $route.name === 'history'}
       <History />
     {:else if $route.name === 'stats'}

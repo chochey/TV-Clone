@@ -8,6 +8,9 @@ function parse(path, search) {
   if (m) return { name: 'title', id: decodeURIComponent(m[1]) };
   const section = path.match(/^\/library\/([^/]+)$/);
   if (section) return { name: 'section', id: decodeURIComponent(section[1]) };
+  const collection = path.match(/^\/collection\/([^/]+)$/);
+  if (collection) return { name: 'collection', id: decodeURIComponent(collection[1]) };
+  if (path === '/collections') return { name: 'collections' };
   if (path === '/libraries') return { name: 'libraries' };
   if (path === '/movies') return { name: 'movies' };
   if (path === '/shows') return { name: 'shows' };

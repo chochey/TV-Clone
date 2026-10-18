@@ -9,6 +9,7 @@
   import { audioPresentation } from '../lib/audio-presentation.js';
   import { mergeAudioDetail, audioDetailArtwork, audioDetailDuration } from '../lib/audio-detail.js';
   import SubtitleUpload from '../lib/components/SubtitleUpload.svelte';
+  import { collections, loadCollections, collectionsOf } from '../lib/collections.js';
 
   let { id, onplay } = $props();
 
@@ -23,6 +24,8 @@
     return () => { alive = false; };
   });
   const m = $derived(mergeAudioDetail(item, full));
+  $effect(() => { loadCollections(); });
+  const partOf = $derived(collectionsOf(id, $collections));
 
   const isShow = $derived(isSeriesItem(m));
   const isAudio = $derived(isAudioItem(m));
@@ -192,6 +195,9 @@
               {#if genres.length}<span>{genres.slice(0, 4).join(', ')}</span>{/if}
             {/if}
           </div>
+          {#if partOf.length && !isShow && !isAudio}
+            <p class="partof">Part of {#each partOf as c, i (c.id)}{#if i}, {/if}<a href={`/collection/${encodeURIComponent(c.id)}`} onclick={(e) => { e.preventDefault(); navigate(`/collection/${encodeURIComponent(c.id)}`); }}>{c.name}</a>{/each}</p>
+          {/if}
           {#if deleteError}<p class="warn" role="alert">{deleteError}</p>{/if}
           {#if plot}<p class="plot">{plot}</p>{/if}
           {#if playbackIssue}<p class="compatibility" role="status">{playbackIssue}</p>{/if}
@@ -291,6 +297,8 @@
 {/if}
 
 <style>
+  .partof { margin: var(--s2) 0 0; color: var(--ink-soft); font-size: 0.92rem; }
+  .partof a { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
   .void {
     min-height: 100vh; display: flex; flex-direction: column;
     align-items: center; justify-content: center; gap: var(--s4);
