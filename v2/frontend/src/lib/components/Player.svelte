@@ -12,6 +12,7 @@
   import { episodeCode, episodeTitle } from '../format.js';
   import { isSeriesItem } from '../series-playback.js';
   import { hevcMaxLevel, demoteHevc, isFirefoxDesktopLinux } from '../hevc-probe.js';
+  import { createStallWatchdog, RESUME_GRACE_MS } from '../stall-watchdog.js';
 
   // Remounted per item via {#key} in App — `item` is static for this mount.
   let { item, next = null, prev = null, onclose, onnext, onprev } = $props();
@@ -22,7 +23,9 @@
   const isHevc = (item.codec || '').toLowerCase() === 'hevc';
   // Set when passthrough has already failed on this item, so the retry after a
   // failure asks for a plain transcode instead of looping on the same fault.
-  let hevcBlocked = false;
+  // hevcBlockedBy: 'decode' (the browser failed to decode it) or 'stall' (weaker
+  // evidence, retried on the next seek that starts a new session).
+  let hevcBlocked = false, hevcBlockedBy = null;
   // Whether the session currently loading/playing is a passthrough attempt —
   // the fallback must only fire for those, never for an ordinary transcode.
   let passthroughActive = false;
@@ -456,40 +459,28 @@
   // Nothing else notices this, so watch playback directly: if we're meant
   // to be playing and the clock isn't moving, hop the gap; if that keeps
   // failing, rebuild the session.
-  const STALL_AFTER_MS = 3000;
-  let lastPos = -1;
-  let lastPosAt = 0;
-  let stallNudges = 0;
+  const stallWatchdog = createStallWatchdog();
 
   function stallCheck() {
-    if (!video || paused || error || scrubbing || startupPending || !timelineReady) return;
-    const now = Date.now();
-    if (lastPos < 0 || Math.abs(video.currentTime - lastPos) > 0.05) {
-      lastPos = video.currentTime;      // progressing normally
-      lastPosAt = now;
-      stallNudges = 0;
-      return;
-    }
-    if (now - lastPosAt < STALL_AFTER_MS) return;
-
-    // Is there buffered media just ahead that we're failing to reach?
-    let target = -1;
+    if (!video) return;
+    let aheadTarget = -1;
     for (let i = 0; i < (video.buffered?.length || 0); i++) {
       const s = video.buffered.start(i);
-      if (s > video.currentTime && s - video.currentTime < 30) { target = s + 0.05; break; }
+      if (s > video.currentTime && s - video.currentTime < 30) { aheadTarget = s + 0.05; break; }
     }
-    lastPosAt = now;
-    stallNudges++;
-    if (target > 0 && stallNudges <= 3) {
-      video.currentTime = target;       // skip the hole between segments
-      video.play().catch(() => {});
-    } else if (stallNudges > 3) {
-      stallNudges = 0;
-      if (isDirect) { video.play().catch(() => {}); return; }
-      // Rebuilding an identical passthrough session would stall identically.
-      // Come back as a transcode instead of looping on the same fault.
-      if (fallbackFromPassthrough('stalled', false)) return;
-      recoverSession();                 // nothing ahead — rebuild from here
+    const { action, target } = stallWatchdog.check({
+      active: !paused && !error && !scrubbing && !startupPending && timelineReady,
+      hidden: document.visibilityState !== 'visible', position: video.currentTime,
+      aheadTarget, passthrough: passthroughActive, direct: isDirect,
+    });
+    if (action === 'nudge') { video.currentTime = target; video.play().catch(() => {}); }   // skip the hole between segments
+    else if (action === 'play') video.play().catch(() => {});
+    else if (action === 'fallback') fallbackFromPassthrough('stalled', false);
+    else if (action === 'rebuild') {
+      // Rebuild the same stream from here. A passthrough session that keeps
+      // coming back empty is the last-resort case for the transcode.
+      if (passthroughActive && recoverAttempts >= 2) fallbackFromPassthrough('stalled', false);
+      else recoverSession();
     }
   }
 
@@ -502,7 +493,7 @@
   function fallbackFromPassthrough(reason, persist) {
     if (!passthroughActive) return false;
     passthroughActive = false;
-    hevcBlocked = true;
+    hevcBlocked = true; hevcBlockedBy = persist ? 'decode' : 'stall';
     if (persist) demoteHevc(reason);
     // The failed attempt was a gamble on a capability; the transcode that
     // replaces it starts with a clean retry budget rather than inheriting the
@@ -528,8 +519,7 @@
     error = '';
     recoverAttempts = 0;
     recoverFromT = saved.position;
-    lastPos = -1;
-    stallNudges = 0;
+    stallWatchdog.reset(RESUME_GRACE_MS);
     paused = false;
     if (isDirect) loadDirect(saved.position);
     else loadHlsSession(saved.position);
@@ -561,6 +551,9 @@
       cur = t;
     } else {
       cur = t;
+      // A stall was weak evidence against passthrough; a fresh session is the
+      // natural moment to give it another chance.
+      if (hevcBlockedBy === 'stall') { hevcBlocked = false; hevcBlockedBy = null; }
       loadHlsSession(t);
     }
   }
@@ -900,6 +893,7 @@
 
   function onVisibilityChange() {
     if (document.visibilityState === 'hidden') flushProgressOnTeardown();
+    else stallWatchdog.reset(RESUME_GRACE_MS);   // a backgrounded player needs a moment to catch up
   }
 
   onDestroy(() => {
@@ -967,6 +961,7 @@
     onplay={() => {
       if (!timelineReady) return;
       if (resumePausedPlayback()) return;
+      stallWatchdog.reset(RESUME_GRACE_MS);   // loading restarts on play; let the buffer refill
       paused = false; poke();
       try { if (!startupPending && hls) startHlsFromPosition(hls, video.currentTime); } catch {}
     }}
