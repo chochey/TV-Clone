@@ -23,7 +23,7 @@ for _ in $(seq 1 60); do
     kill -0 "$PID" 2>/dev/null || fail "the server exited right after starting"
     grep -q -E "uncaughtException|unhandledRejection|ReferenceError|TypeError" "$TMP/server.log" && fail "an error was logged during startup"
     # Routes registered early and near the end of startup must both be there.
-    for route in "GET /api/audio/preferences" "POST /api/restart" "GET /api/corrupted" "GET /api/now-watching" "GET /api/duplicates" "GET /api/episodes/report" "GET /api/browse" "GET /api/docker/status" "GET /api/organizer/status"; do
+    for route in "GET /api/audio/preferences" "POST /api/restart" "GET /api/corrupted" "GET /api/now-watching" "GET /api/duplicates" "GET /api/episodes/report" "GET /api/browse" "GET /api/docker/status" "GET /api/organizer/status" "GET /api/sprites/progress"; do
       code="$(curl -s -o /dev/null -w '%{http_code}' -X "${route%% *}" "http://127.0.0.1:$PORT${route#* }")"
       case "$code" in 401|403) ;; *) fail "$route answered $code instead of refusing an anonymous request";; esac
     done
