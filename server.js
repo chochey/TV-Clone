@@ -2844,50 +2844,16 @@ const { episodeTrackerTick } = require('./lib/routes/episodes')(app, {
   loadAlerts: () => loadJSON(EPISODE_ALERTS_FILE, {}), saveAlerts: seen => saveJSON(EPISODE_ALERTS_FILE, seen),
 });
 
-app.post('/api/organizer/preview', requireAdminSession, async (_req, res) => {
-  if (!fs.existsSync(ORGANIZER_SCRIPT)) {
-    return res.status(404).json({ ok: false, error: `Organizer script not found: ${ORGANIZER_SCRIPT}` });
-  }
-  const cwd = path.dirname(ORGANIZER_SCRIPT);
-  const child = spawn(process.env.ORGANIZER_PYTHON || 'python3', [ORGANIZER_SCRIPT, '--dry-run'], {
-    cwd,
-    env: { ...process.env, ORGANIZER_ALIAS_FILE, ORGANIZER_PREVIEW: '1' },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  let output = '';
-  const append = chunk => {
-    output += chunk.toString();
-    if (output.length > 60000) output = output.slice(-60000);
-  };
-  child.stdout.on('data', append);
-  child.stderr.on('data', append);
-  const timeout = setTimeout(() => {
-    try { child.kill('SIGTERM'); } catch {}
-  }, 60000);
-  // A failed spawn emits 'error' and then 'close' — only respond once.
-  let responded = false;
-  child.on('error', err => {
-    clearTimeout(timeout);
-    if (responded) return;
-    responded = true;
-    res.status(500).json({ ok: false, error: err.message });
-  });
-  child.on('close', code => {
-    clearTimeout(timeout);
-    if (responded) return;
-    responded = true;
-    const lines = output.split('\n').filter(l => l.trim()).slice(-300);
-    res.json({ ok: code === 0, code, lines, truncated: output.length >= 60000 });
-  });
-});
-
 // System control — docker + systemctl wrappers (lib/system-control.js)
 const sys = require('./lib/system-control')({
   ORGANIZER_SERVICE,
   ALLOWED_CONTAINERS: ['qbittorrent', 'gluetun'],
   ALLOWED_DOCKER_ACTIONS: ['start', 'stop', 'restart'],
 });
-const { organizerServiceCmd, dockerCmd, dockerInspect, dockerComposeRepair } = sys;
+const { organizerServiceCmd, dockerInspect, dockerComposeRepair } = sys;
+require('./lib/routes/system-control')(app, {
+  requireAdminSession, requirePermission, organizerScript: ORGANIZER_SCRIPT, organizerAliasFile: ORGANIZER_ALIAS_FILE, sys,
+});
 
 // ── Organizer watchdog + periodic safety rescan ────────────────────────
 // Two known blind spots: the organizer freezing silently (log goes quiet,
@@ -2918,42 +2884,6 @@ if (SAFETY_RESCAN_MS > 0) {
     invalidateLibrary('safety-rescan');
   }, SAFETY_RESCAN_MS).unref();
 }
-
-app.get('/api/organizer/status', requirePermission('canOrganizer'), async (_req, res) => {
-  const result = await organizerServiceCmd('status');
-  const active = result.code === 0;
-  res.json({ ok: true, active, code: result.code });
-});
-
-app.post('/api/organizer/start', requireAdminSession, async (_req, res) => {
-  const result = await organizerServiceCmd('start');
-  res.json({ ok: result.ok, error: result.ok ? undefined : result.stderr });
-});
-
-app.post('/api/organizer/stop', requireAdminSession, async (_req, res) => {
-  const result = await organizerServiceCmd('stop');
-  res.json({ ok: result.ok, error: result.ok ? undefined : result.stderr });
-});
-
-app.post('/api/organizer/restart', requirePermission('canRestart'), async (_req, res) => {
-  const result = await organizerServiceCmd('restart');
-  res.json({ ok: result.ok, error: result.ok ? undefined : result.stderr });
-});
-
-app.get('/api/docker/status', requireAdminSession, async (_req, res) => {
-  res.json(await dockerInspect([...sys.ALLOWED_CONTAINERS]));
-});
-
-app.post('/api/docker/:action/:container', requireAdminSession, async (req, res) => {
-  const { action, container } = req.params;
-  const result = await dockerCmd(action, container);
-  res.json({ ok: result.ok, error: result.ok ? undefined : result.stderr });
-});
-
-app.post('/api/docker/repair', requireAdminSession, async (_req, res) => {
-  const result = await dockerComposeRepair();
-  res.json(result);
-});
 
 app.post('/api/reliability/repair', requireAdminSession, async (req, res) => {
   const result = { ok: true, steps: [] };
