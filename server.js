@@ -794,10 +794,9 @@ require('./lib/routes/media-delete')(app, {
   saveMediaInfo, saveLibraryCache, bumpLibraryVersion: () => { libraryVersion++; }, notifyClients: event => notifyClients(event),
 });
 
-// ── Genres, metadata overrides, OMDb details and posters (lib/routes/metadata.js) ──
+// ── Metadata overrides, OMDb details and posters (lib/routes/metadata.js) ──
 require('./lib/routes/metadata')(app, {
-  requireAuth, requireAdminSession, getConfig: () => config, saveConfig: () => saveJSON(CONFIG_FILE, config),
-  scanLibrary, isAudioFile, parseYearFromName, stripYearFromName, omdb, fetchOmdbData, saveOmdbCache, metadataOverrides,
+  requireAuth, requireAdminSession, scanLibrary, isAudioFile, parseYearFromName, stripYearFromName, omdb, fetchOmdbData, saveOmdbCache, metadataOverrides,
   notifyClients: event => notifyClients(event), posterDir: OMDB_POSTER_DIR,
 });
 
