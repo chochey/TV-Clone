@@ -3115,7 +3115,7 @@ const { readOrganizerLogLines } = require('./lib/routes/organizer')(app, {
   libraryPaths: () => (libraryCache || []).map(item => item._filePath),
 });
 
-// ── Episode index: missing-episode report + new-episode tracker ─────────
+// ── Episode index: missing-episode report + new-episode tracker (lib/routes/episodes.js) ──
 // One OMDb-vs-library diff engine (lib/episode-index.js). Torrent search
 // and download stay inside the gluetun/Mullvad container as always — the
 // only traffic here is OMDb metadata, same as poster fetches.
@@ -3132,94 +3132,12 @@ function episodeShowMeta(showName) {
   return c ? { imdbID: c.imdbID, omdbYear: c.omdbYear, omdbTitle: c.omdbTitle } : null;
 }
 
-let episodeRefreshRunning = false;
-let lastEpisodeReport = null;
-let episodeRefreshProgress = null;
-let episodeRefreshError = '';
-
-app.get('/api/episodes/report', requirePermission('canDownload'), ensureLibrary, async (_req, res) => {
-  // Cache-only pass (budget 0) — instant, never spends OMDb calls.
-  const report = await episodeIndex.buildReport({
-    holdings: buildHoldings(scanLibrary() || []),
-    getShowMeta: episodeShowMeta,
-    budget: 0,
-  });
-  lastEpisodeReport = report;
-  res.json({ ok: true, refreshing: episodeRefreshRunning, refreshProgress: episodeRefreshProgress, refreshError: episodeRefreshError, ...report });
-});
-
-app.post('/api/episodes/refresh', requirePermission('canDownload'), ensureLibrary, (req, res) => {
-  if (episodeRefreshRunning) return res.json({ ok: true, started: false, refreshing: true });
-  episodeRefreshRunning = true;
-  episodeRefreshError = '';
-  episodeRefreshProgress = null;
-  const budget = Math.max(1, Math.min(500, parseInt(req.body?.budget, 10) || 300));
-  (async () => {
-    try {
-      const report = await episodeIndex.buildReport({
-        holdings: buildHoldings(scanLibrary() || []),
-        getShowMeta: episodeShowMeta,
-        budget,
-        onProgress: progress => { episodeRefreshProgress = progress; },
-      });
-      lastEpisodeReport = report;
-      console.log(`[Episodes] Refresh done: ${report.budgetUsed} OMDb calls, ${report.staleSlots} slots still stale`);
-    } catch (e) {
-      episodeRefreshError = 'Episode check failed. Please try again.';
-      console.error('[Episodes] Refresh failed:', e.message);
-    } finally {
-      episodeRefreshRunning = false;
-      notifyClients('episodes-updated');
-    }
-  })();
-  res.json({ ok: true, started: true, refreshing: true });
-});
-
-// Daily tracker: for ongoing shows, refresh the newest season and notify
-// once per newly-aired episode that the library doesn't have.
 const EPISODE_ALERTS_FILE = path.join(DATA_DIR, 'episode_alerts.json');
-let episodeAlertSeen = loadJSON(EPISODE_ALERTS_FILE, {});
-async function episodeTrackerTick() {
-  const report = await episodeIndex.buildReport({
-    holdings: require('./lib/episode-index').buildHoldings(scanLibrary() || []),
-    getShowMeta: episodeShowMeta,
-    budget: 80,
-    onlyOngoing: true,
-  });
-  const now = Date.now();
-  const RECENT = 14 * 86_400_000;
-  let pushed = 0;
-  for (const show of report.shows) {
-    const fresh = [];
-    for (const s of show.seasons) {
-      for (const m of s.missing) {
-        const airTs = m.released ? Date.parse(m.released) : NaN;
-        if (!Number.isFinite(airTs) || now - airTs > RECENT) continue;
-        const key = `${show.imdbID}|${s.season}|${m.episode}`;
-        if (episodeAlertSeen[key]) continue;
-        episodeAlertSeen[key] = now;
-        fresh.push({ season: s.season, ...m });
-      }
-    }
-    if (!fresh.length) continue;
-    pushed += fresh.length;
-    const first = fresh[0];
-    const code = `S${String(first.season).padStart(2, '0')}E${String(first.episode).padStart(2, '0')}`;
-    notifyLog.push({
-      type: 'episode',
-      title: `New episode: ${show.show}`,
-      body: fresh.length === 1
-        ? `${code}${first.title ? ` — ${first.title}` : ''} aired ${first.released} and isn't in the library yet.`
-        : `${fresh.length} new episodes aired (latest ${code}) and aren't in the library yet.`,
-      audience: 'download',
-    });
-  }
-  if (pushed) {
-    saveJSON(EPISODE_ALERTS_FILE, episodeAlertSeen);
-    notifyClients('notifications-updated');
-    console.log(`[Episodes] Tracker: ${pushed} new episode alert(s)`);
-  }
-}
+const { episodeTrackerTick } = require('./lib/routes/episodes')(app, {
+  requirePermission, ensureLibrary, episodeIndex, buildHoldings, scanLibrary, getShowMeta: episodeShowMeta,
+  notifyClients, notifyLog,
+  loadAlerts: () => loadJSON(EPISODE_ALERTS_FILE, {}), saveAlerts: seen => saveJSON(EPISODE_ALERTS_FILE, seen),
+});
 
 app.post('/api/organizer/preview', requireAdminSession, async (_req, res) => {
   if (!fs.existsSync(ORGANIZER_SCRIPT)) {
