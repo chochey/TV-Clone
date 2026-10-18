@@ -29,8 +29,9 @@ if changed v2/frontend; then (cd "$APP/v2/frontend" && npm run -s build); fi
 echo "$OLD" > "$STATE/previous-release"
 
 restart=()
-if changed server.js lib scripts package-lock.json hls.min.js; then restart+=(tvclone-prod); fi
-if changed media-organizer scripts/run-organizer-safe.sh; then restart+=(tvclone-organizer); fi
+# Only code the running processes load; docs and tests never need a restart.
+if changed server.js 'lib/*.js' ':(exclude)lib/*.test.js' 'scripts/*.js' package-lock.json hls.min.js; then restart+=(tvclone-prod); fi
+if changed 'media-organizer/*.py' ':(exclude)media-organizer/test_*.py' scripts/run-organizer-safe.sh; then restart+=(tvclone-organizer); fi
 for unit in "${restart[@]}"; do sudo systemctl restart "$unit"; done
 if [[ " ${restart[*]} " == *" tvclone-prod "* ]]; then
   for _ in $(seq 1 30); do curl -sf -o /dev/null "http://127.0.0.1:${PORT:-4800}/api/health" && break; sleep 2; done
