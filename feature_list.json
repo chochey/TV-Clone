@@ -394,7 +394,8 @@
       "category": "security",
       "priority": "low",
       "description": "No rate limiting on CPU-intensive authenticated endpoints — library scan, sprite generation, and intro detection can be spammed by any logged-in user causing DoS.",
-      "passes": false
+      "passes": true,
+      "note": "Scans were already one at a time (canScan + single-flight); player-started thumbnail jobs and intro detection are now limited to one at a time."
     },
     {
       "id": "sec-005",
@@ -472,7 +473,7 @@
     {
       "id": "audio-012",
       "category": "audiobooks",
-      "description": "Read-along text available across the library (only 4 of 55 books have prepared text; no generator is checked in)",
+      "description": "Read-along text available across the library (all Dungeon Crawler Carl books are word-timed; the other 46 books are being transcribed by tools/readalong/transcript, about 2-3 weeks from 2026-10-17)",
       "passes": false
     },
     {
