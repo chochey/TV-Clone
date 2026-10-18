@@ -32,9 +32,9 @@ const OMDB_BASE_URL = 'https://www.omdbapi.com/';
 const QBT_BASE = process.env.QBT_URL || 'http://localhost:8080';
 const QBT_USERNAME = process.env.QBT_USER || '';
 const QBT_PASSWORD = process.env.QBT_PASS || '';
-const { VIDEO_EXTENSIONS, AUDIO_EXTENSIONS, isAudioFile, normalizeFolderMediaKind,
+const { VIDEO_EXTENSIONS, AUDIO_EXTENSIONS, isAudioFile,
   extensionsForFolder, classifyMediaKind, playbackIssueForFile } = require('./lib/library-media');
-const { FolderError, validateFolderPath, normalizeFolder, publicSections, sectionId, overlapsFolder } = require('./lib/library-folders');
+const { sectionId } = require('./lib/library-folders');
 const SUPPORTED_EXT = [...VIDEO_EXTENSIONS, ...AUDIO_EXTENSIONS];
 const audioMetadata = require('./lib/audio-metadata')();
 const audioReadAlong = require('./lib/audio-read-along')({ DATA_DIR });
@@ -1511,105 +1511,14 @@ app.get('/api/stats', requireAuth, (_req, res) => {
 });
 
 // ══════════════════════════════════════════════════════════════════════
-// ── Config APIs (folders) ────────────────────────────────────────────
+// ── Config APIs (folders, lib/routes/library-folders.js) ─────────────
 // ══════════════════════════════════════════════════════════════════════
 
-const folderPathOptions = { privatePaths: [...new Set([__dirname, DATA_DIR, path.dirname(TRANSCODE_DIR), path.dirname(PATHS.organizerLog), '/home/blue/.ssh', '/home/blue/.codex'])] };
-const folderStore = require('./lib/library-folder-store')({
-  getConfig: () => config,
-  persist: next => saveJSONStrict(CONFIG_FILE, next),
-  onChange: () => {
-    try { setupWatchers(); } catch (error) { console.warn(`[library] Watcher refresh failed: ${error.message}`); }
-    try { notifyClients('library-updated'); } catch {}
-    (async () => {
-      if (rescanPromise) { try { await rescanPromise; } catch {} }
-      await rescanLibraryAsync('library-folders');
-    })().catch(error => console.warn(`[library] Refresh failed: ${error.message}`));
-  },
-});
-app.get('/api/library/sections', requireAuth, async (_req, res) => {
-  const sections = publicSections(config.folders, scanLibrary());
-  await Promise.all(sections.map(async (section, index) => {
-    try {
-      const folder = config.folders.filter(folder => typeof folder.path === 'string' && folder.path)[index];
-      section.available = (await fs.promises.stat(folder.path)).isDirectory();
-    } catch { section.available = false; }
-  }));
-  res.json({ ok: true, sections });
-});
-
-app.get('/api/config', requireAdmin, (_req, res) => {
-  const lib = scanLibrary();
-  const result = config.folders.map(f => {
-    let exists = false;
-    try { exists = fs.existsSync(f.path) && fs.statSync(f.path).isDirectory(); } catch {}
-    const fileCount = lib.filter(item => item.folderPath === f.path).length;
-    return { ...f, id: sectionId(f.path), mediaKind: normalizeFolderMediaKind(f), exists, fileCount };
-  });
-  res.json(result);
-});
-
-app.post('/api/config', requireAdmin, async (req, res) => {
-  const { folders } = req.body;
-  if (!Array.isArray(folders)) return res.status(400).json({ error: 'folders must be an array' });
-  try {
-    await folderStore.update(() => {
-      const updated = folders.map(folder => normalizeFolder(folder, folderPathOptions));
-      if (updated.some((folder, index) => overlapsFolder(folder.path, updated.slice(0, index)))) {
-        throw new FolderError('This location overlaps an existing library; choose a separate folder', 409);
-      }
-      return updated;
-    });
-  } catch (error) { return res.status(error.status || 500).json({ error: error instanceof FolderError ? error.message : 'Could not save library locations' }); }
-  res.json({ ok: true });
-});
-
-app.post('/api/config/add', requireAdmin, async (req, res) => {
-  let entry;
-  try { entry = normalizeFolder(req.body, folderPathOptions); }
-  catch (error) { return res.status(error.status || 400).json({ error: error.message }); }
-  try {
-    await folderStore.update(current => {
-      if (overlapsFolder(entry.path, current)) throw new FolderError('This location overlaps an existing library; choose a separate folder', 409);
-      return [...current, entry];
-    });
-  } catch (error) { return res.status(error.status || 500).json({ error: error instanceof FolderError ? error.message : 'Could not save library location' }); }
-  res.json({ ok: true, folder: { ...entry, id: sectionId(entry.path) } });
-});
-
-app.post('/api/config/remove', requireAdmin, async (req, res) => {
-  if (typeof req.body?.path !== 'string' || !req.body.path.trim()) return res.status(400).json({ error: 'Path is required' });
-  let removed = 0;
-  try {
-    await folderStore.update(current => {
-      const next = current.filter(folder => folder.path !== req.body.path);
-      removed = current.length - next.length;
-      return next;
-    });
-  } catch { return res.status(500).json({ error: 'Could not save library locations' }); }
-  res.json({ ok: true, removed });
-});
-
-app.get('/api/browse', requireAdmin, (req, res) => {
-  let resolved;
-  try { resolved = validateFolderPath(req.query.path === undefined ? '/mnt/media' : req.query.path, { ...folderPathOptions, allowPrivateAncestors: true }); }
-  catch (error) { return res.status(error.status || 400).json({ error: error.message }); }
-  try {
-    if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) {
-      return res.status(404).json({ error: 'Not a valid directory' });
-    }
-    const entries = fs.readdirSync(resolved, { withFileTypes: true });
-    const dirs = [];
-    let videoCount = 0, audioCount = 0;
-    for (const entry of entries) {
-      if (entry.name.startsWith('.')) continue;
-      if (entry.isDirectory()) dirs.push(entry.name);
-      else if (isAudioFile(entry.name)) audioCount++;
-      else if (VIDEO_EXTENSIONS.includes(path.extname(entry.name).toLowerCase())) videoCount++;
-    }
-    dirs.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
-    res.json({ current: resolved, parent: path.dirname(resolved), dirs, videoCount, audioCount, mediaCount: videoCount + audioCount });
-  } catch { res.status(403).json({ error: 'Cannot read directory' }); }
+require('./lib/routes/library-folders')(app, {
+  requireAuth, requireAdmin, getConfig: () => config, persist: next => saveJSONStrict(CONFIG_FILE, next), scanLibrary,
+  privatePaths: [__dirname, DATA_DIR, path.dirname(TRANSCODE_DIR), path.dirname(PATHS.organizerLog), '/home/blue/.ssh', '/home/blue/.codex'],
+  setupWatchers: () => setupWatchers(), notifyClients: event => notifyClients(event),
+  currentScan: () => rescanPromise, rescanLibraryAsync,
 });
 
 // ══════════════════════════════════════════════════════════════════════
