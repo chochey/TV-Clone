@@ -69,7 +69,8 @@ def setup_logging(log_dir=None, preview=None, desktop_copy=None) -> list:
         preview = os.environ.get("ORGANIZER_PREVIEW") == "1"
     if desktop_copy is None:
         desktop_copy = os.environ.get("ORGANIZER_DESKTOP_LOG") == "1"
-    directory = pathlib.Path(log_dir) if log_dir else pathlib.Path(__file__).parent
+    # ORGANIZER_LOG_DIR: a separate live install keeps the log with its state, not the code.
+    directory = pathlib.Path(log_dir or os.environ.get("ORGANIZER_LOG_DIR") or pathlib.Path(__file__).parent)
     root = logging.getLogger()
     for existing in list(root.handlers):
         if getattr(existing, _OWN_HANDLER, False):
@@ -2254,7 +2255,7 @@ def run_watch() -> None:
     from organizer_retry_spool import RetrySpool
     try:
         _retry_queue = RetrySpool(config.SOURCE_DIR,
-            os.environ.get("ORGANIZER_RETRY_DIR") or Path(__file__).resolve().parent.parent / "data" / "organizer-retries", log=log)
+            config.RETRY_DIR, log=log)
     except (OSError, ValueError):
         log.warning("[Retry] Targeted retry queue unavailable; normal imports continue")
         _retry_queue = None

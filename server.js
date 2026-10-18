@@ -14,9 +14,11 @@ const app = express();
 // Trust reverse proxy headers (X-Forwarded-For) for accurate req.ip in rate limiting
 if (process.env.TRUST_PROXY) app.set('trust proxy', process.env.TRUST_PROXY === 'true' ? true : process.env.TRUST_PROXY);
 const PORT = parseInt(process.env.PORT, 10) || 4800;
-const CONFIG_FILE = process.env.TVCLONE_CONFIG_FILE || path.join(__dirname, 'config.json');
-const DATA_DIR = path.join(__dirname, 'data');
-const TRANSCODE_DIR = path.join(__dirname, PORT === 4800 ? 'transcode_tmp' : `transcode_tmp_${PORT}`);
+// State locations (lib/paths.js): inside this folder unless /etc/tvclone/tvclone.env says otherwise.
+const PATHS = require('./lib/paths')({ appDir: __dirname, port: PORT });
+const CONFIG_FILE = PATHS.configFile;
+const DATA_DIR = PATHS.dataDir;
+const TRANSCODE_DIR = PATHS.transcodeDir;
 const COOKIE_NAME = PORT === 4800 ? 'session' : `session_${PORT}`;
 const ADMIN_COOKIE_NAME = PORT === 4800 ? 'adminSession' : `adminSession_${PORT}`;
 const OMDB_CACHE_FILE = path.join(DATA_DIR, 'omdb_cache.json');
@@ -1816,7 +1818,7 @@ app.get('/api/stats', requireAuth, (_req, res) => {
 // ── Config APIs (folders) ────────────────────────────────────────────
 // ══════════════════════════════════════════════════════════════════════
 
-const folderPathOptions = { privatePaths: [__dirname, '/home/blue/.ssh', '/home/blue/.codex'] };
+const folderPathOptions = { privatePaths: [...new Set([__dirname, DATA_DIR, path.dirname(TRANSCODE_DIR), path.dirname(PATHS.organizerLog), '/home/blue/.ssh', '/home/blue/.codex'])] };
 const folderStore = require('./lib/library-folder-store')({
   getConfig: () => config,
   persist: next => saveJSONStrict(CONFIG_FILE, next),
@@ -3848,7 +3850,7 @@ app.post('/api/metadata/refresh-missing', requirePermission('canScan'), async (r
 });
 
 // ── Media Organizer ──────────────────────────────────────────────────────
-const ORGANIZER_LOG     = process.env.ORGANIZER_LOG     || '/home/blue/Desktop/Repos/TV-Clone-prod/media-organizer/media-organizer.log';
+const ORGANIZER_LOG     = PATHS.organizerLog;
 const organizerStatus = require('./lib/organizer-status');
 const ORGANIZER_STATUS_FILE = process.env.ORGANIZER_STATUS_FILE || path.join(DATA_DIR, 'organizer-status.json');
 const ORGANIZER_SERVICE = process.env.ORGANIZER_SERVICE || 'tvclone-organizer.service';
@@ -3878,8 +3880,8 @@ const { setup: setupOrganizerWatch } = organizerWatchFactory({
     notifyClients('notifications-updated');
   },
 });
-const ORGANIZER_SCRIPT  = process.env.ORGANIZER_SCRIPT  || path.join(path.dirname(ORGANIZER_LOG), 'movie_renamer.py');
-const ORGANIZER_ALIAS_FILE = process.env.ORGANIZER_ALIAS_FILE || path.join(path.dirname(ORGANIZER_LOG), 'organizer_aliases.json');
+const ORGANIZER_SCRIPT  = PATHS.organizerScript;
+const ORGANIZER_ALIAS_FILE = PATHS.organizerAliasFile;
 const organizerTools = require('./lib/organizer-tools');
 
 function getOrganizerAliases() {

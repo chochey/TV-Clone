@@ -44,7 +44,9 @@ TV_DEST_DIRS    = [d.strip() for d in os.environ.get('ORGANIZER_TV_DEST_DIRS',  
 OMDB_API_KEY  = os.environ.get('OMDB_API_KEY', '')
 # https: the key travels in the query string, so it should not cross the network in the clear
 OMDB_BASE_URL = os.environ.get('OMDB_BASE_URL', 'https://www.omdbapi.com/')
-_DATA = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data')
+# The server's data folder: beside the code unless a separate live install says
+# otherwise (TVCLONE_DATA_DIR in /etc/tvclone/tvclone.env; see lib/paths.js).
+_DATA = os.environ.get('TVCLONE_DATA_DIR') or os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data')
 # Episode titles per season (one request per season) and the daily request count
 OMDB_SEASON_CACHE = os.environ.get('ORGANIZER_OMDB_SEASON_CACHE', os.path.join(_DATA, 'organizer-omdb-seasons.json'))
 OMDB_USAGE_FILE = os.environ.get('ORGANIZER_OMDB_USAGE', os.path.join(_DATA, 'organizer-omdb-usage.json'))
@@ -57,8 +59,10 @@ STATUS_INTERVAL = float(os.environ.get('ORGANIZER_STATUS_INTERVAL', '30'))
 BACKFILL_DIR = os.environ.get('ORGANIZER_BACKFILL_DIR', _DATA)
 
 # Part-files being written right now (see safe_copy.py), so an interrupted run can clean up
-INFLIGHT_FILE = os.environ.get('ORGANIZER_INFLIGHT_FILE',
-    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'data', 'organizer-inflight.json'))
+INFLIGHT_FILE = os.environ.get('ORGANIZER_INFLIGHT_FILE', os.path.join(_DATA, 'organizer-inflight.json'))
+
+# "Retry this release" requests from the Organizer page (see organizer_retry_spool.py)
+RETRY_DIR = os.environ.get('ORGANIZER_RETRY_DIR') or os.path.join(_DATA, 'organizer-retries')
 
 # Bonus videos inside a TV pack (featurettes, deleted scenes) are filed under <Series>/Extras
 # instead of staying in the download folder. Set to 0 to leave them where they are.
