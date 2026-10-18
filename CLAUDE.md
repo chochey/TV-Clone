@@ -4,9 +4,18 @@ Read this file at the start of every session for important context.
 
 ## Project Overview
 
-Self-hosted media server (Node.js + Express, single-file `server.js` backend +
-Svelte 5 SPA in `v2/frontend/`). Serves 9000+ media files via direct play or
-HLS transcoding with FFmpeg.
+Self-hosted media server (Node.js + Express backend + Svelte 5 SPA in `v2/frontend/`). Serves 9000+ media
+files via direct play or HLS transcoding with FFmpeg.
+
+**Backend layout (October 2026):** `server.js` is startup and wiring plus the core that is still in it
+(library scanner, HLS sessions, library conversion). Route groups live in `lib/routes/<name>.js`, each
+exporting `register(app, deps)` and returning any helpers server.js needs; services with state live in
+`lib/` (e.g. `lib/sprites.js`). Dependencies are passed explicitly. Values server.js reassigns
+(`fileIndex`, `libraryCache`, `libraryVersion`, `transcodeSessions`, `lastPlaybackAt`...) and anything
+defined later in server.js are passed as getters/lazy wrappers (`fileIndex: () => fileIndex`), or startup
+hits a "used before defined" crash. Tests call the module directly (`lib/routes/*.test.js`) instead of
+slicing server.js text. `scripts/smoke-boot.sh` boots a checkout on temporary state, signs in a throwaway
+admin and checks the library; `deploy-live.sh` runs it before every restart.
 
 **Live install vs workshop (October 2026):** `tvclone-prod.service` runs
 `server.js` from **`/srv/chocheytv/app`** (port 4800), a git worktree of this
