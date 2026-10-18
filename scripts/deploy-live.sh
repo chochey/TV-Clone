@@ -19,7 +19,7 @@ FORCE=0
 if [ "${1:-}" = "--force" ]; then FORCE=1; shift; fi
 REV="${1:-master}"
 if [ "$REV" = "--rollback" ]; then REV="$(cat "$STATE/previous-release")"; fi
-DATA_DIR="$(sed -n 's/^TVCLONE_DATA_DIR=//p' /etc/tvclone/tvclone.env 2>/dev/null)"; DATA_DIR="${DATA_DIR:-$STATE/data}"
+DATA_DIR="$(sed -n 's/^TVCLONE_DATA_DIR=//p' /etc/tvclone/tvclone.env 2>/dev/null || true)"; DATA_DIR="${DATA_DIR:-$STATE/data}"   # /etc/tvclone is root-only
 
 # Minutes since anyone last played anything (players save progress every few
 # seconds while playing). A restart ends every stream, so it waits for quiet.
