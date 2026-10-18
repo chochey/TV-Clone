@@ -1,6 +1,6 @@
 <script>
   import { updateWatchState } from '../stores.js';
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount, onDestroy, untrack } from 'svelte';
   import { api, streamUrl } from '../api.js';
   import { session, dismissed, AUTO_WATCHED_PERCENT } from '../stores.js';
   import { startPlayback, STARTUP_ERROR, startupFragmentCount, startHlsFromPosition } from '../playback-startup.js';
@@ -30,7 +30,7 @@
     && !full?.subtitles?.[subIdx]?.bitmap);
   // HEVC can be copied straight through to a browser that can decode it,
   // instead of being re-encoded to H.264 for the whole runtime.
-  const isHevc = (item.codec || '').toLowerCase() === 'hevc';
+  const isHevc = $derived((item.codec || '').toLowerCase() === 'hevc');
   // Set when passthrough has already failed on this item, so the retry after a
   // failure asks for a plain transcode instead of looping on the same fault.
   // hevcBlockedBy: 'decode' (the browser failed to decode it) or 'stall' (weaker
@@ -658,7 +658,7 @@
     }
   }
   const spriteLoader = createSpriteLoader({
-    id: item.id,
+    id: untrack(() => item.id),   // the player is remounted per item
     isCurrent: () => !destroyed,
     onData: data => { if (data.totalSheets > 0 && (!sprite || data.status === 'ready')) sprite = data; },
     preload: preloadSheets,

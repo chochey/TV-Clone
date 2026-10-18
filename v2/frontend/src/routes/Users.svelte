@@ -1,4 +1,5 @@
 <script>
+  import { autofocus } from '../lib/autofocus.js';
   import { onMount } from 'svelte';
   import { api } from '../lib/api.js';
   import { session } from '../lib/stores.js';
@@ -95,7 +96,7 @@
     <form class="editor" onsubmit={save}>
       <h2>{edit.id ? `Edit ${edit.name || 'user'}` : 'New user'}</h2>
       <div class="fields">
-        <label>Display name<input type="text" bind:value={edit.name} autofocus /></label>
+        <label>Display name<input type="text" bind:value={edit.name} use:autofocus /></label>
         <label>Username<input type="text" bind:value={edit.username} placeholder={edit.name ? edit.name.toLowerCase().replace(/[^a-z0-9]/g, '') : 'username'} autocomplete="off" /></label>
         <label>{edit.id ? 'New password (leave blank to keep)' : 'Password'}
           <input type="password" bind:value={edit.password} autocomplete="new-password" />

@@ -215,7 +215,8 @@
       <div class="rated-list">
         {#each mostWatched as item, i}
           <div class="rated-row" role="button" tabindex="0"
-               onclick={() => navigate(`/title/${encodeURIComponent(item.id)}`)}>
+               onclick={() => navigate(`/title/${encodeURIComponent(item.id)}`)}
+               onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate(`/title/${encodeURIComponent(item.id)}`); } }}>
             <span class="rank">#{i + 1}</span>
             <div class="rated-thumb">
               {#if posterUrl(item)}

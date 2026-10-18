@@ -69,7 +69,10 @@
 
 <div class="controls">
   <!-- Scrubber -->
-  <div class="scrub" bind:this={bar}
+  <!-- Arrow keys seek through the player's own key handler. -->
+  <div class="scrub" bind:this={bar} role="slider" tabindex="0" aria-label="Seek"
+       aria-valuemin="0" aria-valuemax={Math.round(total || 0)} aria-valuenow={Math.round(shownTime || 0)}
+       aria-valuetext={`${fmtTime(shownTime)} of ${fmtTime(total)}`}
        onpointerdown={barDown} onpointermove={barMove} onpointerup={barUp}
        onpointerleave={() => { hoverT = -1; }}>
     <div class="rail">
@@ -145,7 +148,7 @@
           <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zM4 12h4v2H4v-2zm10 6H4v-2h10v2zm6 0h-4v-2h4v2zm0-4H10v-2h10v2z"/></svg>
         </button>
         {#if openMenu === 'subs'}
-          <div class="menu" onclick={(e) => e.stopPropagation()}>
+          <div class="menu">
             <button class:active={subIdx === -1} onclick={() => onsub(-1)}>Off</button>
             {#each subtitles as s, i (s.url)}
               <button class:active={subIdx === i} onclick={() => onsub(i)}>{s.label}</button>
@@ -162,7 +165,7 @@
           <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M12 3a9 9 0 0 0-9 9v7c0 1.1.9 2 2 2h4v-8H5v-1a7 7 0 0 1 14 0v1h-4v8h4c1.1 0 2-.9 2-2v-7a9 9 0 0 0-9-9z"/></svg>
         </button>
         {#if openMenu === 'audio'}
-          <div class="menu" onclick={(e) => e.stopPropagation()}>
+          <div class="menu">
             {#each audioTracks as a (a.index)}
               <button class:active={audioTrack === a.index || (audioTrack == null && a.isDefault)}
                       aria-pressed={audioTrack === a.index || (audioTrack == null && a.isDefault)}
@@ -181,7 +184,7 @@
         <span class:on={speed !== 1}>{speed}×</span>
       </button>
       {#if openMenu === 'speed'}
-        <div class="menu" onclick={(e) => e.stopPropagation()}>
+        <div class="menu">
           {#each SPEEDS as s (s)}
             <button class:active={speed === s} onclick={() => onspeed(s)}>{s === 1 ? 'Normal' : `${s}×`}</button>
           {/each}
@@ -197,7 +200,7 @@
         <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.488.488 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6A3.61 3.61 0 0 1 8.4 12c0-1.98 1.62-3.6 3.6-3.6s3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
       </button>
       {#if openMenu === 'quality'}
-        <div class="menu" onclick={(e) => e.stopPropagation()}>
+        <div class="menu">
           {#each QUALITIES as q (q.key)}
             <button class:active={quality === q.key} onclick={() => onquality(q.key)}>{q.label}</button>
           {/each}

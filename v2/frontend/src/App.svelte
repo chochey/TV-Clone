@@ -3,6 +3,7 @@
   import { api } from './lib/api.js';
   import { library, catalog, session, loadLibrary, resetSessionState, searchQuery, searchFilters, collapseShows } from './lib/stores.js';
   import { searchLibrary } from './lib/search.js';
+  import { autofocus } from './lib/autofocus.js';
   import { EMPTY_FILTERS } from './lib/search-filters.js';
   import { posterUrl } from './lib/api.js';
   import { route, navigate } from './lib/router.js';
@@ -231,7 +232,7 @@
   let scanGeneration = 0, scanSubmitting = false;
   let confirmRestart = $state(false);
   let searchExpanded = $state(false);
-  let searchInput, accountButton;
+  let searchInput = $state(null), accountButton = $state(null);
   async function openMobileSearch() {
     menuOpen = false; bellOpen = false; searchExpanded = true;
     await tick(); searchInput?.focus();
@@ -378,7 +379,8 @@
   }
 </script>
 
-<svelte:window bind:scrollY onkeydown={dismissPanels} onclick={() => { menuOpen = false; confirmRestart = false; bellOpen = false; }} />
+<!-- A click anywhere closes the header menus, except inside a panel marked data-keep-open. -->
+<svelte:window bind:scrollY onkeydown={dismissPanels} onclick={(e) => { if (e.target.closest?.('[data-keep-open]')) return; menuOpen = false; confirmRestart = false; bellOpen = false; }} />
 
 {#if phase === 'loading'}
   <div class="splash">
@@ -402,7 +404,7 @@
       <div class="marksub meta">Media Server</div>
       <input
         type="text" placeholder="Username" autocomplete="username"
-        bind:value={username} autofocus
+        bind:value={username} use:autofocus
       />
       <input
         type="password" placeholder="Password" autocomplete="current-password"
@@ -430,7 +432,7 @@
       {:else if !sectionsReady}<span class="nav-status" role="status">Loading libraries…</span>{/if}
       <button class="mobile-search" onclick={openMobileSearch}>Search</button>
     </nav>
-    <div class="searchbox" class:open={searchDropOpen} onclick={(e) => e.stopPropagation()}>
+    <div class="searchbox" class:open={searchDropOpen} data-keep-open>
       <svg class="sicon" viewBox="0 0 24 24" width="17" height="17" fill="currentColor" aria-hidden="true"><path d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"/></svg>
       <input
         class="searchinput" type="search" placeholder="Search your library" enterkeyhint="search"
@@ -478,7 +480,7 @@
         {#if $unreadCount > 0}<span class="ndot">{$unreadCount > 9 ? '9+' : $unreadCount}</span>{/if}
       </button>
       {#if bellOpen}
-        <div class="npanel" onclick={(e) => e.stopPropagation()}>
+        <div class="npanel" data-keep-open>
           <div class="nhead">
             <span class="meta">Notifications</span>
             {#if $notifications.length}<button class="nclear" onclick={clearNotifications}>Clear</button>{/if}
@@ -510,7 +512,7 @@
         {#if pendingCount > 0}<span class="badge">{pendingCount}</span>{/if}
       </button>
       {#if menuOpen}
-        <div class="dropdown" id="account-menu" onclick={(e) => e.stopPropagation()}>
+        <div class="dropdown" id="account-menu" data-keep-open>
           <div class="who meta">{$session?.name}</div>
           <button onclick={() => go('/history')}>History</button>
           <button onclick={() => go('/stats')}>Watch Stats</button>

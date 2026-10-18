@@ -563,7 +563,6 @@
   .compatibility h2 { font-size:1rem; margin-bottom:8px; }
   button:focus-visible,select:focus-visible,input:focus-visible { outline:3px solid #bd9cff; outline-offset:4px; }
   button:disabled,input:disabled,select:disabled { opacity:.45; cursor:default; }
-  .sr-only { position:absolute; width:1px; height:1px; padding:0; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
   @media(max-width:640px) {
     .audio-player { padding:16px; align-items:flex-start; }
     .panel { margin:auto; border-radius:16px; }

@@ -279,10 +279,10 @@
   {/if}
 
   {#if showDeleteConfirm}
-    <div class="modal-backdrop" onclick={() => { if (!deleting) showDeleteConfirm = false; }}
+    <div class="modal-backdrop" role="presentation" onclick={(ev) => { if (ev.target === ev.currentTarget && !deleting) showDeleteConfirm = false; }}
          onkeydown={(ev) => ev.key === 'Escape' && !deleting && (showDeleteConfirm = false)}>
-      <div class="modal" onclick={(ev) => ev.stopPropagation()}>
-        <h2>Delete {isShow ? 'Show' : isAudio ? 'Audio file' : 'Movie'}</h2>
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="delete-title">
+        <h2 id="delete-title">Delete {isShow ? 'Show' : isAudio ? 'Audio file' : 'Movie'}</h2>
         <p>Permanently delete <strong>{title}</strong>{isShow ? ` (${deleteCount} episode${deleteCount !== 1 ? 's' : ''})` : ''} from the server?</p>
         <p class="warn">This removes the file{deleteCount > 1 ? 's' : ''} from disk. This cannot be undone.</p>
         <div class="modal-actions">
