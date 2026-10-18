@@ -4,6 +4,7 @@
 #   scripts/deploy-live.sh            deploy master
 #   scripts/deploy-live.sh <commit>   deploy that commit or tag
 #   scripts/deploy-live.sh --rollback go back to the release before the last deploy
+#   scripts/deploy-live.sh --force ...  restart even if someone played something in the last 15 minutes
 #
 # The workshop (TV-Clone-prod) is where code is edited and committed; the live
 # install (/srv/chocheytv/app) only ever holds a committed revision, checked out
@@ -14,8 +15,24 @@ set -euo pipefail
 WORKSHOP="${TVCLONE_WORKSHOP:-/home/blue/Desktop/Repos/TV-Clone-prod}"
 APP="${TVCLONE_LIVE_APP:-/srv/chocheytv/app}"
 STATE="$(dirname "$APP")"
+FORCE=0
+if [ "${1:-}" = "--force" ]; then FORCE=1; shift; fi
 REV="${1:-master}"
 if [ "$REV" = "--rollback" ]; then REV="$(cat "$STATE/previous-release")"; fi
+DATA_DIR="$(sed -n 's/^TVCLONE_DATA_DIR=//p' /etc/tvclone/tvclone.env 2>/dev/null)"; DATA_DIR="${DATA_DIR:-$STATE/data}"
+
+# Minutes since anyone last played anything (players save progress every few
+# seconds while playing). A restart ends every stream, so it waits for quiet.
+minutes_since_playback() {
+  node -e '
+    const fs = require("fs"), path = require("path"), dir = process.argv[1];
+    let last = 0;
+    for (const f of fs.readdirSync(dir)) {
+      if (!/^profile_.*\.json$/.test(f)) continue;
+      try { for (const e of Object.values(JSON.parse(fs.readFileSync(path.join(dir, f), "utf8")).progress || {})) last = Math.max(last, e.updatedAt || 0); } catch {}
+    }
+    console.log(last ? Math.floor((Date.now() - last) / 60000) : 99999);' "$DATA_DIR"
+}
 
 NEW="$(git -C "$WORKSHOP" rev-parse --verify "$REV^{commit}")"
 OLD="$(git -C "$APP" rev-parse HEAD)"
@@ -35,9 +52,19 @@ fi
 echo "$OLD" > "$STATE/previous-release"
 
 restart=()
+QUIET_MINUTES=15
 # Only code the running processes load; docs and tests never need a restart.
 if changed server.js 'lib/*.js' ':(exclude)lib/*.test.js' 'scripts/*.js' package-lock.json hls.min.js; then restart+=(tvclone-prod); fi
 if changed 'media-organizer/*.py' ':(exclude)media-organizer/test_*.py' scripts/run-organizer-safe.sh; then restart+=(tvclone-organizer); fi
+if [[ " ${restart[*]} " == *" tvclone-prod "* ]] && [ "$FORCE" = 0 ]; then
+  idle="$(minutes_since_playback)"
+  if [ "$idle" -lt "$QUIET_MINUTES" ]; then
+    git -C "$APP" checkout -q --detach "$OLD"
+    if changed v2/frontend; then (cd "$APP/v2/frontend" && npm run -s build); fi
+    echo "Not deployed: someone played something ${idle} min ago and the server would restart. Try again later, or use --force." >&2
+    exit 1
+  fi
+fi
 for unit in "${restart[@]}"; do sudo systemctl restart "$unit"; done
 if [[ " ${restart[*]} " == *" tvclone-prod "* ]]; then
   for _ in $(seq 1 30); do curl -sf -o /dev/null "http://127.0.0.1:${PORT:-4800}/api/health" && break; sleep 2; done
