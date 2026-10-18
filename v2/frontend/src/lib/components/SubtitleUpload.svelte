@@ -1,13 +1,15 @@
 <script>
   // Admin dialog on the title page: add a subtitle file to the film, or to a
   // chosen episode of a series. See lib/subtitle-upload.js.
+  import { untrack } from 'svelte';
   import { api } from '../api.js';
   import { episodeCode, episodeTitle } from '../format.js';
   import { SUBTITLE_LANGUAGES, subtitleFileProblem, waitForSubtitle } from '../subtitle-upload.js';
 
   let { title, items, initialId = null, onclose } = $props();
 
-  let targetId = $state(initialId || items[0]?.id);
+  // The dialog is created each time it opens, so the starting choice is read once.
+  let targetId = $state(untrack(() => initialId || items[0]?.id));
   let lang = $state('eng');
   let file = $state(null);
   let busy = $state(false);
@@ -37,9 +39,9 @@
   }
 </script>
 
-<div class="backdrop" role="presentation" onclick={() => { if (!busy) onclose?.(); }}
+<div class="backdrop" role="presentation" onclick={(ev) => { if (ev.target === ev.currentTarget && !busy) onclose?.(); }}
      onkeydown={(ev) => ev.key === 'Escape' && !busy && onclose?.()}>
-  <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="subup-title" tabindex="-1" onclick={(ev) => ev.stopPropagation()}>
+  <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="subup-title" tabindex="-1">
     <h2 id="subup-title">Add subtitles</h2>
     <p class="for">{title}</p>
     {#if items.length > 1}

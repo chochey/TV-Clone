@@ -6,19 +6,8 @@
   "scripts": {
     "start": "node server.js",
     "test:unit": "node --test lib/*.test.js lib/routes/*.test.js lib/*.test.mjs v2/frontend/src/lib/*.test.mjs",
-    "test:e2e": "npx playwright test",
-    "test": "npm run test:unit && npm run test:e2e",
-    "test:auth": "npx playwright test tests/auth.spec.js",
-    "test:library": "npx playwright test tests/library.spec.js",
-    "test:playback": "npx playwright test tests/playback.spec.js",
-    "test:subtitles": "npx playwright test tests/subtitles.spec.js",
-    "test:progress": "npx playwright test tests/progress.spec.js",
-    "test:queue": "npx playwright test tests/queue.spec.js",
-    "test:history": "npx playwright test tests/history.spec.js",
-    "test:settings": "npx playwright test tests/settings.spec.js",
-    "test:downloads": "npx playwright test tests/downloads.spec.js",
-    "test:permissions": "npx playwright test tests/permissions.spec.js",
-    "test:report": "npx playwright show-report test-results/html-report"
+    "test": "npm run test:unit",
+    "test:ui": "cd v2/frontend && npm run -s build && npx playwright test --config playwright.player.config.mjs && npx playwright test --config playwright.features.config.mjs"
   },
   "dependencies": {
     "express": "^4.22.3"

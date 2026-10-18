@@ -140,7 +140,6 @@ if (!fs.existsSync(OMDB_POSTER_DIR)) fs.mkdirSync(OMDB_POSTER_DIR, { recursive: 
 const DEFAULT_CONFIG = {
   folders: [],
   profiles: [{ id: 'default', name: 'User', pin: '', avatar: '#00a4dc', role: 'admin', password: '' }],
-  genres: {},  // fileId -> [genre strings]
 };
 
 const { loadJSON, saveJSON, saveJSONStrict, saveJSONSync, saveRaw } = require('./lib/json-store');
@@ -167,7 +166,6 @@ let config = loadJSON(CONFIG_FILE, DEFAULT_CONFIG);
 if (!config.profiles || config.profiles.length === 0) {
   config.profiles = DEFAULT_CONFIG.profiles;
 }
-if (!config.genres) config.genres = {};
 
 // Ensure existing profiles have role and password fields, migrate plaintext PINs
 let configDirty = false;
@@ -543,7 +541,7 @@ async function doRescan(trigger) {
       }
 
       // Genres from config
-      const genres = config.genres[id] || folder.genres || [];
+      const genres = folder.genres || [];
 
       const streamMode = playbackIssue ? 'unsupported' : mediaKind === 'audio' ? 'direct' : getStreamMode(fullPath);
       const codec = mediaKind === 'audio' ? null : probeCache[fullPath] || null;
