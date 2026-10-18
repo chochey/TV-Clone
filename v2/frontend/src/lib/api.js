@@ -42,6 +42,7 @@ export const api = {
   },
   item: (id) => fetch(`/api/item/${encodeURIComponent(id)}`, opts('GET')).then(json),
   librarySections: () => fetch('/api/library/sections', opts('GET')).then(json),
+  libraryCredits: () => fetch('/api/library/credits', opts('GET')).then(json),
   libraryLocations: () => fetch('/api/config', opts('GET')).then(json),
   libraryLocationAdd: (body) => fetch('/api/config/add', opts('POST', body)).then(json),
   libraryLocationRemove: (path) => fetch('/api/config/remove', opts('POST', { path })).then(json),

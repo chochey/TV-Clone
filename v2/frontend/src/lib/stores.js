@@ -6,6 +6,7 @@ import { startLiveUpdates } from './live-updates.js';
 import { unpackCatalog } from './catalog-response.js';
 import { isSeriesItem, isAudioItem, mediaKindOf, seriesKey } from './series-playback.js';
 import { createAudioCardMetadataLoader, audioCardIdentity, mergeAudioCardMetadata } from './audio-card-metadata.js';
+import { EMPTY_FILTERS } from './search-filters.js';
 
 export const session = writable(null);     // { loggedIn, profileId, name, role }
 const liveLibrary = writable([]);
@@ -53,6 +54,8 @@ export function updateWatchState(id, patch) {
 }
 export const libraryLoaded = writable(false);
 export const searchQuery = writable('');   // shared: header search box <-> Search page
+// Advanced search filters (lib/search-filters.js), kept while browsing like the query.
+export const searchFilters = writable({ ...EMPTY_FILTERS });
 
 // Per-profile row dismissals, mirrored from the server so a hidden row stays
 // hidden across devices. Shape: { continueWatching: {id:true}, recentlyAdded: {} }

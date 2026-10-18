@@ -1,8 +1,9 @@
 <script>
   import { onMount, tick, untrack } from 'svelte';
   import { api } from './lib/api.js';
-  import { library, catalog, session, loadLibrary, resetSessionState, searchQuery, collapseShows } from './lib/stores.js';
+  import { library, catalog, session, loadLibrary, resetSessionState, searchQuery, searchFilters, collapseShows } from './lib/stores.js';
   import { searchLibrary } from './lib/search.js';
+  import { EMPTY_FILTERS } from './lib/search-filters.js';
   import { posterUrl } from './lib/api.js';
   import { route, navigate } from './lib/router.js';
   import { nextEpisodeOf, prevEpisodeOf } from './lib/format.js';
@@ -369,6 +370,7 @@
     session.set(null);
     username = ''; password = '';
     searchQuery.set('');   // don't leak the last user's search to the next
+    searchFilters.set({ ...EMPTY_FILTERS });
     navigate('/');
     phase = 'login';
   }
