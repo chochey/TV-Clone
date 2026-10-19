@@ -27,6 +27,7 @@ import safe_copy
 from movie_import_guard import check_movie
 from omdb_support import OMDbUnavailableError
 from organizer_readiness import ready_for_import, existing_series
+from subtitle_variants import disambiguate_subtitles
 from titles import (
     clean_title,
     create_clean_filename,
@@ -1114,6 +1115,18 @@ def find_media_in_source() -> tuple[list[dict], list[dict]]:
                         "video_files": video_files,
                         "subtitle_files": get_all_files(item, config.SUBTITLE_EXTENSIONS),
                     })
+            elif not parse_tv_info(item.name):
+                # Subtitles with no video: the film was imported and these were left behind.
+                # move_movie attaches them to the library copy (or asks for a look if there is none).
+                subtitle_files = get_all_files(item, config.SUBTITLE_EXTENSIONS)
+                if subtitle_files:
+                    movies.append({
+                        "type": "folder",
+                        "path": item,
+                        "parse_name": item.name,
+                        "video_files": [],
+                        "subtitle_files": subtitle_files,
+                    })
 
     return movies, tv_shows
 
@@ -1206,6 +1219,7 @@ def move_without_overwrite(source: Path, destination: Path) -> None:
 
 def execute_import(item: dict, title: str, plan: list, dry_run: bool) -> bool:
     """One plan is used for preview and apply. Conflicts always preserve sources."""
+    plan = disambiguate_subtitles(plan)
     counts = {}
     for _, destination in plan:
         counts[destination] = counts.get(destination, 0) + 1
@@ -1363,11 +1377,13 @@ def move_movie(movie: dict, omdb_info: dict, dry_run: bool = False) -> bool:
     except OSError as error:
         review_item(movie, title, f"Cannot verify existing movie folders: {error}; source retained")
         return False
+    videos = [movie["path"]] if movie["type"] == "loose" else movie["video_files"]
+    if not videos:
+        return _attach_leftover_subtitles(movie, title, existing, dry_run)
     if existing:
         review_item(movie, title, f"Movie already exists at {existing}; source retained for comparison")
         return False
     destination = get_movie_dest(folder) / folder
-    videos = [movie["path"]] if movie["type"] == "loose" else movie["video_files"]
     # Multiple videos could be a collection, split movie, alternate cut or extras.
     # Never choose the largest and discard the rest.
     if len(videos) != 1:
@@ -1381,6 +1397,28 @@ def move_movie(movie: dict, omdb_info: dict, dry_run: bool = False) -> bool:
     for file in movie.get("subtitle_files", []):
         stem, suffix = get_file_parts(file)
         plan.append((file, destination / create_clean_filename(title, year, suffix, extract_language_suffix(stem))))
+    return execute_import(movie, title, plan, dry_run)
+
+
+def _attach_leftover_subtitles(movie: dict, title: str, library_copy: Path | None, dry_run: bool) -> bool:
+    """A release folder holding subtitles but no video: the film was imported and these were left
+    behind (two of one language used to be a conflict). They join the library copy, named after
+    its video, so the server attaches them; anything else about the folder is left as it is."""
+    if not library_copy:
+        review_item(movie, title, "Subtitles without a video, and no copy of the film in the library to attach them to; source retained")
+        return False
+    try:
+        videos = [p for p in library_copy.iterdir() if p.is_file() and p.suffix.lower() in config.VIDEO_EXTENSIONS]
+    except OSError as error:
+        review_item(movie, title, f"Cannot read the library copy at {library_copy}: {error}; source retained")
+        return False
+    if len(videos) != 1:
+        review_item(movie, title, f"Subtitles without a video; the library copy at {library_copy} has {len(videos)} videos, so they cannot be attached; source retained")
+        return False
+    plan = []
+    for file in movie["subtitle_files"]:
+        stem, suffix = get_file_parts(file)
+        plan.append((file, library_copy / f"{videos[0].stem}{extract_language_suffix(stem)}{suffix}"))
     return execute_import(movie, title, plan, dry_run)
 
 

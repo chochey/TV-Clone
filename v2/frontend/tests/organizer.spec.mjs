@@ -100,3 +100,48 @@ test('the feed fits a phone without sideways scrolling', async ({ page }) => {
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: test.info().outputPath('organizer-phone.png'), fullPage: true });
 });
+
+test('review notes about files of one release are one card with one retry', async ({ page }) => {
+  const retries = [];
+  const note = (n, file) => ({ id: `r${n}`, manualReview: true, type: 'movie', title: 'Masterplan', year: 2026, source: 'Masterplan (2026) [1080p] [WEBRip]',
+    reason: `Destination conflict: ${file} -> /mnt/media/Movies/Masterplan (2026)/Masterplan (2026).eng.srt; source retained`, file, count: 1, lastSeen: Date.now() - 60000, stillPresent: true, resolved: false });
+  const queue = [note(1, 'English (SDH).eng.srt'), note(2, 'English (forced).eng.srt'), note(3, 'Español (España).spa.srt'),
+    { id: 'other', manualReview: false, type: 'movie', title: 'Mystery Film', year: 2020, source: 'Mystery.Film.2020', reason: 'No confident OMDb match', count: 2, lastSeen: Date.now() - 120000, stillPresent: true, resolved: false, suggestedAlias: '' }];
+  await page.route('**/*', route => route.abort());
+  await page.route(`${origin}/**`, async route => {
+    const requested = new URL(route.request().url()).pathname;
+    const file = requested.startsWith('/assets/') ? path.join(dist, requested) : path.join(dist, 'index.html');
+    let body = await fs.readFile(file);
+    if (file.endsWith('index.html')) body = body.toString().replace(/<link[^>]+https:\/\/fonts\.(?:googleapis|gstatic)\.com[^>]*>/g, '');
+    return route.fulfill({ body, contentType: file.endsWith('.js') ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : 'text/html' });
+  });
+  await page.route('**/api/**', async route => {
+    const pathname = new URL(route.request().url()).pathname;
+    if (pathname === '/api/events') return route.fulfill({ status: 204 });
+    if (pathname === '/api/organizer/retry') { retries.push(route.request().postDataJSON().id); return route.fulfill({ json: { ok: true, requestId: `req-${retries.length}` } }); }
+    let body = {};
+    if (pathname === '/api/health') body = { ready: true };
+    else if (pathname === '/api/me') body = { loggedIn: true, role: 'admin', profileId: 'test', name: 'Test', permissions: ['canOrganizer'] };
+    else if (pathname === '/api/library') body = [];
+    else if (pathname === '/api/library/sections') body = { ok: true, sections: [] };
+    else if (pathname === '/api/organizer/status') body = { ok: true, active: true };
+    else if (pathname === '/api/organizer/logs') body = { ok: true, lines: [], total: 0, entries: [], entriesTotal: 0, meta: { lastHeartbeat: Date.now(), lastActivity: Date.now(), moves24h: 0, skips24h: 0, errors24h: 0, status: null, lastImport: null } };
+    else if (pathname === '/api/organizer/fix-queue') body = { ok: true, queue, aliases: [], leftovers: [], importedLeftovers: [], retries: [] };
+    else if (pathname === '/api/dismissed') body = { continueWatching: {}, recentlyAdded: {} };
+    else if (pathname === '/api/watchlist') body = [];
+    else if (pathname === '/api/notifications') body = { ok: true, notifications: [] };
+    else if (pathname === '/api/collections') body = { ok: true, collections: [] };
+    return route.fulfill({ json: body });
+  });
+  await page.goto(`${origin}/organizer`);
+  const review = page.locator('section.review');
+  await expect(review.getByText('Masterplan (2026)', { exact: true })).toHaveCount(1);
+  await expect(review.getByText('3 files could not be placed')).toBeVisible();
+  await expect(review.getByText(/English \(SDH\)\.eng\.srt/)).toBeVisible();
+  await expect(review.getByRole('button', { name: 'Retry this release' })).toHaveCount(1);
+  await expect(review.locator('.badge')).toHaveText('2');
+  await expect(review.getByText('Mystery Film (2020)', { exact: true })).toBeVisible();
+  await review.getByRole('button', { name: 'Retry this release' }).click();
+  await expect.poll(() => retries).toEqual(['r1']);
+  await expect(review.getByText(/Retry queued/).first()).toBeVisible();
+});

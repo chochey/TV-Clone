@@ -196,6 +196,25 @@ every library FILE and must not be used for that. The page shows the feed by day
 All / Imports / Problems / Organizer (the old `moves`/`errors`/`scans` names still work), search, and
 the raw log behind a toggle, scrolled to the newest end.
 
+### Subtitle variants and grouped review cards (October 2026)
+Two subtitles of one language in a release ("English (SDH)" and "English (forced)", "Español (España)"
+and "(Latinoamérica)", "中文（简体）" and "（繁體）") used to plan to one name, so the organizer left both
+in Share with a review note each. `media-organizer/subtitle_variants.py` runs on every plan in
+`execute_import`: the bracketed part of the subtitle's own name becomes a tag between the language and
+the extension (`Film (2026).eng.sdh.srt`, `.spa.latinoamerica.srt`, `.chi.simplified.srt`; the server's
+`detectSubLanguage` labels them "English · SDH" and so on), and names that still match are numbered
+(`.eng.2.srt`). Videos are never renamed. A Share folder that holds subtitles but no video (the film
+was imported and these were left behind) is a movie item with no `video_files`; `move_movie` hands it
+to `_attach_leftover_subtitles`, which names them after the single video in the library copy, or
+writes a review note when there is no copy. On the Organizer page, review notes about the files of one
+release are one card with the file list and one "Retry this release" (`reviewGroups` in
+`routes/Organizer.svelte`); the API still returns one entry per file.
+
+Film collections: Wikidata sometimes names one item as both a film's series and its franchise
+("Home Alone", "Predator"); `lib/collections.js build()` adds a film to a group once, and the page's
+`collectionCards` drops repeated ids too, because a repeated key makes Svelte throw and the collection
+page stays blank after the click.
+
 ### Look and feel (October 2026 redesign)
 Warm dark palette with one amber accent, set as tokens in `v2/frontend/src/styles/tokens.css`
 (`--bg #0e0c0b`, `--ink #f3ede4`, `--accent #e8b04a`, `--good/--warn/--bad`); Instrument Serif for

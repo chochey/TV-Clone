@@ -68,10 +68,43 @@ class ImportSafety(OrganizerTestCase):
  def test_missing_season_is_reviewed(self):
   src=self.folder('pack',{'Example.E04.mkv':b'episode'})
   self.assertFalse(m.move_tv_show(self.item(src,'Example.E04'),self.info));self.assertTrue((src/'Example.E04.mkv').exists())
- def test_conflicting_subtitles_both_preserved(self):
+ def test_two_subtitles_of_one_language_are_both_imported_under_distinct_names(self):
+  # They used to be left in Share with a review note each; now the second is numbered and nothing is lost.
   src=self.folder('movie',{'movie.mkv':b'movie','a.eng.srt':b'a','b.eng.srt':b'b'})
-  m.move_movie(self.item(src),self.info)
-  self.assertTrue((src/'a.eng.srt').exists());self.assertTrue((src/'b.eng.srt').exists())
+  self.assertTrue(m.move_movie(self.item(src),self.info))
+  dest=self.root/'movies/Example (2022)'
+  self.assertEqual({(dest/n).read_bytes() for n in ['Example (2022).eng.srt','Example (2022).eng.2.srt']},{b'a',b'b'})
+  self.assertFalse((src/'a.eng.srt').exists());self.assertFalse((src/'b.eng.srt').exists())
+ def test_subtitles_left_behind_join_the_film_already_in_the_library(self):
+  # The film was imported earlier and two English subtitles stayed in Share (they used to collide).
+  copy=self.folder('movies/Example (2022)',{'Example (2022).mkv':b'movie','Example (2022).ara.srt':b'ara'})
+  src=self.folder('leftover',{'Subs/English (SDH).eng.srt':b'sdh','Subs/English (forced).eng.srt':b'forced','site.jpg':b'ad'})
+  movies,shows=self.scan(src)
+  self.assertEqual(([m['path'] for m in movies],shows),([src],[]))
+  self.assertTrue(m.move_movie(movies[0],self.info))
+  self.assertEqual((copy/'Example (2022).eng.sdh.srt').read_bytes(),b'sdh');self.assertEqual((copy/'Example (2022).eng.forced.srt').read_bytes(),b'forced')
+  self.assertEqual((copy/'Example (2022).ara.srt').read_bytes(),b'ara');self.assertTrue((src/'site.jpg').exists())
+ def test_subtitles_left_behind_with_no_film_in_the_library_are_reviewed_and_kept(self):
+  src=self.folder('leftover',{'Subs/English.eng.srt':b'eng'})
+  movies,_=self.scan(src)
+  with self.assertLogs(m.log,level='WARNING') as logs:self.assertFalse(m.move_movie(movies[0],self.info))
+  self.assertIn('no copy of the film',logs.output[0]);self.assertTrue((src/'Subs/English.eng.srt').exists())
+ def test_a_folder_with_neither_video_nor_subtitles_is_not_media(self):
+  src=self.folder('junk',{'site.jpg':b'ad','notes.txt':b'n'})
+  self.assertEqual(self.scan(src),([],[]))
+ def scan(self,folder):
+  # The library for these cases is this test's movies folder, so the organizer can find the earlier import there.
+  movies_dir=str(self.root/'movies');Path(movies_dir).mkdir(exist_ok=True)
+  for name,value in [('MOVIE_DEST_DIR',movies_dir),('MOVIE_DEST_DIRS',[movies_dir])]:
+   p=patch.object(m.config,name,value);p.start();self.addCleanup(p.stop)
+  with patch.object(m.config,'SOURCE_DIR',str(folder.parent)),patch.object(m,'ready_for_import',return_value=True):
+   movies,shows=m.find_media_in_source()
+  return [x for x in movies if x['path']==folder],[x for x in shows if x['path']==folder]
+ def test_subtitle_variants_of_one_language_import_with_their_own_tags(self):
+  src=self.folder('movie',{'movie.mkv':b'movie','Subs/English (SDH).eng.srt':b'sdh','Subs/English (forced).eng.srt':b'forced'})
+  self.assertTrue(m.move_movie(self.item(src),self.info))
+  dest=self.root/'movies/Example (2022)'
+  self.assertEqual((dest/'Example (2022).eng.sdh.srt').read_bytes(),b'sdh');self.assertEqual((dest/'Example (2022).eng.forced.srt').read_bytes(),b'forced')
  def test_failed_copy_preserves_source_and_removes_partial(self):
   src=self.folder('movie',{'movie.mkv':b'movie'})/'movie.mkv';dst=self.root/'dest/movie.mkv'
   with patch.object(m.os,'link',side_effect=OSError(m.errno.EXDEV, 'different drive')), patch.object(m.shutil,'copyfileobj',side_effect=OSError('disk full')):

@@ -39,6 +39,27 @@
   const hot = $derived((fq?.queue || []).filter((e) => e.stillPresent && !e.resolved));
   const history = $derived((fq?.queue || []).filter((e) => !e.stillPresent || e.resolved));
   const duplicateReview = (entry) => entry.manualReview && /^Movie already exists at /i.test(entry.reason || '');
+  // Notes about the files of one release are one card: the release failed as a whole and is retried as a whole.
+  const reviewGroups = $derived.by(() => {
+    const groups = [], byRelease = new Map();
+    for (const e of hot) {
+      const key = e.manualReview && !duplicateReview(e) && e.source ? `${e.type}|${e.source}` : null;
+      const held = key && byRelease.get(key);
+      if (held) { held.entries.push(e); continue; }
+      const group = { lead: e, entries: [e] };
+      if (key) byRelease.set(key, group);
+      groups.push(group);
+    }
+    return groups;
+  });
+  const groupMeta = (g) => `tried ${Math.max(...g.entries.map(e => e.count || 1))}× · ${ago(Math.max(...g.entries.map(e => e.lastSeen || 0)))}`;
+  // "Destination conflict: English (SDH).eng.srt -> /library/Film (2026).eng.srt; source retained" -> what it means for that file.
+  const shortReason = (e) => {
+    const reason = String(e.reason || '').replace(/; source retained$/, '');
+    const conflict = /^Destination conflict: .* -> (.+)$/.exec(reason);
+    if (conflict) return `would be named ${conflict[1].split(/[\\/]/).pop()}`;
+    return e.file ? reason.replace(e.file, '').replace(/:\s*$/, '').trim() : reason;
+  };
 
   function applyFixQueue(d) {
     for (const e of d?.queue || []) {
@@ -240,8 +261,8 @@
     <section class="review">
       <h2>
         Needs review
-        {#if hot.length + (fq.leftovers?.length || 0) > 0}
-          <span class="badge">{hot.length + (fq.leftovers?.length || 0)}</span>
+        {#if reviewGroups.length + (fq.leftovers?.length || 0) > 0}
+          <span class="badge">{reviewGroups.length + (fq.leftovers?.length || 0)}</span>
         {/if}
       </h2>
 
@@ -249,13 +270,23 @@
         <p class="allclear">Nothing needs review.</p>
       {/if}
 
-      {#each hot as e (e.id)}
+      {#each reviewGroups as g (g.lead.id)}
+        {@const e = g.lead}
         <div class="rrow">
           <div class="rinfo">
             <span class="rtype">{e.type === 'show' ? 'Series' : 'Film'}</span>
             <span class="rtitle">{e.title}{e.year ? ` (${e.year})` : ''}</span>
-            <span class="rmeta">{duplicateReview(e) ? 'Already in library; new download kept for comparison' : e.reason} · tried {e.count}× · {ago(e.lastSeen)}</span>
+            {#if g.entries.length > 1}
+              <span class="rmeta">{g.entries.length} files could not be placed · {groupMeta(g)}</span>
+            {:else}
+              <span class="rmeta">{duplicateReview(e) ? 'Already in library; new download kept for comparison' : e.reason} · tried {e.count}× · {ago(e.lastSeen)}</span>
+            {/if}
           </div>
+          {#if g.entries.length > 1}
+            <ul class="rfiles">
+              {#each g.entries as x (x.id)}<li>{x.file || x.reason}{#if x.file} <span>{shortReason(x)}</span>{/if}</li>{/each}
+            </ul>
+          {/if}
           {#if fixDone[e.id]}
             <p class="rdone" role="status">{fixDone[e.id]}</p>
           {/if}
@@ -453,6 +484,8 @@
   }
   .rtitle { font-weight: 600; font-size: 0.95rem; }
   .rmeta { font-size: 0.78rem; color: var(--ink-faint); }
+  .rfiles { margin: 0; padding-left: var(--s4); display: grid; gap: 2px; font-size: 0.82rem; color: var(--ink-soft); }
+  .rfiles span { color: var(--ink-faint); }
   .rfix { display: flex; gap: var(--s2); flex-wrap: wrap; }
   .rfix input {
     flex: 1; min-width: 220px; font-size: 0.88rem;
