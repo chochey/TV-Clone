@@ -45,7 +45,9 @@ from titles import (
     title_match_ratio,
 )
 _download_observations = {}
-_DOWNLOAD_SNAPSHOT = Path(__file__).resolve().parent.parent / "data" / "download-readiness.json"
+# From the data dir, like every other state file (config._DATA). Building it beside the repo broke
+# in the live install, which has no data/ link: nothing was ready, so nothing was imported.
+_DOWNLOAD_SNAPSHOT = Path(config.DOWNLOAD_READINESS_FILE)
 
 # Logging is configured by setup_logging(), which main() calls -- never at import.
 # It used to attach rotating file handlers to the production log (and a copy on the

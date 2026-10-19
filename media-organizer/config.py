@@ -53,6 +53,8 @@ OMDB_USAGE_FILE = os.environ.get('ORGANIZER_OMDB_USAGE', os.path.join(_DATA, 'or
 
 # What the organizer is doing right now, for the Organizer page (see organizer_status.py)
 STATUS_FILE = os.environ.get('ORGANIZER_STATUS_FILE', os.path.join(_DATA, 'organizer-status.json'))
+# Written by the server from qBittorrent's state; a download is imported only once it says ready.
+DOWNLOAD_READINESS_FILE = os.environ.get('ORGANIZER_READINESS_FILE', os.path.join(_DATA, 'download-readiness.json'))
 STATUS_INTERVAL = float(os.environ.get('ORGANIZER_STATUS_INTERVAL', '30'))
 
 # Where a --backfill-titles run writes its journal of renames (so --undo-backfill can reverse it)

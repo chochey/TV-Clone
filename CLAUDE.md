@@ -49,6 +49,11 @@ builds `v2/frontend` in the live install; the shell is no-cache, assets hashed).
 — vite on 5173 proxying API calls to the live prod server, no service stops.
 
 Env vars for prod are in the systemd service file (`/etc/systemd/system/tvclone-prod.service`).
+**The live checkout has no `data/` link.** Anything that builds a state path relative to its own file
+(`Path(__file__)/../data`) works in the workshop and silently breaks in `/srv/chocheytv/app`. Use
+`TVCLONE_DATA_DIR` (server: `lib/paths.js`; organizer: `config._DATA`). The organizer's download
+readiness file was the one that slipped through: from the move on 2026-10-18 until 2026-10-19 it
+treated every download as not ready and imported nothing (0 imports in 3,600 scans, no log line).
 
 ## Critical: Do Not Undo These Fixes
 
