@@ -178,6 +178,9 @@ from the shelf's own `/api/item` response via `lib/home-data.js`, Read along sho
 `backdrop-filter` on fixed or scrolling elements and no animated blur (the Firefox/Pop!_OS lag);
 the blurred poster behind Tonight's Resume card and the title hero is a static `filter: blur`.
 Poster rows need `min-width: 0` on their flex cells or a long one-line title widens the card.
+`--maxw` is 2400px so 2K screens fill edge to edge like Home does (1080p and below are unaffected);
+disabled primary buttons go neutral (cream 10%, faint ink), never dimmed amber. `posterUrl()` falls
+back to an audiobook's catalog `coverUrl`, so History, Stats and anything else using it show covers.
 
 ### Stream modes (getStreamMode)
 - `direct`: h264 + aac/mp3/opus in .mp4 -- served as-is via byte-range

@@ -201,9 +201,10 @@ export const streamUrl = (item) => {
   return `/hls/${encodeURIComponent(item.id)}/master.m3u8?start=0&quality=auto`;
 };
 
-// Best poster for an item, preferring OMDb art. Empty string when the item
-// has no art at all — callers render a text placeholder, never a broken img.
-export const posterUrl = (item) => item?.omdbPosterUrl || item?.posterUrl || '';
+// Best poster for an item, preferring OMDb art, then a sidecar poster, then an
+// audiobook's saved cover from the catalog. Empty string when the item has no
+// art at all — callers render a text placeholder, never a broken img.
+export const posterUrl = (item) => item?.omdbPosterUrl || item?.posterUrl || item?.coverUrl || '';
 
 // Landscape still extracted from the actual media file (v1 /backdrop route).
 export const backdropUrl = (item) =>

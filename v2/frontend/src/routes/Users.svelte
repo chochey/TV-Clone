@@ -188,7 +188,7 @@
     background: var(--cta); color: var(--cta-ink); font-weight: 700;
     padding: 10px 22px; border-radius: var(--r-sm);
   }
-  .cta:disabled { opacity: 0.4; cursor: default; }
+  .cta:disabled { background: rgba(243, 237, 228, 0.1); color: var(--ink-faint); cursor: default; }
   .ghost {
     background: rgba(243, 237, 228, 0.14); color: var(--ink);
     font-weight: 600; padding: 10px 22px; border-radius: var(--r-sm);

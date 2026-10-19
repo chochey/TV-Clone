@@ -671,14 +671,16 @@
     display: flex; flex-direction: column; gap: var(--s3);
     width: min(340px, 86vw);
   }
-  .login .mark { text-align: center; margin-bottom: var(--s4); }
+  .login .mark { text-align: center; margin-bottom: var(--s2); }
+  .login .marksub { text-align: center; margin-bottom: var(--s4); }
   .cta {
     background: var(--cta); color: var(--cta-ink);
     font-weight: 700; font-size: 1rem;
     padding: 13px; border-radius: var(--r-pill);
     transition: opacity var(--t-fast);
   }
-  .cta:disabled { opacity: 0.4; cursor: default; }
+  /* Not ready yet (nothing typed): quiet, not a dimmed amber that reads as broken. */
+  .cta:disabled { background: rgba(243, 237, 228, 0.1); color: var(--ink-faint); cursor: default; }
   .cta:not(:disabled):hover { opacity: 0.88; }
   .err { color: var(--bad); font-size: 0.88rem; text-align: center; margin-top: var(--s2); }
   .bootmsg { margin-top: var(--s3); text-align: center; }

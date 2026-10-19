@@ -2,6 +2,7 @@
   import { library, session } from '../lib/stores.js';
   import { api, posterUrl } from '../lib/api.js';
   import { navigate } from '../lib/router.js';
+  import { isAudioItem } from '../lib/series-playback.js';
   import { onMount } from 'svelte';
 
   let history = $state(null);
@@ -218,7 +219,7 @@
                onclick={() => navigate(`/title/${encodeURIComponent(item.id)}`)}
                onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate(`/title/${encodeURIComponent(item.id)}`); } }}>
             <span class="rank">#{i + 1}</span>
-            <div class="rated-thumb">
+            <div class="rated-thumb" class:audio={isAudioItem(item)}>
               {#if posterUrl(item)}
                 <img src={posterUrl(item)} alt="" loading="lazy" />
               {:else}
@@ -338,6 +339,7 @@
     width: 36px; aspect-ratio: 2/3; object-fit: cover;
     border-radius: 3px; background: var(--bg-sunken);
   }
+  .rated-thumb.audio img, .rated-thumb.audio .ph { aspect-ratio: 1; }
   .rated-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
   .rated-title { font-weight: 600; font-size: 0.88rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .rated-meta { font-size: 0.72rem; color: var(--ink-soft); }

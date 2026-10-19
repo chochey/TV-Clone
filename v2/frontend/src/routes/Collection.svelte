@@ -31,7 +31,7 @@
 
 <style>
   .page { padding: calc(64px + var(--s5)) var(--gutter) var(--s7); max-width: var(--maxw); margin: 0 auto; }
-  .back { color: var(--ink-soft); font-size: 0.9rem; margin-bottom: var(--s3); }
+  .back { display: inline-flex; align-items: center; min-height: 44px; color: var(--ink-soft); font-size: 0.9rem; margin: -10px 0 calc(var(--s3) - 10px); }
   header { display: flex; align-items: baseline; gap: var(--s3); flex-wrap: wrap; margin-bottom: var(--s5); }
   h1 { font-size: clamp(1.8rem, 3.4vw, 2.6rem); }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: var(--s4) var(--s3); }

@@ -44,7 +44,7 @@
 
   /* Layout */
   --gutter: clamp(20px, 4vw, 56px);
-  --maxw: 1680px;
+  --maxw: 2400px; /* wide enough that 2K screens fill like Home does; smaller screens are unaffected */
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }

@@ -3,6 +3,7 @@
   import { api, posterUrl } from '../lib/api.js';
   import { library, session, AUTO_WATCHED_PERCENT } from '../lib/stores.js';
   import { navigate } from '../lib/router.js';
+  import { isAudioItem } from '../lib/series-playback.js';
   import { fmtTime } from '../lib/player-core.js';
 
   let entries = $state(null); // [{id, timestamp, title}]
@@ -42,7 +43,7 @@
         <div class="row" role="button" tabindex="0"
              onclick={() => r.item && navigate(`/title/${encodeURIComponent(r.id)}`)}
              onkeydown={(e) => (e.key === 'Enter') && r.item && navigate(`/title/${encodeURIComponent(r.id)}`)}>
-          <div class="thumb">
+          <div class="thumb" class:audio={r.item && isAudioItem(r.item)}>
             {#if r.item && posterUrl(r.item)}
               <img src={posterUrl(r.item)} alt="" loading="lazy" />
             {:else}
@@ -90,6 +91,7 @@
     width: 52px; aspect-ratio: 2/3; object-fit: cover;
     border-radius: 4px; background: var(--bg-raised);
   }
+  .thumb.audio img, .thumb.audio .ph { aspect-ratio: 1; }
   .text { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1; }
   .t { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .bar {

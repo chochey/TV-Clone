@@ -95,5 +95,6 @@
   .ghost, .go { font-weight: 600; padding: 9px 18px; border-radius: var(--r-sm); }
   .ghost { background: rgba(243, 237, 228, 0.12); color: var(--ink); }
   .go { background: var(--cta); color: var(--cta-ink); }
-  .go:disabled, .ghost:disabled { opacity: 0.5; cursor: default; }
+  .ghost:disabled { opacity: 0.5; cursor: default; }
+  .go:disabled { background: rgba(243, 237, 228, 0.1); color: var(--ink-faint); cursor: default; }
 </style>

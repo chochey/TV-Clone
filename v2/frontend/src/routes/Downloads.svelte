@@ -456,7 +456,7 @@
   .linkbtn { color: var(--cta); font-weight: 600; text-decoration: underline; }
   .addedtag { font-size: 0.82rem; font-weight: 700; color: #7ed491; padding: 7px 12px; }
   .cta { background: var(--cta); color: var(--cta-ink); font-weight: 700; padding: 11px 24px; border-radius: var(--r-sm); }
-  .cta:disabled { opacity: 0.4; cursor: default; }
+  .cta:disabled { background: rgba(243, 237, 228, 0.1); color: var(--ink-faint); cursor: default; }
   .err { color: #ff6b6b; font-size: 0.9rem; margin-bottom: var(--s3); }
   .empty { color: var(--ink-faint); padding: var(--s5) 0; }
   .download-options { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--s3); margin-top: var(--s4); }

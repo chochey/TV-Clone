@@ -120,7 +120,7 @@
     background: var(--cta); color: var(--cta-ink); font-weight: 700;
     padding: 11px 24px; border-radius: var(--r-sm);
   }
-  .cta:disabled { opacity: 0.4; cursor: default; }
+  .cta:disabled { background: rgba(243, 237, 228, 0.1); color: var(--ink-faint); cursor: default; }
   .ok { color: #7ed491; font-size: 0.9rem; margin-bottom: var(--s3); }
   .err { color: #ff6b6b; font-size: 0.9rem; margin-bottom: var(--s3); }
 

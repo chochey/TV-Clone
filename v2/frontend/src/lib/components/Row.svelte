@@ -58,7 +58,7 @@
 {/if}
 
 <style>
-  .more { margin-left: auto; font-size: 0.84rem; font-weight: 600; color: var(--ink-soft); }
+  .more { margin-left: auto; font-size: 0.84rem; font-weight: 600; color: var(--ink-soft); padding: 12px 0; margin-top: -12px; margin-bottom: -12px; }
   .more:hover { color: var(--ink); }
   .row { margin: var(--s5) 0; }
   header {

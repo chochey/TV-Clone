@@ -190,6 +190,7 @@
   .secondary { border: 1px solid var(--line-strong); color: var(--ink); }
   .secondary:hover { background: var(--line); }
   button:disabled, input:disabled, select:disabled { opacity: .5; cursor: default; }
+  .cta:disabled { opacity: 1; background: rgba(243, 237, 228, 0.1); color: var(--ink-faint); }
   .success { color: #7ed491; margin-bottom: var(--s4); }
   .error { color: #ff6b6b; margin-bottom: var(--s3); overflow-wrap: anywhere; }
   .location { border-top: 1px solid var(--line-strong); margin-top: var(--s4); padding-top: var(--s4); }

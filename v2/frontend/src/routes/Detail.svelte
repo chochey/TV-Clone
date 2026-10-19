@@ -433,7 +433,7 @@
   }
   .plot { max-width: 68ch; color: #d9d1c6; font-size: 1.06rem; line-height: 1.55; }
   .credits, .partof { color: var(--ink-soft); font-size: 0.9rem; }
-  .credits a, .partof a { color: var(--ink); text-decoration: underline; text-underline-offset: 4px; }
+  .credits a, .partof a { color: var(--ink); text-decoration: underline; text-underline-offset: 4px; padding: 10px 0; }
   .credits a:hover, .partof a:hover { color: var(--accent); }
   .warn { color: var(--bad); }
   .compatibility { padding: var(--s3); border: 1px solid var(--accent); border-radius: var(--r-sm); line-height: 1.6; }
@@ -561,13 +561,13 @@
     max-width: 420px; width: calc(100% - 32px);
     box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
   }
-  .modal h2 { font-size: 1.2rem; font-weight: 700; margin-bottom: var(--s3); }
+  .modal h2 { font-family: var(--font-display); font-weight: 400; font-size: 1.5rem; margin-bottom: var(--s3); }
   .modal p { font-size: 0.92rem; line-height: 1.5; color: var(--ink-soft); margin-bottom: var(--s3); }
-  .modal .warn { color: #e5484d; font-size: 0.84rem; }
+  .modal .warn { color: var(--bad); font-size: 0.84rem; }
   .modal-actions { display: flex; gap: var(--s3); justify-content: flex-end; margin-top: var(--s5); }
   .del-btn {
-    background: #e5484d; color: #fff; font-weight: 700; font-size: 0.95rem;
-    padding: 10px 24px; border-radius: var(--r-sm);
+    background: var(--bad); color: var(--bg); font-weight: 700; font-size: 0.95rem;
+    min-height: 44px; padding: 0 24px; border-radius: var(--r-pill);
     transition: opacity var(--t-fast);
   }
   .del-btn:hover:not(:disabled) { opacity: 0.85; }
