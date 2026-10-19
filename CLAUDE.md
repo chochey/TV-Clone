@@ -132,6 +132,9 @@ How audiobooks get read-along text and word timings lives in `tools/readalong/` 
 text → paragraph alignment → word job → gap repair → held-back chapter checks, plus transcripts for
 books without an ebook. One canonical copy of each script; locations in `tools/readalong/settings.py`.
 They run by hand as `chocheytv` with the speech venv, never inside the server.
+In the player, Read along switches to two columns; the chapter picker, data saver, sleep timer and
+bookmarks stay in the left column there, and are hidden only when the layout stacks (<= 900px) so the
+text comes straight after the controls.
 
 ### Audiobook data saver and read-along caching (October 2026)
 Data saver is a per-device switch, on by default only for phones (and Save-Data browsers; `dataSaverDefault` in

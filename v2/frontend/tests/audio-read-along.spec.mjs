@@ -20,7 +20,7 @@ function wav() {
   body.writeUInt16LE(1, 20); body.writeUInt16LE(1, 22); body.writeUInt32LE(8000, 24); body.writeUInt32LE(16000, 28);
   body.writeUInt16LE(2, 32); body.writeUInt16LE(16, 34); body.write('data', 36); body.writeUInt32LE(size, 40); return body;
 }
-async function fixture(page) {
+async function fixture(page, { item = book } = {}) {
   const html = await fs.readFile(path.join(dist, 'index.html'), 'utf8');
   const state = { requests: 0, errors: [], response: document(), status: 200, delay: null };
   page.on('pageerror', error => state.errors.push(error.message));
@@ -39,7 +39,7 @@ async function fixture(page) {
       else if (url.pathname === '/api/me') body = { loggedIn: true, role: 'user', profileId: 'listener', name: 'Listener' };
       else if (url.pathname === '/api/library') body = [book];
       else if (url.pathname === '/api/library/sections') body = { ok: true, sections: [] };
-      else if (url.pathname === '/api/item/book') body = book;
+      else if (url.pathname === '/api/item/book') body = item;
       else if (url.pathname === '/api/audio/preferences') body = { speed: 1 };
       else if (url.pathname === '/api/audio/bookmarks/book') body = { bookmarks: [] };
       else if (url.pathname === '/api/audio/read-along/book') {
@@ -485,5 +485,38 @@ test('a chapter without words explains paragraph-only highlighting without prete
   await expect(reader.getByRole('status')).toHaveText('This chapter has paragraph highlights only. Word timing is not available here yet.');
   await position(page, 1.2); await expect(reader.locator('.spoken-current')).toHaveText('Chapter');
   await expect(reader.getByText('This chapter has paragraph highlights only.', { exact: false })).toHaveCount(0);
+  expect(state.errors).toEqual([]);
+});
+
+test('with read along open in two columns, the chapter, data saver, sleep timer and bookmarks stay under the controls', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const chapters = [0, 20, 40].map((start, index) => ({ title: `Chapter ${index + 1}`, start, end: start + 20 }));
+  const state = await fixture(page, { item: { ...book, audioMetadata: { ...book.audioMetadata, chapters } } });
+  await page.getByRole('button', { name: 'Read along', exact: true }).click();
+  const player = page.getByRole('dialog', { name: 'Audio player' });
+  await expect(page.getByRole('region', { name: 'Book text' })).toBeVisible();
+  for (const control of [player.getByRole('combobox', { name: 'Chapter', exact: true }), player.getByRole('switch', { name: /Data saver/ }),
+    player.getByRole('combobox', { name: 'Sleep timer', exact: true }), player.getByRole('button', { name: 'Add bookmark', exact: true })]) {
+    await expect(control).toBeVisible();
+  }
+  // They sit in the left column, beside the text rather than under it.
+  const tools = await player.getByRole('combobox', { name: 'Sleep timer', exact: true }).boundingBox();
+  const reader = await page.getByRole('region', { name: 'Read along', exact: true }).boundingBox();
+  expect(tools.x + tools.width).toBeLessThanOrEqual(reader.x);
+  await player.getByRole('combobox', { name: 'Sleep timer', exact: true }).selectOption('15');
+  await expect(player.getByText('Pauses in 15 min.')).toBeVisible();
+  expect(await player.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await page.screenshot({ path: test.info().outputPath('readalong-tools-1440.png') });
+  expect(state.errors).toEqual([]);
+});
+
+test('when the read-along layout stacks, the text comes straight after the controls', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const state = await fixture(page);
+  await page.getByRole('button', { name: 'Read along', exact: true }).click();
+  const player = page.getByRole('dialog', { name: 'Audio player' });
+  await expect(page.getByRole('region', { name: 'Book text' })).toBeVisible();
+  await expect(player.getByRole('combobox', { name: 'Sleep timer', exact: true })).toBeHidden();
+  await expect(player.getByRole('button', { name: 'Add bookmark', exact: true })).toBeHidden();
   expect(state.errors).toEqual([]);
 });

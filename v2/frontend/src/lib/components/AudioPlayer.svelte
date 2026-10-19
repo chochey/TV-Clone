@@ -506,7 +506,8 @@
   .reading .artwork {width:110px;margin:0 auto 20px;}
   .reading .book-info {text-align:center;}
   .reading h1 {font-size:1.35rem;}
-  .reading .listening-tools,.reading .chapter-picker {display:none;}
+  /* Two columns: chapter, data saver, sleep timer and bookmarks stay under the controls, beside the text. */
+  .reading .listening-tools {margin-top:14px;padding-top:14px;}
   .reading .transport {margin:16px 0;}
   .listening-header { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:14px 24px; border-bottom:1px solid #ffffff0e; }
   .listening-label { display:flex; align-items:center; gap:9px; font-size:.76rem; font-weight:650; letter-spacing:.1em; text-transform:uppercase; color:#cdc3b5; }
@@ -583,6 +584,8 @@
   }
   @media(max-width:900px) {
     .reading .player-content {grid-template-columns:1fr;padding:18px;gap:20px;}
+    /* Stacked: the text comes straight after the controls; closing Read along brings the tools back. */
+    .reading .listening-tools,.reading .chapter-picker {display:none;}
     .reading .artwork {display:none;}
     .reading .kind,.reading .album {display:none;}
     .reading .timeline {margin-top:12px;}
