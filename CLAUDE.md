@@ -169,6 +169,18 @@ catalog then carries `artist` and `coverUrl` (`/audio-artwork/:id?v=<size-mtime>
 per-book `/api/item`. Before this, every restart emptied a memory-only cache and each fresh page
 load looked up every book two at a time (11.8 s for 34 of 55 covers, vs 0.6 s for all 55 now).
 
+### Organizer page activity feed (October 2026)
+`/api/organizer/logs` returns `entries` beside the raw `lines`: `lib/organizer-activity.js` turns the log
+tail into things that happened (one entry per import with its episodes inside, skips and reviews with
+the title and a plain reason and a count of how many scans repeated them, runs of restarts as one
+entry, a title-backfill run as one entry; heartbeats, empty scans, separators and test artifacts
+vanish). It reads both move forms (`EVENT: {"event":"moved"...}` and the older `Import source` /
+`Moved ->` pair, including a bare `Moved ->` with no source) and never touches the organizer or its
+log. `libraryRoots` (the configured folders) name destinations as "TV/Show (1999)"; `libraryPaths` is
+every library FILE and must not be used for that. The page shows the feed by day with filters
+All / Imports / Problems / Organizer (the old `moves`/`errors`/`scans` names still work), search, and
+the raw log behind a toggle, scrolled to the newest end.
+
 ### Look and feel (October 2026 redesign)
 Warm dark palette with one amber accent, set as tokens in `v2/frontend/src/styles/tokens.css`
 (`--bg #0e0c0b`, `--ink #f3ede4`, `--accent #e8b04a`, `--good/--warn/--bad`); Instrument Serif for

@@ -1869,6 +1869,8 @@ const { readOrganizerLogLines } = require('./lib/routes/organizer')(app, {
   logPath: ORGANIZER_LOG, statusFile: ORGANIZER_STATUS_FILE, aliasFile: ORGANIZER_ALIAS_FILE, sourceDir: ORGANIZER_SOURCE_DIR,
   retryDir: process.env.ORGANIZER_RETRY_DIR || path.join(DATA_DIR, 'organizer-retries'),
   libraryPaths: () => (libraryCache || []).map(item => item._filePath),
+  // The configured library folders, for naming destinations in the activity feed ("TV/Show (1999)").
+  libraryRoots: () => (config.folders || []).map(folder => folder.path).filter(Boolean),
 });
 
 // ── Episode index: missing-episode report + new-episode tracker (lib/routes/episodes.js) ──

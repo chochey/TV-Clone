@@ -4,6 +4,7 @@
   import { api } from '../lib/api.js';
   import { describeClearResult, leftoverSummary } from '../lib/organizer-clear.js';
   import { describeStatus } from '../lib/organizer-status.js';
+  import { groupByDay, kindLabel, countLabel, repeatLabel } from '../lib/organizer-feed.js';
 
   let data = $state(null);   // {ok, lines, total, meta}
   let status = $state(null); // {ok, active}
@@ -192,6 +193,15 @@
   const stale = $derived(data?.meta?.lastHeartbeat ? Date.now() - data.meta.lastHeartbeat > 10 * 60000 : false);
   // What the organizer says it is doing now (absent for an organizer that does not write a status file).
   const liveStatus = $derived(describeStatus(data?.meta?.status));
+
+  // The activity feed (built on the server from the same log), grouped by day. The raw log stays behind a toggle.
+  let showRaw = $state(false), logBox = $state(null);
+  const entries = $derived(data?.entries || []);
+  const days = $derived(groupByDay(entries));
+  const lastImport = $derived(data?.meta?.lastImport || null);
+  const clock = ts => new Date(ts).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  const dayOf = ts => new Date(ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  $effect(() => { if (showRaw && logBox && data?.lines) logBox.scrollTop = logBox.scrollHeight; });
 </script>
 
 <div class="page">
@@ -213,7 +223,7 @@
   {#if data?.meta}
     <div class="chips">
       <span class="chip">Heartbeat <strong class={stale ? 'bad' : ''}>{ago(data.meta.lastHeartbeat)}</strong></span>
-      <span class="chip">Last activity <strong>{ago(data.meta.lastActivity)}</strong></span>
+      <span class="chip">Last import <strong>{lastImport ? `${lastImport.title} · ${ago(lastImport.at)}` : ago(data.meta.lastActivity)}</strong></span>
       <span class="chip">24h moves <strong>{data.meta.moves24h}</strong></span>
       <span class="chip">24h skips <strong>{data.meta.skips24h}</strong></span>
       <span class="chip">24h errors <strong class={data.meta.errors24h ? 'bad' : ''}>{data.meta.errors24h}</strong></span>
@@ -337,23 +347,54 @@
   {/if}
 
   <div class="controls">
-    <select bind:value={filter} aria-label="Filter">
-      <option value="all">Everything</option>
-      <option value="moves">Moves & matches</option>
-      <option value="errors">Skips & errors</option>
-      <option value="scans">Scans</option>
-    </select>
-    <input type="search" placeholder="Search log…" bind:value={q} spellcheck="false" />
+    <div class="pills" role="group" aria-label="Show">
+      {#each [['all', 'All'], ['imports', 'Imports'], ['problems', 'Problems'], ['organizer', 'Organizer']] as [value, label] (value)}
+        <button aria-pressed={filter === value} onclick={() => { filter = value; }}>{label}</button>
+      {/each}
+    </div>
+    <input type="search" placeholder="Search activity…" aria-label="Search activity" bind:value={q} spellcheck="false" />
     <label class="livetoggle"><input type="checkbox" bind:checked={live} /> Live tail</label>
+    <label class="livetoggle"><input type="checkbox" bind:checked={showRaw} /> Raw log</label>
   </div>
 
   {#if !data}
     <div class="spinner"></div>
   {:else if !data.ok}
     <p class="err">Organizer log unavailable{data.error ? ` — ${data.error}` : ''}.</p>
+  {:else if showRaw}
+    <pre class="log" bind:this={logBox}>{data.lines.join('\n')}</pre>
+    <p class="meta total">{data.lines.length} of {data.total} matching lines · newest at the bottom</p>
   {:else}
-    <pre class="log">{data.lines.join('\n')}</pre>
-    <p class="meta total">{data.lines.length} of {data.total} matching lines</p>
+    <section class="feed" aria-label="Organizer activity">
+      {#if !entries.length}
+        <p class="empty">{q ? 'Nothing in the log matches that.' : filter === 'all' ? 'Nothing in the log yet.' : 'Nothing of that kind in the log.'}</p>
+      {/if}
+      {#each days as day (day.key)}
+        <h3 class="day display">{day.label}</h3>
+        {#each day.entries as e (e.id)}
+          <article class={`entry ${e.kind}`}>
+            <time class="when" datetime={new Date(e.at || 0).toISOString()}>{e.at ? clock(e.at) : ''}</time>
+            <div class="ebody">
+              <span class="ekind">{kindLabel(e)}</span>
+              <span class="etitle">{e.title}</span>
+              {#if e.summary}<span class="esummary">{e.summary}</span>{/if}
+              {#if repeatLabel(e)}<span class="emeta">{repeatLabel(e)}{e.since && e.kind !== 'start' ? `, since ${dayOf(e.since)}` : ''}</span>{/if}
+              {#if e.to}<span class="emeta">→ {e.to}</span>{/if}
+              {#if e.matched && e.matched !== e.title}<span class="emeta">Matched as {e.matched}</span>{/if}
+              {#if e.release && e.release !== e.title}<span class="emeta mono">{e.release}</span>{/if}
+              {#each e.notes || [] as n (n)}<span class="enote">{n}</span>{/each}
+              {#if e.items?.length > 1}
+                <details class="eitems">
+                  <summary>{countLabel(e)}</summary>
+                  <ul>{#each e.items as item, i (i)}<li><span class="ilabel">{item.label}</span><span class="ipath">{item.to}</span></li>{/each}</ul>
+                </details>
+              {/if}
+            </div>
+          </article>
+        {/each}
+      {/each}
+      {#if data.entriesTotal > entries.length}<p class="meta total">Showing the newest {entries.length} of {data.entriesTotal}</p>{/if}
+    </section>
   {/if}
 </div>
 
@@ -449,12 +490,45 @@
   .rdel:hover { color: #ff6b6b; background: rgba(229, 72, 77, 0.12); }
 
   .controls { display: flex; gap: var(--s2); margin-bottom: var(--s3); flex-wrap: wrap; align-items: center; }
-  .controls select {
-    font-family: inherit; font-size: 0.88rem; color: var(--ink);
-    background: var(--bg-raised); border: 1px solid var(--line-strong);
-    border-radius: var(--r-sm); padding: 8px 12px; cursor: pointer;
+  .pills { display: flex; gap: 6px; flex-wrap: wrap; }
+  .pills button {
+    min-height: 36px; padding: 0 14px; border-radius: var(--r-pill);
+    box-shadow: inset 0 0 0 1px var(--line-strong); color: var(--ink-soft); font-size: 0.85rem; font-weight: 600;
+    transition: background var(--t-fast), color var(--t-fast);
   }
+  .pills button:hover { color: var(--ink); }
+  .pills button[aria-pressed='true'] { background: var(--accent); color: var(--accent-ink); box-shadow: none; }
   .controls input[type='search'] { flex: 1; min-width: 180px; }
+
+  /* ── Activity feed ── */
+  .feed { display: flex; flex-direction: column; gap: 6px; }
+  .day { font-size: 1.35rem; line-height: 1; margin: var(--s4) 0 var(--s2); }
+  .day:first-child { margin-top: 0; }
+  .entry {
+    display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 12px;
+    padding: 12px 14px; border-radius: var(--r-md);
+    background: var(--bg-raised); box-shadow: inset 0 0 0 1px var(--line);
+  }
+  .when { color: var(--ink-faint); font-size: 0.8rem; font-variant-numeric: tabular-nums; padding-top: 3px; }
+  .ebody { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+  .ekind { font-size: 0.68rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-faint); }
+  .entry.import .ekind { color: var(--good); }
+  .entry.skip .ekind { color: var(--warn); }
+  .entry.review .ekind, .entry.problem .ekind { color: var(--bad); }
+  .etitle { font-weight: 600; font-size: 0.98rem; overflow-wrap: anywhere; }
+  .esummary { font-size: 0.88rem; }
+  .emeta { color: var(--ink-faint); font-size: 0.8rem; overflow-wrap: anywhere; }
+  .emeta.mono { font-family: ui-monospace, Menlo, monospace; font-size: 0.74rem; }
+  .enote { color: var(--ink-soft); font-size: 0.82rem; }
+  .eitems { margin-top: 4px; }
+  .eitems summary { cursor: pointer; color: var(--ink-soft); font-size: 0.82rem; font-weight: 600; padding: 4px 0; width: max-content; }
+  .eitems summary:hover { color: var(--ink); }
+  .eitems ul { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+  .eitems li { display: flex; flex-direction: column; gap: 1px; padding: 6px 10px; border-radius: var(--r-sm); background: var(--bg-sunken); }
+  .ilabel { font-size: 0.85rem; }
+  .ipath { font-family: ui-monospace, Menlo, monospace; font-size: 0.72rem; color: var(--ink-faint); overflow-wrap: anywhere; }
+  .empty { color: var(--ink-faint); font-size: 0.9rem; padding: var(--s4) 0; }
+  @media (max-width: 640px) { .entry { grid-template-columns: 1fr; gap: 4px; } .when { padding: 0; } }
   .livetoggle { display: flex; align-items: center; gap: 6px; font-size: 0.85rem; color: var(--ink-soft); cursor: pointer; }
 
   .log {

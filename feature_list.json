@@ -254,6 +254,12 @@
       "passes": true
     },
     {
+      "id": "admin-007",
+      "category": "admin",
+      "description": "Organizer page shows an activity feed built from the log (imports grouped with their episodes, skips and reviews with plain reasons and repeat counts, restarts folded) by day, with filters, search and the raw log behind a toggle",
+      "passes": true
+    },
+    {
       "id": "downloads-001",
       "category": "downloads",
       "description": "qBittorrent proxy — search, add, pause/resume, delete torrents",
