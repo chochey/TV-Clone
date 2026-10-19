@@ -9,6 +9,7 @@ import { createAudioCardMetadataLoader, audioCardIdentity, mergeAudioCardMetadat
 import { EMPTY_FILTERS } from './search-filters.js';
 import { resetCollections } from './collections.js';
 import { resetHomeData, rememberChapters } from './home-data.js';
+import { savedId } from './watch-later.js';
 
 export const session = writable(null);     // { loggedIn, profileId, name, role }
 const liveLibrary = writable([]);
@@ -66,6 +67,23 @@ export const dismissed = writable({ continueWatching: {}, recentlyAdded: {} });
 export async function loadDismissed() {
   const generation = sessionGeneration;
   try { const data = await api.dismissed(); if (generation === sessionGeneration) dismissed.set(data); } catch {}
+}
+
+// Watch later: saved item ids in the order they were saved (lib/watch-later.js
+// turns them into cards). Saving is optimistic and reverts if the server refuses.
+export const watchLater = writable([]);
+export async function loadWatchLater() {
+  const generation = sessionGeneration;
+  try { const ids = await api.watchlist(); if (generation === sessionGeneration && Array.isArray(ids)) watchLater.set(ids); } catch {}
+}
+export async function toggleWatchLater(item) {
+  const before = get(watchLater), stored = savedId(item, before, get(mediaById));
+  const generation = sessionGeneration;
+  watchLater.set(stored ? before.filter(id => id !== stored) : [...before, item.id]);
+  try {
+    const reply = stored ? await api.watchlistRemove(stored) : await api.watchlistAdd(item.id);
+    if (generation === sessionGeneration && Array.isArray(reply?.watchlist)) watchLater.set(reply.watchlist);
+  } catch { if (generation === sessionGeneration) watchLater.set(before); }
 }
 
 // Hiding is optimistic — the row should disappear on click, not on round-trip.
@@ -244,6 +262,7 @@ export function resetSessionState() {
   library.set([]);
   libraryLoaded.set(false);
   dismissed.set({ continueWatching: {}, recentlyAdded: {} });
+  watchLater.set([]);
   searchQuery.set('');
   enrichAttempted.clear();
   resetNotifications();
@@ -269,6 +288,7 @@ export async function loadLibrary(profileId) {
   library.set(items);
   libraryLoaded.set(true);
   loadDismissed();
+  loadWatchLater();
   if (!stopLiveUpdates) stopLiveUpdates = startLiveUpdates({
     refreshLibrary: () => loadLibrary(profile), refreshNotifications: loadNotifications,
   });

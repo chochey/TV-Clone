@@ -141,6 +141,11 @@ export const api = {
   // On-demand OMDb enrichment (server caches hits AND misses)
   metadata: (id) => fetch(`/api/metadata/${encodeURIComponent(id)}`, opts('GET')).then(json),
 
+  // Watch later: the profile's save-for-later list, an array of item ids in saved order.
+  watchlist: () => fetch('/api/watchlist', opts('GET')).then(json),
+  watchlistAdd: (id) => fetch('/api/watchlist/add', opts('POST', { id })).then(json),
+  watchlistRemove: (id) => fetch('/api/watchlist/remove', opts('POST', { id })).then(json),
+
   // Row dismissals — the server keeps these per profile and clears one
   // automatically when you play the item again.
   dismissed: () => fetch('/api/dismissed', opts('GET')).then(json).catch(() => ({ continueWatching: {}, recentlyAdded: {} })),

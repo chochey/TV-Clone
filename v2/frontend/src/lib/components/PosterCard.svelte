@@ -8,7 +8,9 @@
   // resume: rendered in the Continue Watching row — show which episode and how
   // much is left, and offer a way to drop it from the row.
   // added: on the new-arrivals shelf the meta line says when it arrived.
-  let { item, onopen, onplay, resume = false, wide = false, added = false } = $props();
+  // onremove: a row the viewer curates (Saved for later) gets the same corner
+  // button as Continue Watching, labelled with removeLabel.
+  let { item, onopen, onplay, resume = false, wide = false, added = false, onremove = null, removeLabel = 'Saved for later' } = $props();
 
   // No poster? Ask OMDb once — the store patch re-renders this card.
   $effect(() => { if (!isAudioItem(item) && !posterUrl(item)) enrichItem(item.id); });
@@ -119,10 +121,10 @@
       </button>
     </div>
 
-    {#if resume}
-      <button class="dismiss" title={`Remove from ${continueLabel}`}
-              aria-label={`Remove ${title} from ${continueLabel}`}
-              onclick={(e) => { e.stopPropagation(); dismissFromContinue(item); }}>
+    {#if resume || onremove}
+      <button class="dismiss" title={`Remove from ${onremove ? removeLabel : continueLabel}`}
+              aria-label={`Remove ${title} from ${onremove ? removeLabel : continueLabel}`}
+              onclick={(e) => { e.stopPropagation(); if (onremove) onremove(item); else dismissFromContinue(item); }}>
         <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
       </button>
     {/if}

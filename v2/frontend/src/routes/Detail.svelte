@@ -1,6 +1,7 @@
 <script>
   import { api, posterUrl } from '../lib/api.js';
-  import { library, catalog, watchState, collapseShows, searchFilters, searchQuery, updateWatchState, libraryLoaded, session, enrichItem, AUTO_WATCHED_PERCENT } from '../lib/stores.js';
+  import { library, catalog, watchState, collapseShows, searchFilters, searchQuery, updateWatchState, libraryLoaded, session, enrichItem, AUTO_WATCHED_PERCENT, mediaById, watchLater, toggleWatchLater } from '../lib/stores.js';
+  import { savedId } from '../lib/watch-later.js';
   import { navigate } from '../lib/router.js';
   import { seriesEpisodes, seriesPlayTarget, isSeriesItem, isAudioItem } from '../lib/series-playback.js';
   import { episodeTitle, episodeCode } from '../lib/format.js';
@@ -111,11 +112,17 @@
     navigate('/search');
   }
 
+  // Saved for later: one entry stands for a whole show, whichever episode page saved it.
+  const saved = $derived(!!savedId(m, $watchLater, $mediaById));
+  const saveLabel = $derived(saved ? 'Saved' : isAudio ? 'Listen later' : 'Watch later');
+
   async function toggleWatched(target) {
     const newVal = !target.watched;
     try { await api.toggleWatched(target.id, newVal, $session?.profileId); } catch { return; }
     updateWatchState(target.id, { watched: newVal });
     if (full && target.id === full.id) full = { ...full, watched: newVal };
+    // Finished it: it no longer needs saving for later.
+    if (newVal && target.id === m.id && saved) toggleWatchLater(m);
   }
 
   // ── Delete ─────────────────────────────────────────────────────────
@@ -223,6 +230,11 @@
                 {#if !isShow}
                   <button class="ghost" class:on={m.watched} onclick={() => toggleWatched(m)}>
                     {m.watched ? (isAudio ? '✓ Listened' : '✓ Watched') : (isAudio ? 'Mark Listened' : 'Mark Watched')}
+                  </button>
+                {/if}
+                {#if m.id}
+                  <button class="ghost" class:on={saved} aria-pressed={saved} onclick={() => toggleWatchLater(m)}>
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill={saved ? 'currentColor' : 'none'} stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z"/></svg>{saveLabel}
                   </button>
                 {/if}
                 {#if $session?.role === 'admin' && !isAudio}

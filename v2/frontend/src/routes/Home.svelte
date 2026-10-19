@@ -7,7 +7,8 @@
   import PosterCard from '../lib/components/PosterCard.svelte';
   import CollectionCard from '../lib/components/CollectionCard.svelte';
   import { continueWatching, recentlyAdded, genreClusters, libraryStats, catalog, watchState, collapseShows,
-    dismissFromContinue, observeAudioCard, requestAudioCard, session } from '../lib/stores.js';
+    dismissFromContinue, observeAudioCard, requestAudioCard, session, mediaById, watchLater, toggleWatchLater } from '../lib/stores.js';
+  import { watchLaterItems } from '../lib/watch-later.js';
   import { posterUrl } from '../lib/api.js';
   import { navigate } from '../lib/router.js';
   import { moods, moodMatches, discoveryPool, nextPick } from '../lib/home-discovery.js';
@@ -81,6 +82,7 @@
     if (choice) onopen?.(choice);
   }
   const audioCount = $derived($catalog.filter(isAudioItem).length);
+  const saved = $derived(watchLaterItems($watchLater, $mediaById, $watchState));
   const canDashboard = $derived($session?.role === 'admin' || ($session?.permissions || []).includes('canDashboard'));
 </script>
 
@@ -191,6 +193,8 @@
     {/if}
   {/if}
 
+  <Row title="Saved for later" items={saved} {onopen} {onplay} onremove={toggleWatchLater}
+       subtitle={saved.length ? 'Titles you set aside from their pages' : ''} />
   <Row title="Fresh on your shelf" items={$recentlyAdded} {onopen} {onplay} added onmore={() => navigate('/movies')} moreLabel="All films" />
   <Row title="Collections" items={collectionRow} card={collectionCell} onmore={() => navigate('/collections')}
        subtitle={collectionRow.length ? `${collectionRow.length} series and franchises, found for you` : ''} />

@@ -290,6 +290,12 @@
       "passes": true
     },
     {
+      "id": "ui-006",
+      "category": "ui",
+      "description": "Watch later: save a film, series or audiobook from its page; a Saved for later row on Tonight lists them newest first (one card per show) with a remove button, and finishing a title drops it from the list",
+      "passes": true
+    },
+    {
       "id": "new-001",
       "category": "sprites",
       "priority": "high",

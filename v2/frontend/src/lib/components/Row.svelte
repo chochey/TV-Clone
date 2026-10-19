@@ -1,7 +1,7 @@
 <script>
   import PosterCard from './PosterCard.svelte';
   // card: optional snippet to render each item instead of a poster; onmore adds a "See all" link.
-  let { title, items = [], onopen, onplay, size = 'md', resume = false, wide = false, added = false, card = null, onmore = null, moreLabel = 'See all', subtitle = '' } = $props();
+  let { title, items = [], onopen, onplay, size = 'md', resume = false, wide = false, added = false, card = null, onmore = null, moreLabel = 'See all', subtitle = '', onremove = null, removeLabel = 'Saved for later' } = $props();
 
   // The track hides its scrollbar, and a plain mouse has no horizontal wheel —
   // without these arrows the row is only reachable by trackpad or touch.
@@ -45,7 +45,7 @@
       {/if}
       <div class="track" class:lg={size === 'lg'} class:wide={wide} bind:this={track} onscroll={measure}>
         {#each items as item (item.id)}
-          <div class="cell">{#if card}{@render card(item)}{:else}<PosterCard {item} {onopen} {onplay} {resume} {wide} {added} />{/if}</div>
+          <div class="cell">{#if card}{@render card(item)}{:else}<PosterCard {item} {onopen} {onplay} {resume} {wide} {added} {onremove} {removeLabel} />{/if}</div>
         {/each}
       </div>
       {#if !atEnd}
@@ -71,6 +71,8 @@
   }
   .count { font-size: 0.8rem; color: var(--ink-faint); font-weight: 600; }
   .sub { font-size: 0.88rem; color: var(--ink-soft); }
+  /* On a phone the subtitle would squeeze the heading onto two lines. */
+  @media (max-width: 720px) { .sub { display: none; } }
 
   .trackwrap { position: relative; }
   .track {
