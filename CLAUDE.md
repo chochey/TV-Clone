@@ -174,7 +174,10 @@ hex values; there is no purple left anywhere. Home is "Tonight" (`routes/Home.sv
 `lib/tonight.js`): newest video as a Resume card, newest audiobook as a strip (chapter list reused
 from the shelf's own `/api/item` response via `lib/home-data.js`, Read along shown only for ids in
 `/api/audio/read-along-index`), one pick with a reason, then shelves. The title page's file facts,
-"Also by" and "If you like this one" come from `lib/title-facts.js`. **Performance rule:** no
+"Also by" and "If you like this one" come from `lib/title-facts.js`; audiobook pages add "Also in <series>"
+and "More by <author>" from the same module (`bookSeries` reads the series out of titles shaped
+"Name: Series, Book N" / "Book One of the Series"; there is no series tag in the files). `/api/me`
+carries `downloaderConfigured` so pages that would ask qBittorrent (Episodes) skip it when there is none. **Performance rule:** no
 `backdrop-filter` on fixed or scrolling elements and no animated blur (the Firefox/Pop!_OS lag);
 the blurred poster behind Tonight's Resume card and the title hero is a static `filter: blur`.
 Poster rows need `min-width: 0` on their flex cells or a long one-line title widens the card.

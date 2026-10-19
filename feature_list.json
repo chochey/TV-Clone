@@ -513,6 +513,12 @@
       "category": "audiobooks",
       "description": "Audiobook covers and authors show at once: covers are saved on disk and listed in the catalog, so shelves need no per-book lookup, even after a restart",
       "passes": true
+    },
+    {
+      "id": "audio-016",
+      "category": "audiobooks",
+      "description": "Audiobook pages show the rest of the series in reading order (series read from the title) and the author's other books",
+      "passes": true
     }
   ]
 }

@@ -14,7 +14,7 @@
   import Row from '../lib/components/Row.svelte';
   import { EMPTY_FILTERS } from '../lib/search-filters.js';
   import { credits, loadHomeData } from '../lib/home-data.js';
-  import { playFacts, peopleOf, alsoBy, similarTo } from '../lib/title-facts.js';
+  import { playFacts, peopleOf, alsoBy, similarTo, bookSeries, sameSeries, moreByAuthor } from '../lib/title-facts.js';
   import { timeLeft, pausedWhen } from '../lib/tonight.js';
 
   let { id, onopen, onplay } = $props();
@@ -103,6 +103,10 @@
   const director = $derived(people.directors[0] || '');
   const byDirector = $derived(isShow || isAudio ? [] : alsoBy(director, id, shelf, $credits).slice(0, 4));
   const similar = $derived(isAudio ? [] : similarTo(m, shelf, $credits, { exclude: new Set(byDirector.map((i) => i.id)) }));
+  // Audiobooks: the rest of the series (read from the titles) and the author's other books.
+  const series = $derived(isAudio ? bookSeries(audio.title) : null);
+  const inSeries = $derived(isAudio ? sameSeries(m, shelf) : []);
+  const byAuthor = $derived(isAudio ? moreByAuthor(m, shelf) : []);
   const resumeLine = $derived(resuming ? [timeLeft(playTarget.progress), pausedWhen(playTarget.progress?.updatedAt)].filter(Boolean).join(' · ') : '');
 
   // A name opens Search with that director or actor filled in.
@@ -341,6 +345,13 @@
 
       {#if similar.length}
         <div class="similar"><Row title="If you like this one" items={similar} {onopen} {onplay} /></div>
+      {/if}
+      {#if inSeries.length}
+        <div class="similar"><Row title={`Also in ${series.name}`} items={inSeries} {onopen} {onplay}
+             subtitle={`${inSeries.length + 1} books in your library · this is book ${series.number}`} /></div>
+      {/if}
+      {#if byAuthor.length}
+        <div class="similar"><Row title={`More by ${audio.artist}`} items={byAuthor} {onopen} {onplay} /></div>
       {/if}
     </div>
   </div>

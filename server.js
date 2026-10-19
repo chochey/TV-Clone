@@ -736,6 +736,7 @@ require('./lib/routes/accounts')(app, {
   // hasOwn, not truthiness: QUALITY_PRESETS['constructor'] inherits a truthy
   // value from Object.prototype and would sail through as a valid preset.
   isQualityPreset: quality => Object.hasOwn(QUALITY_PRESETS, quality), castHost: CAST_HOST, port: PORT,
+  downloaderConfigured: () => !!(QBT_USERNAME && QBT_PASSWORD),
 });
 
 // ══════════════════════════════════════════════════════════════════════

@@ -1,7 +1,7 @@
 import { defineConfig } from '@playwright/test';
 
 export default defineConfig({
-  testDir: './tests', testMatch: /(search|subtitle-upload|collections|panels|dashboard|watch-later)\.spec\.mjs$/, workers: 1,
+  testDir: './tests', testMatch: /(search|subtitle-upload|collections|panels|dashboard|watch-later|episodes)\.spec\.mjs$/, workers: 1,
   timeout: 20000, reporter: 'list',
   use: { browserName: 'chromium', headless: true, screenshot: 'only-on-failure' },
   outputDir: './test-results/features',

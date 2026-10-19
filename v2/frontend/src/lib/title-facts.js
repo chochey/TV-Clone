@@ -75,3 +75,58 @@ export function similarTo(item, library, credits, { exclude = new Set(), limit =
     .slice(0, limit)
     .map(entry => entry.other);
 }
+
+// ── Audiobooks ────────────────────────────────────────────────────────────
+// Audiobook titles carry the series in a fairly fixed shape:
+//   "We Are Legion (We Are Bob): Bobiverse, Book 1"
+//   "The Final Empire: Mistborn Book 1"
+//   "Immortals: An Epic Fantasy Adventure (Essencers of Aelathia, Book 1)"
+//   "The Way of Kings : Book One of the Stormlight Archive"
+//   "Dune: Book One in the Dune Chronicles"
+// Read it out of the title; there is no series tag in the files.
+const NUMBER_WORDS = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12 };
+const numberOf = value => NUMBER_WORDS[String(value).toLowerCase()] ?? parseInt(value, 10);
+// Keep a leading "The" for display ("Also in The Broken Earth"); grouping ignores it.
+const cleanSeries = name => name.trim().replace(/\s+(?:novel\s+)?series$/i, '').replace(/\s+(?:series|saga|trilogy)$/i, '').trim();
+
+export function bookSeries(title) {
+  const text = String(title || '').trim();
+  if (!text) return null;
+  // "... Series Name, Book 3" / "Series Name Book 3" / "(Series Name, Book 3)" / "Books 1-3"
+  let m = /([^:(\[]+?)[,\s]+(?:Books?|Vol(?:ume)?\.?)\s+(\d+|[A-Za-z]+)(?:\s*[-–]\s*\d+)?\s*[)\]]?\s*$/i.exec(text);
+  if (m && Number.isFinite(numberOf(m[2]))) {
+    const name = cleanSeries(m[1].replace(/^.*[:(\[]\s*/, '').replace(/^(?:Volume|Vol\.?)\s+\d+\s*[:,]?\s*/i, ''));
+    if (name) return { name, number: numberOf(m[2]) };
+  }
+  // "... Book One of the Series Name" / "Book One in the Series Name"
+  m = /(?:Books?|Vol(?:ume)?\.?)\s+(\d+|[A-Za-z]+)\s+(?:of|in)\s+(?:the\s+)?([^:(\[,]+?)\s*[)\]]?\s*$/i.exec(text);
+  if (m && Number.isFinite(numberOf(m[1]))) {
+    const name = cleanSeries(m[2]);
+    if (name) return { name, number: numberOf(m[1]) };
+  }
+  return null;
+}
+
+const bookTitle = item => String(item?.audioMetadata?.title || item?.title || '');
+const bookAuthor = item => String(item?.audioMetadata?.artist || item?.artist || item?.author || '').trim().toLowerCase();
+const isBook = item => mediaKindOf(item) === 'audio';
+const seriesKeyOf = item => { const s = bookSeries(bookTitle(item)); return s ? s.name.toLowerCase().replace(/^the\s+/, '') : null; };
+
+// The other books of this one's series, in reading order.
+export function sameSeries(item, library) {
+  if (!isBook(item)) return [];
+  const key = seriesKeyOf(item);
+  if (!key) return [];
+  return library.filter(other => other.id !== item.id && isBook(other) && seriesKeyOf(other) === key)
+    .sort((a, b) => (bookSeries(bookTitle(a))?.number ?? 0) - (bookSeries(bookTitle(b))?.number ?? 0));
+}
+
+// The author's other books that are not already in the series list: unfinished first, then by title.
+export function moreByAuthor(item, library, { limit = 12 } = {}) {
+  if (!isBook(item)) return [];
+  const author = bookAuthor(item), key = seriesKeyOf(item);
+  if (!author) return [];
+  return library.filter(other => other.id !== item.id && isBook(other) && bookAuthor(other) === author && (!key || seriesKeyOf(other) !== key))
+    .sort((a, b) => (a.watched ? 1 : 0) - (b.watched ? 1 : 0) || bookTitle(a).localeCompare(bookTitle(b)))
+    .slice(0, limit);
+}

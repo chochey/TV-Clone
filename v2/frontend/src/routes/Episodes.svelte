@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { api } from '../lib/api.js';
   import { navigate } from '../lib/router.js';
+  import { session } from '../lib/stores.js';
   import { epCode, recentEpisodes, filterShows, episodeDownload, downloadLabel } from '../lib/episode-report.js';
   let report=$state(null), error=$state(''), downloadError=$state(''), torrents=$state([]);
   let filter=$state('all'), query=$state(''), starting=$state(false);
@@ -17,6 +18,8 @@
     loading=true;
     await Promise.all([
       api.episodesReport().then(r=>{if(!destroyed){report=r;error='';}}).catch(()=>{if(!destroyed)error='Could not load episode information. Retrying shortly.';}),
+      // No download client set up: nothing to match against, and nothing worth a warning.
+      $session?.downloaderConfigured === false ? Promise.resolve() :
       api.torrents().then(r=>{if(!Array.isArray(r))throw new Error();if(!destroyed){torrents=r;downloadError='';}}).catch(()=>{if(!destroyed){torrents=[];downloadError='Download status is unavailable. Check Downloads before adding another copy.';}}),
     ]);
     loading=false;schedule();
