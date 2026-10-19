@@ -134,7 +134,12 @@ books without an ebook. One canonical copy of each script; locations in `tools/r
 They run by hand as `chocheytv` with the speech venv, never inside the server.
 In the player, Read along switches to two columns; the chapter picker, data saver, sleep timer and
 bookmarks stay in the left column there, and are hidden only when the layout stacks (<= 900px) so the
-text comes straight after the controls.
+text comes straight after the controls. **The reader has its own colour scheme, chosen by the user
+for readability (2026-10-19), and is the one deliberate exception to the warm palette:** page #121619,
+panel #1A2025, text #E6E0D5, already-read passages #A8B0B7, current passage block #233A3A, spoken
+word #E2BC78 on #18211F, reader controls accent #81B7AD; the player panel behind it takes #121619
+while reading. Read along opens by itself for a book listed in `/api/audio/read-along-index`
+unless the listener closed it (`localStorage v2ReadAlongAuto = off`, cleared when they open it again).
 
 ### Audiobook data saver and read-along caching (October 2026)
 Data saver is a per-device switch, on by default only for phones (and Save-Data browsers; `dataSaverDefault` in

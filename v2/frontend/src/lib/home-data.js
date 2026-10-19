@@ -21,8 +21,13 @@ export function rememberChapters(id, chapters) {
   });
 }
 
+// Which audiobooks have reading text: Tonight uses it for the Read along button, the player to open the reader by itself.
+export function loadReadAlongIds() {
+  readAlongPending ||= api.readAlongIndex().then(body => readAlongIds.set(new Set(body.ids || []))).catch(() => { readAlongPending = null; });
+  return readAlongPending;
+}
 export function loadHomeData() {
   creditsPending ||= api.libraryCredits().then(body => credits.set(creditsIndex(body))).catch(() => { creditsPending = null; });
-  readAlongPending ||= api.readAlongIndex().then(body => readAlongIds.set(new Set(body.ids || []))).catch(() => { readAlongPending = null; });
+  loadReadAlongIds();
 }
 export function resetHomeData() { creditsPending = null; readAlongPending = null; credits.set(null); readAlongIds.set(new Set()); bookChapters.set(new Map()); }

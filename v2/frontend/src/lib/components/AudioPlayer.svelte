@@ -2,6 +2,7 @@
   import { onMount, onDestroy, tick, untrack } from 'svelte';
   import { api, posterUrl } from '../api.js';
   import { session, updateWatchState, dismissed, AUTO_WATCHED_PERCENT } from '../stores.js';
+  import { readAlongIds, loadReadAlongIds } from '../home-data.js';
   import { audioProgressPayload, audioResumePosition, audioPlaybackError, audioPlaybackIssue, startAudioPlayback, audioTime } from '../audio-playback.js';
   import { audioPresentation, audioRemaining, audioChapters, activeAudioChapter, audioChapterLabel } from '../audio-presentation.js';
   import { mergeAudioDetail } from '../audio-detail.js';
@@ -17,6 +18,18 @@
   let currentTime = $state(0), duration = $state(0), speed = $state(1), volume = $state(rememberedAudioVolume()), muted = $state(rememberedAudioMuted());
   let playing = $state(false), ready = $state(false), full = $state(null), artworkIndex = $state(0);
   let readAlongOpen = $state(untrack(() => startReading));
+  // Read along opens by itself for a book that has reading text, unless the listener closed it
+  // (remembered on this device until they open it again).
+  const READ_ALONG_PREF = 'v2ReadAlongAuto';
+  let readAlongChosen = false;
+  const readAlongWanted = () => { try { return localStorage.getItem(READ_ALONG_PREF) !== 'off'; } catch { return true; } };
+  function toggleReadAlong() {
+    readAlongOpen = !readAlongOpen; readAlongChosen = true;
+    try { localStorage.setItem(READ_ALONG_PREF, readAlongOpen ? 'on' : 'off'); } catch { /* private window */ }
+  }
+  $effect(() => { loadReadAlongIds(); });
+  $effect(() => { item.id; readAlongChosen = false; });
+  $effect(() => { if ($readAlongIds.has(item.id) && !readAlongChosen && !readAlongOpen && readAlongWanted()) readAlongOpen = true; });
   // Data saver: liteSource is the smaller copy now loaded (null = the original);
   // pendingLite is a ready copy waiting for a safe moment to switch to.
   let dataSaver = $state(rememberedDataSaver()), liteFormat = $state(null), liteStatus = $state(null);
@@ -345,7 +358,7 @@
   <div class="panel" class:reading={readAlongOpen} hidden={minimized}>
     <header class="listening-header">
       <span class="listening-label"><span class="listening-dot" class:playing aria-hidden="true"></span>Now listening</span>
-      <div class="header-actions"><button class="close reader-toggle" class:active={readAlongOpen} aria-expanded={readAlongOpen} onclick={() => readAlongOpen = !readAlongOpen}>Read along</button><button class="close" onclick={minimize} aria-label="Minimize audio player">Browse while listening</button><button class="close" bind:this={closeButton} onclick={close} aria-label="Close audio player"><span aria-hidden="true">✕</span> Close</button></div>
+      <div class="header-actions"><button class="close reader-toggle" class:active={readAlongOpen} aria-expanded={readAlongOpen} onclick={toggleReadAlong}>Read along</button><button class="close" onclick={minimize} aria-label="Minimize audio player">Browse while listening</button><button class="close" bind:this={closeButton} onclick={close} aria-label="Close audio player"><span aria-hidden="true">✕</span> Close</button></div>
     </header>
     <div class="player-content">
     <div class="listening-body">
@@ -500,7 +513,7 @@
   @media(max-width:600px) {.header-actions {gap:0;} .header-actions .close {font-size:.7rem;padding:8px;} .mini-panel {gap:6px;} .mini-book {gap:8px;} .mini-book img {width:38px;height:38px;} .mini-control {min-width:40px;} .mini-close {min-width:32px;} }
   .panel { width:min(100%,960px); margin:auto; border:1px solid #ffffff17; border-radius:20px; background:linear-gradient(145deg,#2a241c,#1c1813 70%); box-shadow:0 28px 100px #0008; }
   .reader-toggle.active {background:#e8b04a25;color:#f3ddb0;}
-  .panel.reading {width:min(100%,1360px);}
+  .panel.reading {width:min(100%,1360px);background:#121619;border-color:#ffffff14;}
   .reading .player-content {display:grid;grid-template-columns:minmax(260px,340px) minmax(0,1fr);gap:24px;padding:24px;align-items:start;}
   .reading .listening-body {display:block;padding:0;}
   .reading .artwork {width:110px;margin:0 auto 20px;}

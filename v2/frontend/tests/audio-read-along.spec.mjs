@@ -20,7 +20,7 @@ function wav() {
   body.writeUInt16LE(1, 20); body.writeUInt16LE(1, 22); body.writeUInt32LE(8000, 24); body.writeUInt32LE(16000, 28);
   body.writeUInt16LE(2, 32); body.writeUInt16LE(16, 34); body.write('data', 36); body.writeUInt32LE(size, 40); return body;
 }
-async function fixture(page, { item = book } = {}) {
+async function fixture(page, { item = book, readAlongIds = [] } = {}) {
   const html = await fs.readFile(path.join(dist, 'index.html'), 'utf8');
   const state = { requests: 0, errors: [], response: document(), status: 200, delay: null };
   page.on('pageerror', error => state.errors.push(error.message));
@@ -42,6 +42,7 @@ async function fixture(page, { item = book } = {}) {
       else if (url.pathname === '/api/item/book') body = item;
       else if (url.pathname === '/api/audio/preferences') body = { speed: 1 };
       else if (url.pathname === '/api/audio/bookmarks/book') body = { bookmarks: [] };
+      else if (url.pathname === '/api/audio/read-along-index') body = { ids: readAlongIds };
       else if (url.pathname === '/api/audio/read-along/book') {
         state.requests++; if (state.delay) await state.delay;
         return route.fulfill({ status: state.status, json: state.response });
@@ -519,4 +520,30 @@ test('when the read-along layout stacks, the text comes straight after the contr
   await expect(player.getByRole('combobox', { name: 'Sleep timer', exact: true })).toBeHidden();
   await expect(player.getByRole('button', { name: 'Add bookmark', exact: true })).toBeHidden();
   expect(state.errors).toEqual([]);
+});
+
+test('a book with reading text opens Read along by itself, and remembers when the listener closes it', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const state = await fixture(page, { readAlongIds: ['book'] });
+  await expect(page.getByRole('region', { name: 'Book text' })).toBeVisible();
+  expect(state.requests).toBe(1);
+  await page.getByRole('button', { name: 'Read along', exact: true }).click();
+  await expect(page.getByRole('region', { name: 'Read along', exact: true })).toHaveCount(0);
+  // Closed on purpose: reopening the player keeps it closed until it is asked for again.
+  await page.getByRole('button', { name: 'Close audio player' }).click();
+  await page.getByRole('button', { name: /^Resume/ }).click();
+  await expect(page.getByRole('dialog', { name: 'Audio player' })).toBeVisible();
+  await page.waitForTimeout(500);
+  await expect(page.getByRole('region', { name: 'Read along', exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Read along', exact: true }).click();
+  await expect(page.getByRole('region', { name: 'Book text' })).toBeVisible();
+  expect(state.errors).toEqual([]);
+});
+
+test('a book without reading text leaves Read along closed', async ({ page }) => {
+  const state = await fixture(page);
+  await expect(page.getByRole('dialog', { name: 'Audio player' })).toBeVisible();
+  await page.waitForTimeout(500);
+  await expect(page.getByRole('region', { name: 'Read along', exact: true })).toHaveCount(0);
+  expect(state.requests).toBe(0); expect(state.errors).toEqual([]);
 });

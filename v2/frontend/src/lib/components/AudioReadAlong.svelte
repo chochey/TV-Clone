@@ -214,7 +214,7 @@
       onwheel={pauseFollowing} ontouchmove={pauseFollowing} onpointerdown={pauseFollowing} onkeydown={readingKey}>
       <h3>{chapter.title}</h3>
       {#each chapter.paragraphs as paragraph, index (paragraph.id)}
-        <div class="passage" class:current={currentParagraph === index} aria-current={currentParagraph === index ? 'true' : undefined}>
+        <div class="passage" class:current={currentParagraph === index} class:done={activeChapter > readingChapter || (activeChapter === readingChapter && index < activeParagraph)} aria-current={currentParagraph === index ? 'true' : undefined}>
           <p>{#if currentParagraph === index && wordParts.length}{#each wordParts as part}{#if part.word >= 0}<span class="spoken-word" class:spoken-current={currentWord === part.word}>{part.text}</span>{:else}{part.text}{/if}{/each}{:else}{paragraph.text}{/if}</p>
           <div class="passage-info">{#if paragraph.page}<span>Page {paragraph.page}</span>{/if}
             {#if paragraph.start !== null}<button disabled={!ready} onclick={() => { onseek?.(paragraph.start); following = true; }} aria-label={`Listen from this passage at ${audioTime(paragraph.start)}`}>Listen from here <span aria-hidden="true">↗</span></button>
@@ -229,44 +229,46 @@
 </section>
 
 <style>
-  .reader {width:100%;max-width:100%;min-width:0;display:flex;flex-direction:column;background:#1c1813;border:1px solid #ffffff20;border-radius:14px;color:#f8f6f4;overflow:hidden;}
+  .reader {width:100%;max-width:100%;min-width:0;display:flex;flex-direction:column;background:#1A2025;border:1px solid #ffffff14;border-radius:14px;color:#E6E0D5;overflow:hidden;}
   .reader-heading {display:flex;align-items:center;justify-content:space-between;gap:16px;padding:20px 24px 12px;}
-  .eyebrow {font-size:.6rem;letter-spacing:.15em;color:#e8b04a;font-weight:700;}
+  .eyebrow {font-size:.6rem;letter-spacing:.15em;color:#81B7AD;font-weight:700;}
   h2 {font-size:1.3rem;margin:5px 0 0;letter-spacing:-.02em;}
-  .reader-label {font-size:.72rem;color:#d3c9bc;}
-  .word-progress {display:flex;align-items:center;flex-wrap:wrap;gap:4px 12px;font-size:.72rem;line-height:1.5;color:#d9d2c7;margin:0;padding:0 24px 8px;}
-  .word-progress button {font-size:.72rem;border:1px solid #7d6f5b;}
-  .chapter-timing-note {font-size:.75rem;line-height:1.5;color:#e6e1da;padding:0 24px 8px;margin:0;}
+  .reader-label {font-size:.72rem;color:#A8B0B7;}
+  .word-progress {display:flex;align-items:center;flex-wrap:wrap;gap:4px 12px;font-size:.72rem;line-height:1.5;color:#A8B0B7;margin:0;padding:0 24px 8px;}
+  .word-progress button {font-size:.72rem;border:1px solid #334246;}
+  .chapter-timing-note {font-size:.75rem;line-height:1.5;color:#E6E0D5;padding:0 24px 8px;margin:0;}
   .reader-toolbar {display:flex;align-items:end;gap:16px;padding:10px 24px;}
-  .reader-chapter {display:flex;flex-direction:column;gap:7px;flex:1;min-width:0;font-size:.74rem;color:#d9d2c7;}
-  select {width:100%;min-width:0;min-height:44px;padding:9px 12px;border:1px solid #7d6f5b;border-radius:8px;font:inherit;color:#f8f6f4;background:#312a21;color-scheme:dark;}
-  option {color:#f8f6f4;background:#312a21;}
-  button {min-height:40px;border-radius:7px;padding:8px 10px;font-size:.78rem;color:#ece8e3;}
-  button:hover:not(:disabled) {background:#e8b04a20;}
+  .reader-chapter {display:flex;flex-direction:column;gap:7px;flex:1;min-width:0;font-size:.74rem;color:#A8B0B7;}
+  select {width:100%;min-width:0;min-height:44px;padding:9px 12px;border:1px solid #334246;border-radius:8px;font:inherit;color:#E6E0D5;background:#121619;color-scheme:dark;}
+  option {color:#E6E0D5;background:#1A2025;}
+  button {min-height:40px;border-radius:7px;padding:8px 10px;font-size:.78rem;color:#E6E0D5;}
+  button:hover:not(:disabled) {background:#81B7AD26;}
   .text-size {display:flex;gap:4px;padding-bottom:1px;}
-  .text-size button {min-width:42px;font-size:.9rem;border:1px solid #7d6f5b;}
-  .follow-status {display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:54px;padding:4px 24px;font-size:.72rem;color:#d8d0c5;}
+  .text-size button {min-width:42px;font-size:.9rem;border:1px solid #334246;}
+  .follow-status {display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:54px;padding:4px 24px;font-size:.72rem;color:#A8B0B7;}
   .follow-actions {display:flex;align-items:center;justify-content:flex-end;gap:12px;flex-shrink:0;}
   .auto-scroll {display:flex;align-items:center;gap:7px;min-height:40px;cursor:pointer;white-space:nowrap;}
-  .auto-scroll input {width:17px;height:17px;accent-color:#e8b04a;cursor:pointer;}
-  .follow-status button {color:#0e0c0b;background:#e8b04a;font-weight:650;}
-  .follow-status button:hover {background:#f0c066;}
+  .auto-scroll input {width:17px;height:17px;accent-color:#81B7AD;cursor:pointer;}
+  .follow-status button {color:#18211F;background:#81B7AD;font-weight:650;}
+  .follow-status button:hover {background:#9ccbc2;}
   .reading-body {position:relative;min-width:0;}
-  .timing-note {position:absolute;bottom:0;left:0;right:0;z-index:1;pointer-events:none;font-size:.75rem;line-height:1.5;padding:12px 24px;margin:0;background:#393126f5;color:#e6e1da;border-top:1px solid #ffffff12;}
-  .reading-text {width:100%;max-width:100%;height:clamp(320px,58vh,740px);overflow:auto;overflow-anchor:none;overscroll-behavior:contain;scrollbar-color:#84745e #1f1b15;scrollbar-gutter:stable;padding:20px 22px 36px;outline-offset:-4px;}
-  .reading-text h3 {font-family:Georgia,serif;font-size:1.5rem;line-height:1.4;padding:0 14px;margin:0 0 22px;}
-  .passage {padding:13px 14px 6px;margin:0 0 7px;border-left:3px solid transparent;border-radius:4px 9px 9px 4px;}
-  .passage.current {background:#2f2519;border-left-color:#e8b04a;}
-  .passage p {font-family:Georgia,'Times New Roman',serif;font-size:var(--reading-size);line-height:1.8;white-space:pre-line;overflow-wrap:anywhere;margin:0;color:#f6f4f1;}
-  .spoken-current {color:#1a1410;background:#f1dfa3;border-radius:3px;box-shadow:0.07em 0 #f1dfa3,-0.07em 0 #f1dfa3;box-decoration-break:clone;-webkit-box-decoration-break:clone;}
-  .passage-info {display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:38px;font-size:.65rem;color:#c8bdae;}
-  .passage-info button {margin-left:auto;min-height:36px;font-size:.68rem;}
-  .reader-footer {display:flex;align-items:center;justify-content:space-between;gap:8px;border-top:1px solid #ffffff18;padding:10px 14px;font-size:.7rem;color:#d3cabd;}
-  .reader-message {min-height:240px;padding:32px 24px;color:#e5e0d8;line-height:1.6;font-size:.9rem;}
+  .timing-note {position:absolute;bottom:0;left:0;right:0;z-index:1;pointer-events:none;font-size:.75rem;line-height:1.5;padding:12px 24px;margin:0;background:#1A2025f5;color:#E6E0D5;border-top:1px solid #ffffff12;}
+  .reading-text {width:100%;max-width:100%;height:clamp(320px,58vh,740px);overflow:auto;overflow-anchor:none;overscroll-behavior:contain;scrollbar-color:#3a474c #121619;scrollbar-gutter:stable;padding:20px 22px 36px;background:#121619;outline-offset:-4px;}
+  .reading-text h3 {font-family:Georgia,serif;font-size:1.5rem;line-height:1.4;padding:0 14px;margin:0 0 22px;color:#E6E0D5;}
+  .passage {padding:14px 16px 6px;margin:0 0 8px;border-radius:10px;}
+  .passage.current {background:#233A3A;}
+  .passage p {font-family:Georgia,'Times New Roman',serif;font-size:var(--reading-size);line-height:1.8;white-space:pre-line;overflow-wrap:anywhere;margin:0;color:#E6E0D5;}
+  .passage.done p {color:#A8B0B7;}
+  .passage.current p {color:#F4F0E8;}
+  .spoken-current {color:#18211F;background:#E2BC78;border-radius:4px;box-shadow:0.12em 0 #E2BC78,-0.12em 0 #E2BC78;box-decoration-break:clone;-webkit-box-decoration-break:clone;}
+  .passage-info {display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:38px;font-size:.65rem;color:#A8B0B7;}
+  .passage-info button {margin-left:auto;min-height:36px;font-size:.68rem;color:#81B7AD;}
+  .reader-footer {display:flex;align-items:center;justify-content:space-between;gap:8px;border-top:1px solid #ffffff12;padding:10px 14px;font-size:.7rem;color:#A8B0B7;}
+  .reader-message {min-height:240px;padding:32px 24px;color:#E6E0D5;line-height:1.6;font-size:.9rem;}
   .reader-message h3 {font-size:1rem;margin-bottom:10px;}
-  .reader-message .reader-hint {margin-top:10px;color:#b5a692;font-size:.82rem;}
-  .reader-message button {margin-top:14px;border:1px solid #8a7356;}
-  button:focus-visible,select:focus-visible,input:focus-visible,.reading-text:focus-visible {outline:3px solid #e8b04a;outline-offset:3px;}
+  .reader-message .reader-hint {margin-top:10px;color:#A8B0B7;font-size:.82rem;}
+  .reader-message button {margin-top:14px;border:1px solid #3a4a4e;}
+  button:focus-visible,select:focus-visible,input:focus-visible,.reading-text:focus-visible {outline:3px solid #81B7AD;outline-offset:3px;}
   button:disabled {opacity:.4;cursor:default;}
   @media(max-width:640px) {
     .reader-heading {padding:18px 16px 10px;}.reader-label {display:none;}.word-progress,.chapter-timing-note {padding:0 16px 8px;}.reader-toolbar {padding:10px 16px;gap:8px;}
