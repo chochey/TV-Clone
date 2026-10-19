@@ -248,6 +248,12 @@
       "passes": true
     },
     {
+      "id": "admin-006",
+      "category": "admin",
+      "description": "Dashboard shows background jobs (read-along, collections, thumbnails, data saver copies, library scan), streaming history and library growth",
+      "passes": true
+    },
+    {
       "id": "downloads-001",
       "category": "downloads",
       "description": "qBittorrent proxy — search, add, pause/resume, delete torrents",
@@ -275,6 +281,12 @@
       "id": "ui-004",
       "category": "ui",
       "description": "Season/episode detail pages",
+      "passes": true
+    },
+    {
+      "id": "ui-005",
+      "category": "ui",
+      "description": "Redesigned look: warm palette and serif titles; Tonight home with a Resume card, a Continue listening card and a pick with a reason; title page with credits, how it will play, more by the director and similar titles",
       "passes": true
     },
     {
@@ -488,6 +500,12 @@
       "id": "audio-014",
       "category": "audiobooks",
       "description": "Reopening read-along revalidates the document (ETag/304) instead of downloading it again, and the first download is brotli-compressed",
+      "passes": true
+    },
+    {
+      "id": "audio-015",
+      "category": "audiobooks",
+      "description": "Audiobook covers and authors show at once: covers are saved on disk and listed in the catalog, so shelves need no per-book lookup, even after a restart",
       "passes": true
     }
   ]
