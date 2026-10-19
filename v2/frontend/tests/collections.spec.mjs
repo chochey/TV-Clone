@@ -94,3 +94,12 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 
     await page.screenshot({ path: test.info().outputPath(`collections-${viewport.width}.png`) });
   });
 }
+
+test('a collection the server listed with each film twice still opens, with each film once', async ({ page }) => {
+  await setup(page, { collections: [{ id: 'Q9', name: 'Harry Potter', itemIds: ['hp1', 'hp2', 'hp1', 'hp2'] }] });
+  await page.goto(`${origin}/collections`);
+  await page.getByRole('button', { name: 'Harry Potter collection, 2 films' }).click();
+  await expect(page).toHaveURL(/\/collection\/Q9$/);
+  await expect(page.getByRole('heading', { name: 'Harry Potter' })).toBeVisible();
+  await expect(page.locator('.page .grid > *')).toHaveCount(2);
+});

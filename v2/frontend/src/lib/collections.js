@@ -20,7 +20,7 @@ export function resetCollections() { pending = null; collections.set([]); }
 export function collectionCards(list, library) {
   const byId = new Map(library.map(item => [item.id, item]));
   return list.map(c => {
-    const films = c.itemIds.map(id => byId.get(id)).filter(Boolean);
+    const films = [...new Set(c.itemIds)].map(id => byId.get(id)).filter(Boolean);
     if (films.length < 2) return null;
     return { id: c.id, name: c.name, films, cover: films.find(f => f.omdbPosterUrl || f.posterUrl) || films[0] };
   }).filter(Boolean);

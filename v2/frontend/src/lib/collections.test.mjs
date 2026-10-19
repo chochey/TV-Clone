@@ -26,3 +26,8 @@ test('a film lists the collections it belongs to', () => {
   assert.deepEqual(collectionsOf('hp2', list).map(c => c.name), ['Harry Potter']);
   assert.deepEqual(collectionsOf('nope', list), []);
 });
+
+test('a film listed twice by the server appears once on the card', () => {
+  const cards = collectionCards([{ id: 'Q9', name: 'Home Alone', itemIds: ['hp1', 'hp2', 'hp1', 'hp2'] }, { id: 'Q8', name: 'Atlantis', itemIds: ['ts1', 'ts1'] }], lib);
+  assert.deepEqual(cards.map(c => [c.name, c.films.map(f => f.id)]), [['Home Alone', ['hp1', 'hp2']]]);
+});
