@@ -1,35 +1,42 @@
-/* ── TV-Clone v2 design tokens — neutral cinema ──────────────────────────
-   Near-black neutral base, one clean sans, white CTAs. The artwork is the
-   color; the UI stays out of its way. */
+/* ── ChocheyTV design tokens — the film programme ─────────────────────────
+   Warm black like a darkened cinema, cream type, one amber accent for the
+   things you press (Play, Resume, progress). Titles are set in a serif, the
+   way a printed programme would; everything else is a quiet sans. The
+   artwork stays the loudest thing on the page. */
 :root {
-  /* Type — Inter carries everything, weight does the talking */
-  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-sans: 'Instrument Sans', system-ui, -apple-system, sans-serif;
+  --font-display: 'Instrument Serif', Georgia, 'Times New Roman', serif;
 
-  /* Neutral cinema black — cool, not warm */
-  --bg: #0b0b0e;
-  --bg-raised: #17171c;
-  --bg-sunken: #060608;
-  --ink: #f2f2f4;
-  --ink-soft: #a3a3ad;
-  --ink-faint: #5e5e68;
-  --line: rgba(242, 242, 244, 0.08);
-  --line-strong: rgba(242, 242, 244, 0.16);
+  --bg: #0e0c0b;
+  --bg-raised: #191614;
+  --bg-sunken: #090807;
+  --ink: #f3ede4;
+  --ink-soft: #b3aa9e;   /* 8.1:1 on --bg */
+  --ink-faint: #8c8378;  /* 5.3:1 on --bg: still readable for small meta text */
+  --line: rgba(243, 237, 228, 0.08);
+  --line-strong: rgba(243, 237, 228, 0.16);
 
-  /* CTAs are white-on-black; gold appears ONLY on rating stars */
-  --cta: #ffffff;
-  --cta-ink: #0b0b0e;
-  --star: #f5c518;
+  /* One accent. CTAs, progress, the active tab, rating stars. */
+  --accent: #e8b04a;
+  --accent-ink: #0e0c0b;
+  --accent-soft: rgba(232, 176, 74, 0.14);
+  --cta: var(--accent);
+  --cta-ink: var(--accent-ink);
+  --star: var(--accent);
+  --good: #8fcf8a;
+  --warn: #f0a35c;
+  --bad: #ef7a6b;
 
   /* Scrims for text over artwork */
-  --scrim: rgba(11, 11, 14, 0.92);
-  --scrim-soft: rgba(11, 11, 14, 0.55);
+  --scrim: rgba(14, 12, 11, 0.92);
+  --scrim-soft: rgba(14, 12, 11, 0.55);
 
   /* Spacing scale */
   --s1: 4px;  --s2: 8px;  --s3: 12px; --s4: 20px;
   --s5: 32px; --s6: 52px; --s7: 84px;
 
-  /* Radii */
-  --r-sm: 6px; --r-md: 10px; --r-lg: 16px;
+  /* Radii — buttons are pills, surfaces are softly rounded */
+  --r-sm: 8px; --r-md: 12px; --r-lg: 16px; --r-pill: 999px;
 
   /* Motion */
   --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
@@ -54,10 +61,12 @@ body {
   text-rendering: optimizeLegibility;
 }
 
-/* Display type: heavy Inter, tight tracking — no serif theatrics */
+/* Display type: the serif, regular weight, a touch of negative tracking.
+   Page titles and item titles; never body text. */
 .display {
-  font-weight: 800;
-  letter-spacing: -0.03em;
+  font-family: var(--font-display);
+  font-weight: 400;
+  letter-spacing: -0.01em;
   line-height: 1.02;
 }
 .meta {
@@ -84,4 +93,6 @@ input::placeholder { color: var(--ink-faint); }
 ::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 99px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--ink-faint); }
 
-::selection { background: var(--ink); color: var(--bg); }
+::selection { background: var(--accent); color: var(--accent-ink); }
+
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }

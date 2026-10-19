@@ -390,7 +390,7 @@
   .vpnchip {
     font-size: 0.78rem; font-weight: 600;
     padding: 4px 12px; border-radius: 99px;
-    background: rgba(242, 242, 244, 0.07);
+    background: rgba(243, 237, 228, 0.07);
     box-shadow: inset 0 0 0 1px var(--line);
   }
   .vpnchip.good { color: #7ed491; }
@@ -482,7 +482,7 @@
   .text { flex: 1; min-width: 260px; display: flex; flex-direction: column; gap: 5px; }
   .t { font-weight: 600; font-size: 0.95rem; word-break: break-all; }
   .sub { text-transform: none; letter-spacing: 0.02em; font-size: 0.78rem; }
-  .bar { display: block; height: 4px; background: rgba(242, 242, 244, 0.12); border-radius: 99px; overflow: hidden; }
+  .bar { display: block; height: 4px; background: rgba(243, 237, 228, 0.12); border-radius: 99px; overflow: hidden; }
   .bar span { display: block; height: 100%; background: var(--ink-soft); }
   .bar.done span { background: #7ed491; }
   .pct { font-weight: 700; font-variant-numeric: tabular-nums; min-width: 44px; text-align: right; }
@@ -494,6 +494,6 @@
     transition: color var(--t-fast), background var(--t-fast);
   }
   .actions button:disabled { opacity: .5; cursor: wait; }
-  .actions button:hover { color: var(--ink); background: rgba(242, 242, 244, 0.08); }
+  .actions button:hover { color: var(--ink); background: rgba(243, 237, 228, 0.08); }
   .actions .danger:hover { color: #ff6b6b; }
 </style>

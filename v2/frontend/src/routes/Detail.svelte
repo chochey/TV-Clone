@@ -1,6 +1,6 @@
 <script>
-  import { api, posterUrl, backdropUrl } from '../lib/api.js';
-  import { library, updateWatchState, libraryLoaded, session, enrichItem, AUTO_WATCHED_PERCENT } from '../lib/stores.js';
+  import { api, posterUrl } from '../lib/api.js';
+  import { library, catalog, watchState, collapseShows, searchFilters, searchQuery, updateWatchState, libraryLoaded, session, enrichItem, AUTO_WATCHED_PERCENT } from '../lib/stores.js';
   import { navigate } from '../lib/router.js';
   import { seriesEpisodes, seriesPlayTarget, isSeriesItem, isAudioItem } from '../lib/series-playback.js';
   import { episodeTitle, episodeCode } from '../lib/format.js';
@@ -10,8 +10,13 @@
   import { mergeAudioDetail, audioDetailArtwork, audioDetailDuration } from '../lib/audio-detail.js';
   import SubtitleUpload from '../lib/components/SubtitleUpload.svelte';
   import { collections, loadCollections, collectionsOf } from '../lib/collections.js';
+  import Row from '../lib/components/Row.svelte';
+  import { EMPTY_FILTERS } from '../lib/search-filters.js';
+  import { credits, loadHomeData } from '../lib/home-data.js';
+  import { playFacts, peopleOf, alsoBy, similarTo } from '../lib/title-facts.js';
+  import { timeLeft, pausedWhen } from '../lib/tonight.js';
 
-  let { id, onplay } = $props();
+  let { id, onopen, onplay } = $props();
 
   // Library snapshot is instant; /api/item fills in runtime + fresh progress.
   const item = $derived($library.find((i) => i.id === id) || null);
@@ -79,19 +84,6 @@
       : episodes.filter((e) => e.epInfo?.season === season),
   );
 
-  // ── Backdrop stage (same ladder as the home hero) ──────────────────
-  const artItem = $derived(isShow ? (nextUp || item) : item);
-  let backdropSrc = $state('');
-  $effect(() => {
-    const url = !isAudio && artItem?.id ? backdropUrl(artItem) : '';
-    backdropSrc = '';
-    if (!url) return;
-    let alive = true;
-    const img = new Image();
-    img.onload = () => { if (alive) backdropSrc = url; };
-    img.src = url;
-    return () => { alive = false; };
-  });
   $effect(() => { if (item && !isAudio && !posterUrl(item)) enrichItem(item.id); });
 
   const playTarget = $derived(isShow ? nextUp : m);
@@ -99,6 +91,25 @@
   const playLabel = $derived(
     (isAudio ? (resuming ? 'Resume listening' : 'Listen') : (resuming ? 'Resume' : 'Play')) + (isShow && playTarget?.epInfo ? ` ${episodeCode(playTarget)}` : ''),
   );
+
+  // ── Below the hero: how it plays, who made it, what's next ─────────
+  $effect(() => { loadHomeData(); });
+  const people = $derived(peopleOf(m));
+  let quality = $state('auto');
+  $effect(() => { id; try { quality = localStorage.getItem('v2Quality') || 'auto'; } catch { quality = 'auto'; } });
+  const facts = $derived(!isAudio && !isShow ? playFacts(m, { quality }) : []);
+  const shelf = $derived(collapseShows($catalog).map((i) => ({ ...i, ...$watchState[i.id] })));
+  const director = $derived(people.directors[0] || '');
+  const byDirector = $derived(isShow || isAudio ? [] : alsoBy(director, id, shelf, $credits).slice(0, 4));
+  const similar = $derived(isAudio ? [] : similarTo(m, shelf, $credits, { exclude: new Set(byDirector.map((i) => i.id)) }));
+  const resumeLine = $derived(resuming ? [timeLeft(playTarget.progress), pausedWhen(playTarget.progress?.updatedAt)].filter(Boolean).join(' · ') : '');
+
+  // A name opens Search with that director or actor filled in.
+  function findPerson(role, name) {
+    searchQuery.set('');
+    searchFilters.set({ ...EMPTY_FILTERS, [role]: name });
+    navigate('/search');
+  }
 
   async function toggleWatched(target) {
     const newVal = !target.watched;
@@ -147,86 +158,98 @@
   {/if}
 {:else}
   <div class="detail" class:audio-detail={isAudio}>
-    <div class="stage">
-      <!-- Ambient wash is the FALLBACK for a missing backdrop. Once the real
-           backdrop loads it covers this completely, so painting a 64px blur
-           underneath is invisible work on every title page. -->
-      {#if poster && !backdropSrc}
-        <div class="ambient" style={`background-image:url(${poster})`}></div>
-      {/if}
-      {#if backdropSrc}
-        <img class="backdrop" src={backdropSrc} alt="" />
-      {/if}
+    <section class="hero" aria-labelledby="title-h">
+      <!-- The poster, blurred once and never animated: an animated blur was the Firefox/Linux lag source. -->
+      {#if poster}<img class="hero-bg" src={poster} alt="" aria-hidden="true" />{/if}
       <div class="scrim"></div>
-    </div>
 
-    <div class="content">
-      <!-- Go back where they came from (Films, Search, History), not always Home. -->
-      <button class="back" onclick={() => (history.length > 1 ? history.back() : navigate('/'))} aria-label="Go back">← Back</button>
+      <div class="content">
+        <!-- Go back where they came from (Films, Search, History), not always Home. -->
+        <button class="back" onclick={() => (history.length > 1 ? history.back() : navigate('/'))} aria-label="Go back">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 18l-6-6 6-6"/></svg>Back
+        </button>
 
-      <div class="cols">
-        <div class="posterwrap">
-          {#if poster}
-            <img class="poster" src={poster} alt={title} onerror={() => { artworkIndex += 1; }} />
-          {:else if isAudio}
-            <div class="poster book-placeholder" aria-label="Audiobook cover unavailable">
-              <svg viewBox="0 0 80 80" aria-hidden="true"><path d="M40 20c-8-6-20-8-30-5v42c10-3 22-1 30 5 8-6 20-8 30-5V15c-10-3-22-1-30 5Zm0 0v42"/><path d="M18 26c5-1 10 0 15 2m-15 9c5-1 10 0 15 2m14-11c5-2 10-3 15-2m-15 13c5-2 10-3 15-2"/></svg>
-              <span>Audiobook</span>
-            </div>
-          {:else}
-            <div class="poster pph"><span>{title}</span></div>
-          {/if}
-        </div>
-
-        <div class="info">
-          <span class="kicker meta">{isShow ? 'Series' : isAudio ? 'Audiobook' : 'Film'}{!isAudio && year ? ` · ${year}` : ''}</span>
-          <h1 class="display">{title}</h1>
-          {#if isAudio && audio.artist}<p class="audio-author">{audio.artist}</p>{/if}
-          {#if isAudio && audio.album}<p class="audio-album">{audio.album}</p>{/if}
-          <div class="metarow">
-            {#if isAudio}
-              {#if audioDuration}<span class="audio-duration">{audioDuration}</span>{/if}
-              {#if chapterCount}<span class="audio-chapters">{chapterCount} chapter{chapterCount === 1 ? '' : 's'}</span>{/if}
+        <div class="cols">
+          <div class="posterwrap">
+            {#if poster}
+              <img class="poster" src={poster} alt={title} onerror={() => { artworkIndex += 1; }} />
+            {:else if isAudio}
+              <div class="poster book-placeholder" aria-label="Audiobook cover unavailable">
+                <svg viewBox="0 0 80 80" aria-hidden="true"><path d="M40 20c-8-6-20-8-30-5v42c10-3 22-1 30 5 8-6 20-8 30-5V15c-10-3-22-1-30 5Zm0 0v42"/><path d="M18 26c5-1 10 0 15 2m-15 9c5-1 10 0 15 2m14-11c5-2 10-3 15-2m-15 13c5-2 10-3 15-2"/></svg>
+                <span>Audiobook</span>
+              </div>
             {:else}
-              {#if runtime}<span>{runtime}</span>{/if}
-              {#if rating}<span class="star">★ {rating}</span>{/if}
-              {#if rated}<span class="chip">{rated}</span>{/if}
-              {#if isShow && seasons.length}<span>{seasons.length} season{seasons.length > 1 ? 's' : ''}</span>{/if}
-              {#if genres.length}<span>{genres.slice(0, 4).join(', ')}</span>{/if}
+              <div class="poster pph"><span>{title}</span></div>
             {/if}
           </div>
-          {#if partOf.length && !isShow && !isAudio}
-            <p class="partof">Part of {#each partOf as c, i (c.id)}{#if i}, {/if}<a href={`/collection/${encodeURIComponent(c.id)}`} onclick={(e) => { e.preventDefault(); navigate(`/collection/${encodeURIComponent(c.id)}`); }}>{c.name}</a>{/each}</p>
-          {/if}
-          {#if deleteError}<p class="warn" role="alert">{deleteError}</p>{/if}
-          {#if plot}<p class="plot">{plot}</p>{/if}
-          {#if playbackIssue}<p class="compatibility" role="status">{playbackIssue}</p>{/if}
-          <div class="actions">
-            <button class="play" onclick={() => playTarget && onplay?.(playTarget)}>
-              {#if playbackIssue}<span aria-hidden="true">ⓘ</span>{:else}<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>{/if}
-              {playbackIssue ? 'Playback info' : playLabel}
-            </button>
-            {#if !isShow}
-              <button class="ghost" onclick={() => toggleWatched(m)}>
-                {m.watched ? (isAudio ? '✓ Listened' : '✓ Watched') : (isAudio ? 'Mark Listened' : 'Mark Watched')}
-              </button>
-            {/if}
-            {#if $session?.role === 'admin' && !isAudio}
-              <button class="ghost" onclick={() => { showSubtitleUpload = true; }}>Add subtitles</button>
-            {/if}
-            {#if $session?.role === 'admin'}
-              <button class="ghost danger" onclick={() => { showDeleteConfirm = true; }}>
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
-                Delete
-              </button>
-            {/if}
+
+          <div class="info">
+            <div class="head">
+              <span class="kicker">{isShow ? 'Series' : isAudio ? 'Audiobook' : 'Film'}{!isAudio && year ? ` · ${year}` : ''}</span>
+              <h1 id="title-h" class="display">{title}</h1>
+              {#if isAudio && audio.artist}<p class="audio-author">{audio.artist}</p>{/if}
+              {#if isAudio && audio.album}<p class="audio-album">{audio.album}</p>{/if}
+              <div class="metarow">
+                {#if isAudio}
+                  {#if audioDuration}<span class="audio-duration">{audioDuration}</span>{/if}
+                  {#if chapterCount}<span class="audio-chapters">{chapterCount} chapter{chapterCount === 1 ? '' : 's'}</span>{/if}
+                {:else}
+                  {#if rated}<span class="chip">{rated}</span>{/if}
+                  {#if runtime}<span>{runtime}</span>{/if}
+                  {#if rating}<span><span class="star" aria-hidden="true">★</span> {rating}</span>{/if}
+                  {#if isShow && seasons.length}<span>{seasons.length} season{seasons.length > 1 ? 's' : ''}</span>{/if}
+                  {#if genres.length}<span class="genres">{genres.slice(0, 3).join(', ')}</span>{/if}
+                {/if}
+              </div>
+            </div>
+
+            <div class="body">
+              {#if deleteError}<p class="warn" role="alert">{deleteError}</p>{/if}
+              {#if plot}<p class="plot">{plot}</p>{/if}
+              {#if !isAudio && (people.directors.length || people.actors.length)}
+                <p class="credits">
+                  {#if people.directors.length}Directed by{' '}{#each people.directors as name, i (name)}{#if i}{', '}{/if}<a href="/search" onclick={(e) => { e.preventDefault(); findPerson('director', name); }}>{name}</a>{/each}{/if}{#if people.directors.length && people.actors.length}<span aria-hidden="true">{' · '}</span>{/if}{#if people.actors.length}With{' '}{#each people.actors as name, i (name)}{#if i}{', '}{/if}<a href="/search" onclick={(e) => { e.preventDefault(); findPerson('actor', name); }}>{name}</a>{/each}{/if}
+                </p>
+              {/if}
+              {#if partOf.length && !isShow && !isAudio}
+                <p class="partof">Part of{' '}{#each partOf as c, i (c.id)}{#if i}{', '}{/if}<a href={`/collection/${encodeURIComponent(c.id)}`} onclick={(e) => { e.preventDefault(); navigate(`/collection/${encodeURIComponent(c.id)}`); }}>{c.name}</a>{/each}</p>
+              {/if}
+              {#if playbackIssue}<p class="compatibility" role="status">{playbackIssue}</p>{/if}
+              <div class="actions">
+                <button class="play" onclick={() => playTarget && onplay?.(playTarget)}>
+                  {#if playbackIssue}<span aria-hidden="true">ⓘ</span>{:else}<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M7 4v16l13-8z"/></svg>{/if}
+                  {playbackIssue ? 'Playback info' : playLabel}
+                </button>
+                {#if !isShow}
+                  <button class="ghost" class:on={m.watched} onclick={() => toggleWatched(m)}>
+                    {m.watched ? (isAudio ? '✓ Listened' : '✓ Watched') : (isAudio ? 'Mark Listened' : 'Mark Watched')}
+                  </button>
+                {/if}
+                {#if $session?.role === 'admin' && !isAudio}
+                  <button class="ghost" onclick={() => { showSubtitleUpload = true; }}>
+                    <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M10 10.5a2 2 0 1 0 0 3M17 10.5a2 2 0 1 0 0 3"/></svg>Add subtitles
+                  </button>
+                {/if}
+                {#if $session?.role === 'admin'}
+                  <button class="ghost danger" onclick={() => { showDeleteConfirm = true; }}>
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+                    Delete
+                  </button>
+                {/if}
+              </div>
+              {#if resuming}
+                <div class="resume">
+                  <div class="resumebar" aria-hidden="true"><span style={`width:${playTarget.progress.percent}%`}></span></div>
+                  {#if resumeLine}<span>{resumeLine}</span>{/if}
+                </div>
+              {/if}
+            </div>
           </div>
-          {#if resuming}
-            <div class="resumebar"><span style={`width:${playTarget.progress.percent}%`}></span></div>
-          {/if}
         </div>
       </div>
+    </section>
 
+    <div class="below">
       {#if isShow && seasons.length}
         <div class="episodes">
           {#if seasons.length > 1}
@@ -240,7 +263,7 @@
               {/each}
             </div>
           {:else}
-            <h2 class="oneseason">{seasons[0] === EXTRAS ? 'Extras' : `Season ${seasons[0]}`}</h2>
+            <h2 class="oneseason display">{seasons[0] === EXTRAS ? 'Extras' : `Season ${seasons[0]}`}</h2>
           {/if}
 
           <div class="eplist">
@@ -270,6 +293,43 @@
           </div>
         </div>
       {/if}
+
+      {#if facts.length || byDirector.length}
+        <div class="facts-row">
+          {#if facts.length}
+            <section class="howplay" aria-labelledby="howplay-h">
+              <h2 id="howplay-h" class="display">How it will play</h2>
+              <div class="facts">
+                {#each facts as fact (fact.label)}
+                  <div class="fact">
+                    <span class="fact-label">{fact.label}</span>
+                    <span class="fact-value">{fact.value}</span>
+                    {#if fact.detail}<span class="fact-detail">{fact.detail}</span>{/if}
+                  </div>
+                {/each}
+              </div>
+            </section>
+          {/if}
+          {#if byDirector.length}
+            <aside class="alsoby" aria-labelledby="alsoby-h">
+              <h2 id="alsoby-h" class="display">Also by {director}</h2>
+              {#each byDirector as film (film.id)}
+                <button class="also" onclick={() => onopen?.(film)}>
+                  <span class="also-art">{#if posterUrl(film)}<img src={posterUrl(film)} alt="" loading="lazy" />{/if}</span>
+                  <span class="also-text">
+                    <span class="also-title">{film.title}</span>
+                    <span class="also-meta">{[film.year, film.imdbRating && film.imdbRating !== 'N/A' ? `★ ${film.imdbRating}` : '', film.watched ? 'Watched' : ''].filter(Boolean).join(' · ')}</span>
+                  </span>
+                </button>
+              {/each}
+            </aside>
+          {/if}
+        </div>
+      {/if}
+
+      {#if similar.length}
+        <div class="similar"><Row title="If you like this one" items={similar} {onopen} {onplay} /></div>
+      {/if}
     </div>
   </div>
 
@@ -297,8 +357,6 @@
 {/if}
 
 <style>
-  .partof { margin: var(--s2) 0 0; color: var(--ink-soft); font-size: 0.92rem; }
-  .partof a { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
   .void {
     min-height: 100vh; display: flex; flex-direction: column;
     align-items: center; justify-content: center; gap: var(--s4);
@@ -312,114 +370,120 @@
   @keyframes spin { to { transform: rotate(360deg); } }
 
   .detail { position: relative; min-height: 100vh; }
-  .stage {
-    position: absolute; top: 0; left: 0; right: 0; height: 74vh;
-    overflow: hidden; background: var(--bg-sunken);
+  .hero { position: relative; overflow: hidden; background: var(--bg); }
+  .hero-bg {
+    position: absolute; inset: -60px; width: calc(100% + 120px); height: calc(100% + 120px);
+    object-fit: cover; object-position: center 20%;
+    filter: blur(36px) saturate(1.15); opacity: 0.5; transform: scale(1.15);
   }
-  .ambient {
-    position: absolute; inset: -8%;
-    background-size: cover; background-position: center 20%;
-    filter: blur(64px) saturate(1.2) brightness(0.5);
-    transform: scale(1.25);
-  }
-  .backdrop {
-    position: absolute; inset: 0;
-    width: 100%; height: 100%; object-fit: cover; object-position: center 25%;
-    animation: reveal var(--t-slow) var(--ease) both;
-  }
-  @keyframes reveal { from { opacity: 0; } to { opacity: 1; } }
-  /* Detail carries more text than the home hero — leans darker overall */
-  .scrim {
-    position: absolute; inset: 0;
-    background:
-      linear-gradient(0deg, var(--bg) 0%, var(--scrim-soft) 34%, rgba(11,11,14,0.3) 60%, transparent 90%),
-      linear-gradient(90deg, var(--scrim) 0%, var(--scrim-soft) 40%, rgba(11,11,14,0.25) 75%, transparent 100%),
-      linear-gradient(rgba(11, 11, 14, 0.55), transparent 20%);
-  }
+  .scrim { position: absolute; inset: 0; background: linear-gradient(180deg, rgba(14, 12, 11, 0.25) 0%, rgba(14, 12, 11, 0.75) 55%, var(--bg) 100%); }
 
   .content {
     position: relative;
-    padding: calc(64px + var(--s5)) var(--gutter) var(--s7);
+    padding: calc(64px + var(--s4)) var(--gutter) var(--s5);
     max-width: var(--maxw); margin: 0 auto;
   }
   .back {
+    display: inline-flex; align-items: center; gap: 6px;
     color: var(--ink-soft); font-size: 0.9rem; font-weight: 600;
-    padding: 8px 14px; margin-left: -14px; border-radius: var(--r-sm);
+    min-height: 40px; padding: 0 14px 0 8px; margin-left: -8px; border-radius: var(--r-pill);
     transition: color var(--t-fast), background var(--t-fast);
   }
-  .back:hover { color: var(--ink); background: rgba(242, 242, 244, 0.08); }
+  .back:hover { color: var(--ink); background: rgba(243, 237, 228, 0.08); }
 
-  .cols {
-    display: grid; grid-template-columns: 250px 1fr;
-    gap: var(--s6); align-items: end;
-    margin-top: 20vh;
-  }
-  .posterwrap { position: relative; }
+  .cols { display: flex; gap: 44px; align-items: flex-end; margin-top: var(--s5); }
+  .posterwrap { position: relative; flex: 0 0 260px; }
   .poster {
-    width: 100%; aspect-ratio: 2 / 3; object-fit: cover;
-    border-radius: var(--r-md);
-    box-shadow: 0 30px 70px rgba(0, 0, 0, 0.6), 0 0 0 1px var(--line-strong);
+    width: 100%; aspect-ratio: 2 / 3; object-fit: cover; display: block;
+    border-radius: 10px;
+    box-shadow: 0 30px 60px rgba(0, 0, 0, 0.6);
   }
   .pph {
     display: flex; align-items: flex-end; padding: var(--s4);
     background: linear-gradient(160deg, var(--bg-raised), var(--bg-sunken));
-    color: var(--ink-soft); font-weight: 600;
+    color: var(--ink-soft); font-family: var(--font-display); font-size: 1.4rem;
   }
+  .info { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 16px; }
+  .head, .body { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
 
-  .audio-detail .cols { grid-template-columns: minmax(190px, 280px) minmax(0, 1fr); align-items: center; margin-top: clamp(28px, 8vh, 100px); }
-  .audio-detail .poster { display: block; aspect-ratio: 1; object-fit: contain; background: var(--bg-sunken); }
-  .audio-detail .info { min-width: 0; }
-  .audio-detail h1 { font-size: clamp(1.8rem, 3.4vw, 3.1rem); overflow-wrap: anywhere; margin-bottom: var(--s3); }
-  .audio-author { font-size: clamp(1rem, 1.6vw, 1.25rem); color: var(--ink); margin: 0 0 var(--s2); overflow-wrap: anywhere; }
-  .audio-album { color: var(--ink-soft); margin: 0 0 var(--s3); overflow-wrap: anywhere; }
-  .audio-detail .metarow { margin: var(--s3) 0 var(--s5); }
-  .book-placeholder { display: flex !important; flex-direction: column; align-items: center; justify-content: center; gap: var(--s3); color: #d4c7ee; background: linear-gradient(145deg, #44315b, #201b2c) !important; }
+  .audio-detail .posterwrap { flex-basis: clamp(190px, 22vw, 280px); }
+  .audio-detail .poster { aspect-ratio: 1; object-fit: contain; background: var(--bg-sunken); }
+  .audio-detail .cols { align-items: center; }
+  .audio-detail h1 { font-size: clamp(1.9rem, 3.6vw, 3.4rem); overflow-wrap: anywhere; }
+  .audio-author { font-size: clamp(1rem, 1.6vw, 1.25rem); color: var(--ink); overflow-wrap: anywhere; }
+  .audio-album { color: var(--ink-soft); overflow-wrap: anywhere; }
+  .book-placeholder { display: flex !important; flex-direction: column; align-items: center; justify-content: center; gap: var(--s3); color: #ead9bf; background: linear-gradient(145deg, #4a3826, #1d1712) !important; }
   .book-placeholder svg { width: 42%; fill: none; stroke: currentColor; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }
   .book-placeholder span { font-size: 0.8rem; letter-spacing: 0.12em; text-transform: uppercase; }
 
-  .kicker { color: var(--ink-soft); }
+  .kicker { color: var(--accent); font-size: 0.75rem; font-weight: 700; letter-spacing: 0.16em; text-transform: uppercase; }
   h1 {
-    font-size: clamp(2.2rem, 4.6vw, 4rem);
-    margin: var(--s3) 0 var(--s4);
+    font-style: italic; font-size: clamp(2.6rem, 6vw, 5.2rem); line-height: 0.95; letter-spacing: -0.015em;
     text-wrap: balance;
   }
   .metarow {
-    display: flex; flex-wrap: wrap; gap: var(--s2) var(--s3); align-items: center;
-    font-size: 0.94rem; color: var(--ink-soft); font-weight: 500;
+    display: flex; flex-wrap: wrap; gap: var(--s2) 14px; align-items: center;
+    font-size: 1rem; color: #d9d1c6;
   }
-  .metarow > span + span::before { content: '·'; margin-right: var(--s3); color: var(--ink-faint); }
-  .metarow .star { color: var(--star); font-weight: 600; }
+  .metarow > span + span::before { content: '·'; margin-right: 14px; color: var(--ink-faint); }
+  .metarow .star { color: var(--star); }
   .metarow .chip {
-    padding: 1px 8px; border: 1px solid var(--line-strong); border-radius: 4px;
-    font-size: 0.76rem; font-weight: 600;
+    padding: 0 6px; border: 1px solid rgba(243, 237, 228, 0.3); border-radius: 4px;
+    font-size: 0.76rem; font-weight: 700;
   }
-  .metarow .chip::before { content: none !important; }
-  .plot { margin: var(--s4) 0 var(--s5); max-width: 68ch; line-height: 1.6; }
-  .compatibility { margin: var(--s4) 0; padding: var(--s3); border: 1px solid #bd9cff; border-radius: var(--r-sm); line-height: 1.6; }
+  .plot { max-width: 68ch; color: #d9d1c6; font-size: 1.06rem; line-height: 1.55; }
+  .credits, .partof { color: var(--ink-soft); font-size: 0.9rem; }
+  .credits a, .partof a { color: var(--ink); text-decoration: underline; text-underline-offset: 4px; }
+  .credits a:hover, .partof a:hover { color: var(--accent); }
+  .warn { color: var(--bad); }
+  .compatibility { padding: var(--s3); border: 1px solid var(--accent); border-radius: var(--r-sm); line-height: 1.6; }
 
-  .actions { display: flex; gap: var(--s3); flex-wrap: wrap; }
+  .actions { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin-top: 4px; }
   .play {
-    display: inline-flex; align-items: center; gap: 8px;
-    background: var(--cta); color: var(--cta-ink);
-    font-weight: 700; font-size: 1.02rem; padding: 13px 30px 13px 24px;
-    border-radius: var(--r-sm); transition: opacity var(--t-fast);
+    display: inline-flex; align-items: center; gap: 10px;
+    background: var(--accent); color: var(--accent-ink);
+    font-weight: 700; font-size: 1rem; min-height: 50px; padding: 0 26px 0 22px;
+    border-radius: var(--r-pill); transition: filter var(--t-fast);
   }
-  .play:hover { opacity: 0.86; }
+  .play:hover { filter: brightness(1.07); }
   .ghost {
-    background: rgba(242, 242, 244, 0.14); color: var(--ink);
-    font-weight: 600; font-size: 1.02rem; padding: 13px 26px;
-    border-radius: var(--r-sm); backdrop-filter: blur(10px);
-    transition: background var(--t-fast);
+    display: inline-flex; align-items: center; gap: 8px;
+    background: rgba(243, 237, 228, 0.1); color: var(--ink);
+    font-weight: 600; font-size: 0.95rem; min-height: 48px; padding: 0 20px;
+    border-radius: var(--r-pill);
+    transition: background var(--t-fast), color var(--t-fast);
   }
-  .ghost:hover { background: rgba(242, 242, 244, 0.24); }
+  .ghost:hover { background: rgba(243, 237, 228, 0.18); }
+  .ghost.on { color: var(--good); }
+  .resume { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; color: var(--ink-soft); font-size: 0.88rem; }
   .resumebar {
-    margin-top: var(--s4); height: 3px; max-width: 360px;
-    background: rgba(242, 242, 244, 0.2); border-radius: 99px; overflow: hidden;
+    flex: 0 1 360px; height: 4px;
+    background: rgba(243, 237, 228, 0.16); border-radius: 99px; overflow: hidden;
   }
-  .resumebar span { display: block; height: 100%; background: var(--ink); }
+  .resumebar span { display: block; height: 100%; background: var(--accent); }
+
+  .below { max-width: var(--maxw); margin: 0 auto; padding: var(--s3) 0 var(--s7); display: flex; flex-direction: column; gap: 48px; }
+  .below h2 { font-size: 1.65rem; line-height: 1; }
+  .facts-row { display: flex; gap: 40px; flex-wrap: wrap; padding: 0 var(--gutter); }
+  .howplay { flex: 999 1 560px; min-width: 0; display: flex; flex-direction: column; gap: 14px; }
+  .facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+  .fact { background: var(--bg-raised); box-shadow: inset 0 0 0 1px var(--line); border-radius: var(--r-md); padding: 16px; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .fact-label { font-size: 0.7rem; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-faint); }
+  .fact-value { font-weight: 600; font-size: 1.02rem; }
+  .fact-detail { color: var(--ink-soft); font-size: 0.86rem; line-height: 1.4; overflow-wrap: anywhere; }
+  .alsoby { flex: 1 1 300px; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+  .alsoby h2 { margin-bottom: 4px; }
+  .also { display: flex; gap: 14px; align-items: center; padding: 10px; border-radius: 10px; background: var(--bg-raised); box-shadow: inset 0 0 0 1px var(--line); text-align: left; transition: background var(--t-fast); }
+  .also:hover { background: #221e1b; }
+  .also-art { width: 46px; aspect-ratio: 2 / 3; border-radius: 5px; overflow: hidden; background: #2a2521; flex: 0 0 auto; }
+  .also-art img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .also-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .also-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .also-meta { color: var(--ink-soft); font-size: 0.84rem; }
+  .similar :global(.row) { margin-top: 0; }
 
   /* ── Episode list ── */
-  .episodes { margin-top: var(--s6); }
+  .episodes { padding: 0 var(--gutter); }
   .seasons {
     display: flex; gap: var(--s2); flex-wrap: wrap;
     margin-bottom: var(--s4);
@@ -432,7 +496,7 @@
   }
   .seasons button:hover { color: var(--ink); }
   .seasons button.active { background: var(--cta); color: var(--cta-ink); box-shadow: none; }
-  .oneseason { font-size: 1.1rem; font-weight: 700; margin-bottom: var(--s4); }
+  .oneseason { margin-bottom: var(--s4); }
 
   .eplist { display: flex; flex-direction: column; }
   .ep {
@@ -443,8 +507,8 @@
     border-top: 1px solid var(--line);
     transition: background var(--t-fast);
   }
-  .ep:hover, .ep:focus-visible { background: rgba(242, 242, 244, 0.06); }
-  .ep.nextup { background: rgba(242, 242, 244, 0.04); }
+  .ep:hover, .ep:focus-visible { background: rgba(243, 237, 228, 0.06); }
+  .ep.nextup { background: rgba(243, 237, 228, 0.04); }
   .num {
     flex: 0 0 2.2ch; text-align: right;
     font-weight: 700; font-size: 1.05rem; color: var(--ink-faint);
@@ -458,9 +522,9 @@
   }
   .epbar {
     display: block; height: 3px; max-width: 220px;
-    background: rgba(242, 242, 244, 0.16); border-radius: 99px; overflow: hidden;
+    background: rgba(243, 237, 228, 0.16); border-radius: 99px; overflow: hidden;
   }
-  .epbar span { display: block; height: 100%; background: var(--ink); }
+  .epbar span { display: block; height: 100%; background: var(--accent); }
   .epwatched {
     flex: 0 0 auto; width: 26px; height: 26px; border-radius: 99px;
     display: grid; place-items: center; font-size: 0.72rem; font-weight: 700;
@@ -480,9 +544,8 @@
   }
   .ep:hover .epplay, .ep:focus-visible .epplay { opacity: 1; transform: scale(1); }
 
-  .danger { color: #e5484d; }
-  .danger:hover { background: rgba(229, 72, 77, 0.16); color: #f2555a; }
-  .danger svg { vertical-align: -3px; margin-right: 4px; }
+  .danger { color: var(--bad); }
+  .danger:hover { background: rgba(239, 122, 107, 0.16); color: #f59484; }
 
   /* ── Delete confirmation modal ── */
   .modal-backdrop {
@@ -511,15 +574,27 @@
   .del-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
   @media (max-width: 900px) {
-    .cols { grid-template-columns: 1fr; margin-top: 26vh; }
-    .posterwrap { display: none; }
-    .audio-detail .posterwrap { display: block; }
-    .audio-detail .cols { grid-template-columns: 210px minmax(0, 1fr); gap: var(--s4); margin-top: var(--s4); }
+    .facts { grid-template-columns: minmax(0, 1fr); }
   }
-  @media (max-width: 640px) {
-    .audio-detail .cols { grid-template-columns: minmax(0, 1fr); gap: var(--s5); }
-    .audio-detail .posterwrap { width: min(62vw, 260px); margin: 0 auto; }
-    .audio-detail .actions { gap: var(--s2); }
-    .audio-detail .play, .audio-detail .ghost { flex: 1 1 auto; justify-content: center; padding: 13px 18px; }
+  @media (max-width: 720px) {
+    /* Phones: a small poster beside the title, everything else full width beneath. */
+    .content { padding-top: calc(60px + var(--s2)); padding-bottom: var(--s4); }
+    .cols { display: grid; grid-template-columns: 104px minmax(0, 1fr); gap: 16px 16px; align-items: end; margin-top: var(--s3); }
+    .posterwrap, .audio-detail .posterwrap { flex: none; width: 104px; }
+    .poster { border-radius: 8px; box-shadow: 0 16px 30px rgba(0, 0, 0, 0.55); }
+    .info { display: contents; }
+    .head { gap: 8px; }
+    .body { grid-column: 1 / -1; gap: 12px; }
+    h1, .audio-detail h1 { font-size: 2.1rem; }
+    .metarow { font-size: 0.85rem; gap: 4px 10px; }
+    .metarow > span + span::before { margin-right: 10px; }
+    .metarow .genres { flex-basis: 100%; }
+    .metarow .genres::before { content: none; }
+    .plot { font-size: 0.95rem; }
+    .actions { gap: 8px; }
+    .play { flex: 1 1 100%; justify-content: center; }
+    .ghost { flex: 1 1 auto; justify-content: center; min-height: 44px; padding: 0 14px; font-size: 0.88rem; }
+    .below { gap: 36px; padding-top: var(--s2); }
+    .below h2 { font-size: 1.4rem; }
   }
 </style>

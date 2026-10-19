@@ -93,7 +93,7 @@
   .message { margin: 0; color: var(--ink-soft); }
   .actions { display: flex; justify-content: flex-end; gap: var(--s2); margin-top: var(--s2); }
   .ghost, .go { font-weight: 600; padding: 9px 18px; border-radius: var(--r-sm); }
-  .ghost { background: rgba(242, 242, 244, 0.12); color: var(--ink); }
+  .ghost { background: rgba(243, 237, 228, 0.12); color: var(--ink); }
   .go { background: var(--cta); color: var(--cta-ink); }
   .go:disabled, .ghost:disabled { opacity: 0.5; cursor: default; }
 </style>

@@ -229,11 +229,11 @@
   .scrub { position: relative; padding: 12px 0 8px; cursor: pointer; touch-action: none; }
   .rail {
     position: relative; height: 4px;
-    background: rgba(242, 242, 244, 0.22); border-radius: 99px;
+    background: rgba(243, 237, 228, 0.22); border-radius: 99px;
     transition: height var(--t-fast);
   }
   .scrub:hover .rail { height: 6px; }
-  .buffered { position: absolute; inset: 0 auto 0 0; background: rgba(242, 242, 244, 0.35); border-radius: 99px; }
+  .buffered { position: absolute; inset: 0 auto 0 0; background: rgba(243, 237, 228, 0.35); border-radius: 99px; }
   .filled { position: absolute; inset: 0 auto 0 0; background: #fff; border-radius: 99px; }
   .knob {
     position: absolute; top: 50%; width: 14px; height: 14px;
@@ -249,7 +249,7 @@
   }
   .hoverthumb {
     border-radius: 6px;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.7), 0 0 0 1.5px rgba(242, 242, 244, 0.35);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.7), 0 0 0 1.5px rgba(243, 237, 228, 0.35);
     background-color: #000;
   }
   .hovertime {
@@ -274,7 +274,7 @@
     color: var(--ink);
     transition: background var(--t-fast), transform var(--t-fast);
   }
-  .iconbtn:hover { background: rgba(242, 242, 244, 0.12); }
+  .iconbtn:hover { background: rgba(243, 237, 228, 0.12); }
   .iconbtn.on { color: var(--star); }
   .iconbtn.skip { width: 48px; height: 48px; }
   .iconbtn.playbtn { width: 54px; height: 54px; }
@@ -299,13 +299,13 @@
 
   .nextbtn {
     display: inline-flex; align-items: center; gap: 8px;
-    background: rgba(242, 242, 244, 0.14); color: var(--ink);
+    background: rgba(243, 237, 228, 0.14); color: var(--ink);
     font-size: 0.88rem; font-weight: 600;
     padding: 9px 16px; border-radius: 99px;
     transition: background var(--t-fast);
     white-space: nowrap;
   }
-  .nextbtn:hover { background: rgba(242, 242, 244, 0.24); }
+  .nextbtn:hover { background: rgba(243, 237, 228, 0.24); }
 
   /* Speed reads as a value, not a glyph, so it gets type instead of an icon.
      It stays dim at 1x and lights up when you've changed it — the control
@@ -320,7 +320,7 @@
   .menu {
     position: absolute; bottom: 52px; right: 0; z-index: 5;
     min-width: 180px; max-height: 40vh; overflow-y: auto;
-    background: rgba(17, 17, 22, 0.98);
+    background: rgba(25, 22, 20, 0.98);
     border-radius: var(--r-md); padding: var(--s2);
     box-shadow: 0 18px 50px rgba(0, 0, 0, 0.6), 0 0 0 1px var(--line-strong);
     display: flex; flex-direction: column; gap: 2px;
@@ -331,8 +331,8 @@
     transition: background var(--t-fast), color var(--t-fast);
     white-space: nowrap;
   }
-  .menu button:hover { background: rgba(242, 242, 244, 0.1); color: var(--ink); }
-  .menu button.active { color: var(--ink); background: rgba(242, 242, 244, 0.14); font-weight: 600; }
+  .menu button:hover { background: rgba(243, 237, 228, 0.1); color: var(--ink); }
+  .menu button.active { color: var(--ink); background: rgba(243, 237, 228, 0.14); font-weight: 600; }
 
   /* The desktop's centered cluster cannot share a single row with episode
      navigation on phones. Give each group real layout space, not overlap. */

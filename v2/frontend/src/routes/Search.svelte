@@ -177,7 +177,7 @@
 <style>
   .search { padding: calc(64px + var(--s5)) var(--gutter) var(--s7); max-width: var(--maxw); margin: 0 auto; }
   .bar { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; margin: 0 0 var(--s4); }
-  .rescount { margin: 0; flex: 1 1 260px; }
+  .rescount { margin: 0; flex: 1 1 260px; font-size: 0.92rem; text-transform: none; letter-spacing: normal; }
   .sum { color: var(--ink-faint); }
   .tools { display: flex; gap: var(--s2); margin-left: auto; }
   select, input {

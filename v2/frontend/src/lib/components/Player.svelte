@@ -910,8 +910,8 @@
   .skipintro {
     position: absolute; right: max(var(--s4), env(safe-area-inset-right)); bottom: 12%;
     z-index: 6;
-    background: rgba(11, 11, 14, 0.72); color: var(--ink);
-    border: 1.5px solid rgba(242, 242, 244, 0.55);
+    background: rgba(14, 12, 11, 0.72); color: var(--ink);
+    border: 1.5px solid rgba(243, 237, 228, 0.55);
     font-size: 0.95rem; font-weight: 600; letter-spacing: 0.01em;
     padding: 11px 26px; border-radius: var(--r-sm);
     cursor: pointer;
@@ -942,7 +942,7 @@
   }
   .spinner {
     width: 52px; height: 52px;
-    border: 3px solid rgba(242, 242, 244, 0.25); border-top-color: #fff;
+    border: 3px solid rgba(243, 237, 228, 0.25); border-top-color: #fff;
     border-radius: 99px; animation: spin 0.8s linear infinite;
   }
   @keyframes spin { to { transform: rotate(360deg); } }
@@ -954,7 +954,7 @@
     color: var(--ink);
   }
   .ghost {
-    background: rgba(242, 242, 244, 0.14); color: var(--ink);
+    background: rgba(243, 237, 228, 0.14); color: var(--ink);
     font-weight: 600; padding: 11px 24px; border-radius: var(--r-sm);
   }
 
@@ -981,13 +981,13 @@
     color: var(--ink);
     transition: background var(--t-fast), transform var(--t-fast);
   }
-  .iconbtn:hover { background: rgba(242, 242, 244, 0.12); }
+  .iconbtn:hover { background: rgba(243, 237, 228, 0.12); }
 
   .notice {
     position: absolute; left: 50%; top: 62%;
     transform: translateX(-50%);
     font-size: 0.9rem; color: var(--ink-soft);
-    background: rgba(11, 11, 14, 0.92);
+    background: rgba(14, 12, 11, 0.92);
     padding: 8px 18px; border-radius: 99px;
     pointer-events: none;
   }

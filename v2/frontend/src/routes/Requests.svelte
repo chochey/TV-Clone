@@ -159,6 +159,6 @@
     box-shadow: inset 0 0 0 1px var(--line-strong);
     transition: color var(--t-fast), background var(--t-fast);
   }
-  .actions button:hover { color: var(--ink); background: rgba(242, 242, 244, 0.08); }
+  .actions button:hover { color: var(--ink); background: rgba(243, 237, 228, 0.08); }
   .actions .danger:hover { color: #ff6b6b; }
 </style>

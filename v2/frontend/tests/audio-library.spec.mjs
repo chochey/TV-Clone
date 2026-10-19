@@ -228,7 +228,7 @@ for (const width of [1280, 390]) {
     }
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path:test.info().outputPath(`audio-shelf-${width}.png`), fullPage:true });
-    await page.getByRole('link', { name:'Home', exact:true }).click();
+    await page.getByRole('link', { name:'Tonight', exact:true }).click();
     await page.getByRole('link', { name:'Podcasts', exact:true }).click();
     await expect(page.locator('.grid .card.audio img')).toHaveCount(2);
     expect(itemRequests.filter(id => id === 'podcast')).toHaveLength(1);

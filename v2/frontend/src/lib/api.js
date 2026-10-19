@@ -43,6 +43,7 @@ export const api = {
   item: (id) => fetch(`/api/item/${encodeURIComponent(id)}`, opts('GET')).then(json),
   librarySections: () => fetch('/api/library/sections', opts('GET')).then(json),
   libraryCredits: () => fetch('/api/library/credits', opts('GET')).then(json),
+  readAlongIndex: () => fetch('/api/audio/read-along-index', opts('GET')).then(json),
   collections: () => fetch('/api/collections', opts('GET')).then(json),
   dashboardJobs: () => fetch('/api/dashboard/jobs', opts('GET')).then(json),
   dashboardStreaming: (days = 30) => fetch(`/api/dashboard/streaming?days=${days}`, opts('GET')).then(json),

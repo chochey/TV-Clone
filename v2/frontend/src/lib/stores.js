@@ -8,6 +8,7 @@ import { isSeriesItem, isAudioItem, mediaKindOf, seriesKey } from './series-play
 import { createAudioCardMetadataLoader, audioCardIdentity, mergeAudioCardMetadata } from './audio-card-metadata.js';
 import { EMPTY_FILTERS } from './search-filters.js';
 import { resetCollections } from './collections.js';
+import { resetHomeData, rememberChapters } from './home-data.js';
 
 export const session = writable(null);     // { loggedIn, profileId, name, role }
 const liveLibrary = writable([]);
@@ -215,7 +216,9 @@ const audioCardMetadata = createAudioCardMetadataLoader({
   load: async (id, signal) => {
     const response = await fetch(`/api/item/${encodeURIComponent(id)}`, { credentials: 'same-origin', signal });
     if (!response.ok) throw new Error('Audio metadata unavailable');
-    return response.json();
+    const body = await response.json();
+    rememberChapters(id, body?.audioMetadata?.chapters);
+    return body;
   },
   isCurrent: item => !!activeProfile && audioCardIdentity(get(mediaById).get(item.id)) === audioCardIdentity(item),
   onMetadata: (requested, metadata) => {
@@ -243,6 +246,7 @@ export function resetSessionState() {
   enrichAttempted.clear();
   resetNotifications();
   resetCollections();
+  resetHomeData();
 }
 
 session.subscribe(value => {

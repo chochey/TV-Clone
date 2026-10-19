@@ -47,7 +47,7 @@
     display: flex; gap: var(--s3); align-items: stretch;
     width: min(400px, calc(100vw - 2 * var(--s4)));
     padding: var(--s3);
-    background: rgba(11, 11, 14, 0.92);
+    background: rgba(14, 12, 11, 0.92);
     border-radius: var(--r-md);
     box-shadow: 0 18px 50px rgba(0, 0, 0, 0.6), 0 0 0 1px var(--line-strong);
     transition: bottom var(--t-med);
@@ -77,8 +77,8 @@
   }
   .unplay { background: var(--cta); color: var(--cta-ink); }
   .unplay:hover { background: var(--ink); }
-  .uncancel { background: rgba(242, 242, 244, 0.14); color: var(--ink); }
-  .uncancel:hover { background: rgba(242, 242, 244, 0.26); }
+  .uncancel { background: rgba(243, 237, 228, 0.14); color: var(--ink); }
+  .uncancel:hover { background: rgba(243, 237, 228, 0.26); }
 
   @media (max-width: 560px) {
     .upnext { left: var(--s4); width: auto; }

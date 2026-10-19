@@ -107,7 +107,7 @@
   }
   .gtype {
     font-size: 0.66rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
-    color: var(--ink-soft); background: rgba(242, 242, 244, 0.08);
+    color: var(--ink-soft); background: rgba(243, 237, 228, 0.08);
     padding: 2px 8px; border-radius: 4px;
   }
   .gwaste { margin-left: auto; font-size: 0.78rem; font-weight: 600; color: #ffb46b; }

@@ -852,7 +852,7 @@
   .review-details pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: 12px; max-height: 200px; overflow-y: auto; background: #0003; border-radius: var(--r-sm); line-height: 1.5; }
   .review-search { display: flex; flex-direction: column; gap: 8px; margin-top: var(--s3); color: var(--ink-soft); font-size: .85rem; }
   .review-search input { width: 100%; box-sizing: border-box; color: var(--ink); background: #0003; border: 1px solid var(--line-strong); border-radius: var(--r-sm); padding: 10px 12px; }
-  .repair-panel { padding: var(--s3); margin: var(--s3) 0; background: #a78bfa0b; border: 1px solid #a78bfa45; border-radius: var(--r-sm); }
+  .repair-panel { padding: var(--s3); margin: var(--s3) 0; background: #e8b04a0b; border: 1px solid #e8b04a45; border-radius: var(--r-sm); }
   .repair-panel h3 { font-size: .94rem; }
   .repair-panel > .qbtn { margin-top: var(--s3); }
   .repair-panel .row { flex-wrap: wrap; }
@@ -880,7 +880,7 @@
   .card.pilot { background: rgba(255, 180, 107, 0.05); border-color: rgba(255, 180, 107, 0.25); }
   .card.pilot code {
     font-family: ui-monospace, Menlo, monospace; font-size: 0.82em;
-    background: rgba(242, 242, 244, 0.08); padding: 1px 5px; border-radius: 4px;
+    background: rgba(243, 237, 228, 0.08); padding: 1px 5px; border-radius: 4px;
   }
   .qstatus {
     font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
@@ -905,7 +905,7 @@
 
   .progwrap { margin-top: var(--s3); }
   .progbar {
-    height: 6px; background: rgba(242, 242, 244, 0.1); border-radius: 99px; overflow: hidden;
+    height: 6px; background: rgba(243, 237, 228, 0.1); border-radius: 99px; overflow: hidden;
   }
   .progbar span {
     display: block; height: 100%; background: #7ed491;
@@ -926,7 +926,7 @@
   .pilotrow {
     display: flex; align-items: baseline; justify-content: space-between; gap: var(--s3);
     padding: 8px 10px; border-radius: var(--r-sm); flex-wrap: wrap;
-    background: rgba(242, 242, 244, 0.04);
+    background: rgba(243, 237, 228, 0.04);
     border-left: 3px solid transparent;
   }
   .pilotrow.ok { border-left-color: rgba(126, 212, 145, 0.5); }
@@ -942,7 +942,7 @@
 
   .toggle {
     font-size: 0.85rem; font-weight: 700; padding: 8px 18px; border-radius: 99px;
-    background: rgba(242, 242, 244, 0.08); color: var(--ink-soft);
+    background: rgba(243, 237, 228, 0.08); color: var(--ink-soft);
     box-shadow: inset 0 0 0 1px var(--line);
   }
   .toggle.on { background: rgba(126, 212, 145, 0.15); color: #7ed491; box-shadow: inset 0 0 0 1px rgba(126, 212, 145, 0.4); }
@@ -977,7 +977,7 @@
   .field span { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-faint); }
   .field span em { font-style: normal; text-transform: none; letter-spacing: 0; opacity: 0.7; }
   .field input {
-    background: rgba(242, 242, 244, 0.06); border: 1px solid var(--line);
+    background: rgba(243, 237, 228, 0.06); border: 1px solid var(--line);
     border-radius: var(--r-sm); padding: 7px 10px; color: var(--ink);
     font-size: 0.92rem; font-variant-numeric: tabular-nums; width: 100%;
   }

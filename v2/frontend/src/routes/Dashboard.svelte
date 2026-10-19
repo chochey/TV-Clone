@@ -67,8 +67,8 @@
   });
 
   const mix = $derived(deliveryMix(streaming?.byDelivery));
-  const SERIES = [{ key: 'films', label: 'Films', color: '#6db3ff' }, { key: 'episodes', label: 'Episodes', color: '#8bd17c' },
-    { key: 'audiobooks', label: 'Audiobooks', color: '#f2b84b' }];
+  const SERIES = [{ key: 'films', label: 'Films', color: '#e8b04a' }, { key: 'episodes', label: 'Episodes', color: '#8fcf8a' },
+    { key: 'audiobooks', label: 'Audiobooks', color: '#d98e73' }];
   const weekRows = $derived((growth?.weeks || []).map(w => ({ label: w.week.slice(5), values: w })));
   const weekTotal = $derived((growth?.weeks || []).reduce((n, w) => n + w.films + w.episodes + w.audiobooks, 0));
   const dayRows = $derived((streaming?.daily || []).map(d => ({ label: d.day.slice(5), values: { minutes: d.watchedMin } })));
@@ -259,7 +259,7 @@
       </section>
       <section class="card wide">
         <h3 class="meta">Minutes watched per day</h3>
-        <BarChart data={dayRows} series={[{ key: 'minutes', label: 'Minutes', color: '#6db3ff' }]} labelEvery={streamDays > 30 ? 14 : 7}
+        <BarChart data={dayRows} series={[{ key: 'minutes', label: 'Minutes', color: '#e8b04a' }]} labelEvery={streamDays > 30 ? 14 : 7}
                   summary={`Minutes watched per day over the last ${streamDays} days; ${streaming.hoursWatched} hours in total.`} />
       </section>
     {:else if streaming}
@@ -338,7 +338,7 @@
   .page { padding: calc(64px + var(--s5)) var(--gutter) var(--s7); max-width: 1100px; margin: 0 auto; }
   header { margin-bottom: var(--s4); }
   .sub { color: var(--ink-soft); margin: var(--s1) 0 0; }
-  .section { font-size: 1.1rem; font-weight: 700; margin: var(--s6) 0 var(--s3); }
+  .section { font-family: var(--font-display); font-weight: 400; font-size: 1.65rem; line-height: 1; margin: var(--s6) 0 var(--s3); }
   .section-head { display: flex; align-items: center; justify-content: space-between; gap: var(--s3); flex-wrap: wrap; margin: var(--s6) 0 var(--s3); }
   .section-head .section { margin: 0; }
   .seg { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 99px; overflow: hidden; }
@@ -351,15 +351,15 @@
   .gauge.thin { height: 3px; }
   .note { margin: var(--s1) 0 0; font-size: 0.82rem; color: var(--ink-faint); }
   .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: var(--s3); }
-  .tile { display: flex; flex-direction: column; gap: 2px; padding: var(--s3); border-radius: var(--r-sm); background: rgba(242, 242, 244, 0.05); }
+  .tile { display: flex; flex-direction: column; gap: 2px; padding: var(--s3); border-radius: var(--r-sm); background: rgba(243, 237, 228, 0.05); }
   .tile strong { font-size: 1.5rem; font-weight: 800; letter-spacing: -0.01em; }
   .tile span { font-size: 0.8rem; color: var(--ink-soft); }
   .tile.warnbox strong { color: #ffb46b; }
-  .mixbar { display: flex; height: 10px; border-radius: 99px; overflow: hidden; background: rgba(242, 242, 244, 0.08); margin-bottom: var(--s2); }
+  .mixbar { display: flex; height: 10px; border-radius: 99px; overflow: hidden; background: rgba(243, 237, 228, 0.08); margin-bottom: var(--s2); }
   .dot { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 8px; }
   :global(.mx-direct), :global(.mx-passthrough) { background: #7ed491; }
-  :global(.mx-remux) { background: #6db3ff; }
-  :global(.mx-transcode-gpu) { background: #ffb46b; }
+  :global(.mx-remux) { background: #e8b04a; }
+  :global(.mx-transcode-gpu) { background: #d98e73; }
   :global(.mx-transcode-cpu) { background: #ff6b6b; }
   :global(.mx-unknown) { background: var(--ink-faint); }
   h1 { font-size: clamp(1.8rem, 3.4vw, 2.6rem); }
@@ -401,7 +401,7 @@
   .kv.drive span:first-child { flex: 0 1 auto; max-width: 40%; }
   .dim { color: var(--ink-faint); }
   .gauge {
-    height: 4px; background: rgba(242, 242, 244, 0.12);
+    height: 4px; background: rgba(243, 237, 228, 0.12);
     border-radius: 99px; overflow: hidden;
   }
   .gauge span { display: block; height: 100%; background: var(--ink-soft); }

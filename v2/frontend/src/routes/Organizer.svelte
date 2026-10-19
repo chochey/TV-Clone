@@ -372,7 +372,7 @@
     padding: 8px 16px; border-radius: var(--r-sm);
     box-shadow: inset 0 0 0 1px var(--line-strong);
   }
-  .restart:hover { color: var(--ink); background: rgba(242, 242, 244, 0.08); }
+  .restart:hover { color: var(--ink); background: rgba(243, 237, 228, 0.08); }
   .restart:disabled { opacity: 0.5; }
 
   .chips { display: flex; gap: var(--s2); flex-wrap: wrap; margin-bottom: var(--s4); }
@@ -407,7 +407,7 @@
   .rinfo { display: flex; align-items: baseline; gap: var(--s2); flex-wrap: wrap; }
   .rtype {
     font-size: 0.68rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
-    color: var(--ink-soft); background: rgba(242, 242, 244, 0.08);
+    color: var(--ink-soft); background: rgba(243, 237, 228, 0.08);
     padding: 2px 8px; border-radius: 4px;
   }
   .rtitle { font-weight: 600; font-size: 0.95rem; }
@@ -428,7 +428,7 @@
   .rclear { display: flex; gap: var(--s2); align-items: center; flex-wrap: wrap; padding: var(--s2) 0 var(--s2) var(--s3); }
   .rclear .rmeta { flex-basis: 100%; margin: 0; }
   .rcancel { color: var(--ink-soft); font-size: 0.85rem; padding: 8px 12px; border-radius: var(--r-sm); }
-  .rcancel:hover:not(:disabled) { color: var(--ink); background: rgba(242, 242, 244, 0.08); }
+  .rcancel:hover:not(:disabled) { color: var(--ink); background: rgba(243, 237, 228, 0.08); }
   .rcancel:disabled { opacity: 0.45; cursor: not-allowed; }
   .leftover .rtitle { font-weight: 500; font-family: ui-monospace, Menlo, monospace; font-size: 0.85rem; }
   .rextra { margin-top: var(--s3); }

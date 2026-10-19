@@ -1,7 +1,7 @@
 <script>
   import PosterCard from './PosterCard.svelte';
   // card: optional snippet to render each item instead of a poster; onmore adds a "See all" link.
-  let { title, items = [], onopen, onplay, size = 'md', resume = false, wide = false, card = null, onmore = null } = $props();
+  let { title, items = [], onopen, onplay, size = 'md', resume = false, wide = false, added = false, card = null, onmore = null, moreLabel = 'See all', subtitle = '' } = $props();
 
   // The track hides its scrollbar, and a plain mouse has no horizontal wheel —
   // without these arrows the row is only reachable by trackpad or touch.
@@ -34,8 +34,8 @@
   <section class="row">
     <header>
       <h2>{title}</h2>
-      <span class="count">{items.length}</span>
-      {#if onmore}<button class="more" onclick={onmore}>See all</button>{/if}
+      {#if subtitle}<span class="sub">{subtitle}</span>{:else}<span class="count">{items.length}</span>{/if}
+      {#if onmore}<button class="more" onclick={onmore}>{moreLabel} →</button>{/if}
     </header>
     <div class="trackwrap">
       {#if !atStart}
@@ -45,7 +45,7 @@
       {/if}
       <div class="track" class:lg={size === 'lg'} class:wide={wide} bind:this={track} onscroll={measure}>
         {#each items as item (item.id)}
-          <div class="cell">{#if card}{@render card(item)}{:else}<PosterCard {item} {onopen} {onplay} {resume} {wide} />{/if}</div>
+          <div class="cell">{#if card}{@render card(item)}{:else}<PosterCard {item} {onopen} {onplay} {resume} {wide} {added} />{/if}</div>
         {/each}
       </div>
       {#if !atEnd}
@@ -66,33 +66,35 @@
     padding: 0 var(--gutter); margin-bottom: var(--s3);
   }
   h2 {
-    font-weight: 700;
-    font-size: clamp(1.05rem, 1.8vw, 1.35rem); letter-spacing: -0.01em;
+    font-family: var(--font-display); font-weight: 400;
+    font-size: clamp(1.5rem, 2.4vw, 1.9rem); line-height: 1; letter-spacing: -0.01em;
   }
-  .count { font-size: 0.72rem; color: var(--ink-faint); font-weight: 600; }
+  .count { font-size: 0.8rem; color: var(--ink-faint); font-weight: 600; }
+  .sub { font-size: 0.88rem; color: var(--ink-soft); }
 
   .trackwrap { position: relative; }
   .track {
-    display: flex; gap: var(--s3);
+    display: flex; gap: 18px;
     overflow-x: auto; overflow-y: visible;
-    padding: var(--s3) var(--gutter) var(--s4);
+    padding: var(--s2) var(--gutter) var(--s3);
     scroll-snap-type: x proximity;
     scroll-padding-inline: var(--gutter);
     scrollbar-width: none;
   }
   .track::-webkit-scrollbar { display: none; }
   .cell {
-    flex: 0 0 clamp(118px, 11vw, 150px);
+    /* min-width: 0 so a long one-line title can't widen (and, through the poster's aspect ratio, heighten) a cell. */
+    flex: 0 0 clamp(124px, 11.5vw, 164px); min-width: 0;
     scroll-snap-align: start;
   }
-  .track.lg .cell { flex-basis: clamp(150px, 14vw, 188px); }
+  .track.lg .cell { flex-basis: clamp(140px, 13vw, 184px); }
 
   .track.wide .cell { flex-basis:clamp(260px,31vw,470px); }
 
   /* Full-height grab targets at the row edges, revealed on hover like the
      cards themselves. Hidden on touch, where swiping is the natural gesture. */
   .page {
-    position: absolute; top: var(--s3); bottom: var(--s4);
+    position: absolute; top: var(--s2); bottom: 52px;
     width: calc(var(--gutter) + 12px);
     z-index: 4;
     display: grid; place-items: center;

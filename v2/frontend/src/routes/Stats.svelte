@@ -296,7 +296,7 @@
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     text-align: right;
   }
-  .bar-track { flex: 1; height: 18px; background: rgba(242, 242, 244, 0.06); border-radius: 4px; overflow: hidden; }
+  .bar-track { flex: 1; height: 18px; background: rgba(243, 237, 228, 0.06); border-radius: 4px; overflow: hidden; }
   .bar-fill {
     height: 100%; background: var(--ink); border-radius: 4px;
     min-width: 3px;
@@ -331,7 +331,7 @@
     cursor: pointer; transition: background var(--t-fast);
   }
   .rated-row:first-child { border-top: none; }
-  .rated-row:hover { background: rgba(242, 242, 244, 0.06); }
+  .rated-row:hover { background: rgba(243, 237, 228, 0.06); }
   .rank { flex: 0 0 28px; font-size: 0.85rem; font-weight: 700; color: var(--ink-faint); }
   .rated-thumb { flex: 0 0 36px; }
   .rated-thumb img, .rated-thumb .ph {

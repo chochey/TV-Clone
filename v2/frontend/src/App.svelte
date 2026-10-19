@@ -3,6 +3,7 @@
   import { api } from './lib/api.js';
   import { library, catalog, session, loadLibrary, resetSessionState, searchQuery, searchFilters, collapseShows } from './lib/stores.js';
   import { searchLibrary } from './lib/search.js';
+  import { collections, loadCollections } from './lib/collections.js';
   import { autofocus } from './lib/autofocus.js';
   import { EMPTY_FILTERS } from './lib/search-filters.js';
   import { posterUrl } from './lib/api.js';
@@ -91,6 +92,8 @@
   }
 
   onMount(boot);
+  // The Collections menu entry appears once Wikidata has found some.
+  $effect(() => { if (phase === 'ready') loadCollections(); });
 
   // v1 auth is username + password (profiles stay hidden until signed in).
   async function signIn(e) {
@@ -121,8 +124,11 @@
     searchExpanded = false;
     navigate(`/title/${encodeURIComponent(item.id)}`);
   }
-  function playItem(item) {
+  // opts.reading: an audiobook opened with its read-along text showing.
+  let startReading = $state(false);
+  function playItem(item, opts = {}) {
     audioMinimized = false;
+    startReading = !!opts.reading;
     playing = item;
   }
 
@@ -384,14 +390,14 @@
 
 {#if phase === 'loading'}
   <div class="splash">
-    <div class="mark display"><span class="wordmark">CHOCHEY<span class="brandtv">TV</span></span></div>
+    <div class="mark display"><span class="wordmark"><span class="wm">Chochey</span><span class="brandtv">TV</span></span></div>
     <div class="marksub meta">Media Server</div>
     <div class="spinner"></div>
     {#if bootMsg}<p class="meta bootmsg">{bootMsg}</p>{/if}
   </div>
 {:else if phase === 'offline'}
   <div class="splash">
-    <div class="mark display"><span class="wordmark">CHOCHEY<span class="brandtv">TV</span></span></div>
+    <div class="mark display"><span class="wordmark"><span class="wm">Chochey</span><span class="brandtv">TV</span></span></div>
     <div class="marksub meta">Media Server</div>
     <p class="err">Can't reach the server.</p>
     <p class="meta bootmsg">It may still be restarting — give it a moment, then try again.</p>
@@ -400,7 +406,7 @@
 {:else if phase === 'login'}
   <div class="splash">
     <form class="login" onsubmit={signIn}>
-      <div class="mark display"><span class="wordmark">CHOCHEY<span class="brandtv">TV</span></span></div>
+      <div class="mark display"><span class="wordmark"><span class="wm">Chochey</span><span class="brandtv">TV</span></span></div>
       <div class="marksub meta">Media Server</div>
       <input
         type="text" placeholder="Username" autocomplete="username"
@@ -419,18 +425,20 @@
 {:else}
   <header class="topbar" class:solid={scrollY > 24} class:searching={searchExpanded}>
     <button class="brand display" onclick={() => go('/')}>
-      <span class="wordmark">CHOCHEY<span class="brandtv">TV</span></span>
+      <span class="wordmark"><span class="wm">Chochey</span><span class="brandtv">TV</span></span>
     </button>
     <nav aria-label="Main navigation">
-      <a class:active={$route.name === 'home'} href="/" onclick={(e) => { e.preventDefault(); go('/'); }}>Home</a>
-      <a class:active={$route.name === 'movies'} href="/movies" onclick={(e) => { e.preventDefault(); go('/movies'); }}>Films</a>
-      <a class:active={$route.name === 'shows'} href="/shows" onclick={(e) => { e.preventDefault(); go('/shows'); }}>Series</a>
+      <!-- Icons show only in the phone tab bar. -->
+      <a class:active={$route.name === 'home'} href="/" onclick={(e) => { e.preventDefault(); go('/'); }}><svg class="nicon-svg" aria-hidden="true" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-8 9 8v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z"/></svg><span>Tonight</span></a>
+      <a class:active={$route.name === 'movies'} href="/movies" onclick={(e) => { e.preventDefault(); go('/movies'); }}><svg class="nicon-svg" aria-hidden="true" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v16M17 4v16M3 9h4M17 9h4M3 15h4M17 15h4"/></svg><span>Films</span></a>
+      <a class:active={$route.name === 'shows'} href="/shows" onclick={(e) => { e.preventDefault(); go('/shows'); }}><svg class="nicon-svg" aria-hidden="true" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="12" rx="2"/><path d="M8 21h8"/></svg><span>Series</span></a>
       {#each customSections as section (section.id)}
-        <a class:active={$route.name === 'section' && $route.id === section.id} href={`/library/${encodeURIComponent(section.id)}`} title={section.available === false ? `${section.label} — location unavailable` : section.label} onclick={(e) => { e.preventDefault(); go(`/library/${encodeURIComponent(section.id)}`); }}>{section.label}</a>
+        <a class:active={$route.name === 'section' && $route.id === section.id} href={`/library/${encodeURIComponent(section.id)}`} title={section.available === false ? `${section.label} — location unavailable` : section.label} onclick={(e) => { e.preventDefault(); go(`/library/${encodeURIComponent(section.id)}`); }}>{#if section.mediaKind === 'audio'}<svg class="nicon-svg" aria-hidden="true" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg>{:else}<svg class="nicon-svg" aria-hidden="true" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>{/if}<span>{section.label}</span></a>
       {/each}
+      {#if $collections.length}<a class="desk-only" class:active={$route.name === 'collections' || $route.name === 'collection'} href="/collections" onclick={(e) => { e.preventDefault(); go('/collections'); }}><span>Collections</span></a>{/if}
       {#if sectionsError}<button class="nav-retry" title={sectionsError} onclick={refreshSections}>Retry libraries</button>
       {:else if !sectionsReady}<span class="nav-status" role="status">Loading libraries…</span>{/if}
-      <button class="mobile-search" onclick={openMobileSearch}>Search</button>
+      <button class="mobile-search" onclick={openMobileSearch}><svg class="nicon-svg" aria-hidden="true" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg><span>Search</span></button>
     </nav>
     <div class="searchbox" class:open={searchDropOpen} data-keep-open>
       <svg class="sicon" viewBox="0 0 24 24" width="17" height="17" fill="currentColor" aria-hidden="true"><path d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"/></svg>
@@ -554,7 +562,7 @@
   <main class:with-mini={playing && isAudioItem(playing) && audioMinimized} class:with-update={updateAvailable}>
     {#if scanBusy}<div class="scan-progress" role="status">{scanSnapshot?.queued ? 'Library scan queued…' : 'Library scan in progress…'}</div>{/if}
     {#if $route.name === 'title'}
-      <Detail id={$route.id} onplay={playItem} />
+      <Detail id={$route.id} onopen={openItem} onplay={playItem} />
     {:else if $route.name === 'movies'}
       <Browse kind="movie" onopen={openItem} onplay={playItem} />
     {:else if $route.name === 'shows'}
@@ -600,7 +608,7 @@
 {#if playing}
   {#key playing.id}
     {#if isAudioItem(playing)}
-      <AudioPlayer item={playing} minimized={audioMinimized} onminimize={() => { audioMinimized = true; }} onexpand={() => { audioMinimized = false; }} onclose={() => { playing = null; audioMinimized = false; }} />
+      <AudioPlayer item={playing} {startReading} minimized={audioMinimized} onminimize={() => { audioMinimized = true; }} onexpand={() => { audioMinimized = false; }} onclose={() => { playing = null; audioMinimized = false; }} />
     {:else}
     <Player
       item={playing}
@@ -629,13 +637,13 @@
   main.with-mini {padding-bottom:120px;}
   main.with-update {padding-bottom:140px;}
   main.with-mini.with-update {padding-bottom:220px;}
-  .scan-progress {position:relative;z-index:4;margin:88px var(--gutter) 0;padding:12px 16px;background:#271b3d;border:1px solid #8f62c04d;border-radius:10px;color:#dac4f4;font-size:.85rem;}
-  .update-banner {position:fixed;z-index:110;right:16px;bottom:16px;display:flex;align-items:center;gap:16px;max-width:min(430px,calc(100vw - 32px));padding:14px 16px;background:#241c32;border:1px solid #a47aca80;border-radius:12px;box-shadow:0 8px 30px #0008;}
+  .scan-progress {position:relative;z-index:4;margin:88px var(--gutter) 0;padding:12px 16px;background:var(--accent-soft);border:1px solid rgba(232,176,74,.3);border-radius:var(--r-md);color:var(--ink);font-size:.85rem;}
+  .update-banner {position:fixed;z-index:110;right:16px;bottom:16px;display:flex;align-items:center;gap:16px;max-width:min(430px,calc(100vw - 32px));padding:14px 16px;background:var(--bg-raised);border:1px solid rgba(232,176,74,.4);border-radius:var(--r-md);box-shadow:0 8px 30px #0008;}
   .update-banner.above-mini {bottom:110px;}
   .update-banner p {display:flex;flex-direction:column;gap:4px;line-height:1.4;}
   .update-banner strong {font-size:.88rem;}
   .update-banner span {color:var(--ink-soft);font-size:.78rem;}
-  .update-banner button {padding:10px 14px;border-radius:8px;background:#bd9cff;color:#21162f;font-weight:700;min-height:44px;}
+  .update-banner button {padding:10px 16px;border-radius:var(--r-pill);background:var(--accent);color:var(--accent-ink);font-weight:700;min-height:44px;}
   .update-banner button:disabled {opacity:.45;cursor:default;}
   @media(max-width:720px) {main.with-mini {padding-bottom:calc(160px + env(safe-area-inset-bottom));} main.with-update {padding-bottom:calc(220px + env(safe-area-inset-bottom));} main.with-mini.with-update {padding-bottom:calc(280px + env(safe-area-inset-bottom));} .update-banner {bottom:calc(70px + env(safe-area-inset-bottom));} .update-banner.above-mini {bottom:calc(165px + env(safe-area-inset-bottom));}}
   .splash {
@@ -647,10 +655,7 @@
     gap: var(--s5);
   }
   .mark {
-    font-size: clamp(1.4rem, 4vw, 2rem);
-    letter-spacing: 0.34em;
-    /* optical: tracking adds a trailing gap; nudge back to center */
-    margin-right: -0.34em;
+    font-size: clamp(2.6rem, 7vw, 3.6rem);
     color: var(--ink);
   }
   .spinner {
@@ -670,12 +675,12 @@
   .cta {
     background: var(--cta); color: var(--cta-ink);
     font-weight: 700; font-size: 1rem;
-    padding: 13px; border-radius: var(--r-sm);
+    padding: 13px; border-radius: var(--r-pill);
     transition: opacity var(--t-fast);
   }
   .cta:disabled { opacity: 0.4; cursor: default; }
   .cta:not(:disabled):hover { opacity: 0.88; }
-  .err { color: #ff6b6b; font-size: 0.88rem; text-align: center; margin-top: var(--s2); }
+  .err { color: var(--bad); font-size: 0.88rem; text-align: center; margin-top: var(--s2); }
   .bootmsg { margin-top: var(--s3); text-align: center; }
   .retry { margin-top: var(--s4); padding: 10px 26px; width: auto; }
 
@@ -687,23 +692,24 @@
        behind it on every frame — a major scroll-jank source on Linux/NVIDIA
        WebRender. The background is near-opaque anyway, so the blur added almost
        nothing visually. Solid bg = the content just scrolls under a cheap layer. */
-    background: rgba(11, 11, 14, 0.96);
+    background: rgba(14, 12, 11, 0.96);
     border-bottom: 1px solid transparent;
     transition: background var(--t-med), border-color var(--t-med);
   }
   .topbar.solid {
-    background: rgba(11, 11, 14, 0.985);
+    background: rgba(14, 12, 11, 0.985);
     border-bottom-color: var(--line);
   }
   .brand {
-    display: flex; align-items: baseline; gap: 10px;
-    font-size: 1.02rem;
-    letter-spacing: 0.34em;
+    display: flex; align-items: baseline;
+    font-size: 1.75rem;
     color: var(--ink);
     white-space: nowrap;
   }
-  .wordmark { display: inline-flex; align-items: baseline; }
-  .brandtv { color: var(--ink-soft); }
+  /* The wordmark: "Chochey" in the italic serif, "TV" as small spaced caps. */
+  .wordmark { display: inline-flex; align-items: baseline; gap: 0.2em; }
+  .wm { font-style: italic; }
+  .brandtv { font-family: var(--font-sans); font-size: 0.4em; font-weight: 700; letter-spacing: 0.22em; color: var(--ink-soft); }
   .marksub { margin-top: calc(-1 * var(--s4)); letter-spacing: 0.3em; color: var(--ink-faint); }
   .brand, .bell, .usermenu { flex-shrink: 0; }
   nav { display: flex; align-items: center; gap: var(--s4); margin: 0 var(--s4); flex: 0 1 auto; min-width: 0; max-width: 50%; overflow-x: auto; white-space: nowrap; overscroll-behavior-x: contain; scrollbar-width: thin; }
@@ -717,13 +723,13 @@
     flex: 1 1 200px; width: auto; min-width: 200px;
     margin: 0 var(--s4) 0 0;
     display: flex; align-items: center; gap: 8px;
-    background: rgba(242, 242, 244, 0.08);
-    box-shadow: inset 0 0 0 1px var(--line);
-    height: 40px; border-radius: 12px; padding: 0 12px;
+    background: rgba(243, 237, 228, 0.06);
+    box-shadow: inset 0 0 0 1px var(--line-strong);
+    height: 40px; border-radius: var(--r-pill); padding: 0 16px;
     transition: box-shadow var(--t-fast), background var(--t-fast);
   }
   .searchbox:focus-within {
-    background: rgba(242, 242, 244, 0.12);
+    background: rgba(243, 237, 228, 0.1);
     box-shadow: inset 0 0 0 1px var(--line-strong);
   }
   .searchbox.open { box-shadow: inset 0 0 0 1px var(--line-strong); }
@@ -741,13 +747,13 @@
     width: 22px; height: 22px; border-radius: 99px; color: var(--ink-faint);
     transition: color var(--t-fast), background var(--t-fast);
   }
-  .sclear:hover { color: var(--ink); background: rgba(242, 242, 244, 0.14); }
+  .sclear:hover { color: var(--ink); background: rgba(243, 237, 228, 0.14); }
 
   /* Live-results dropdown — matches appear here as you type, no page jump. */
   .search-drop {
     position: absolute; top: calc(100% + 8px); left: 0;
     width: 100%; max-height: min(70vh, 560px); overflow-y: auto;
-    background: rgba(17, 17, 22, 0.98); backdrop-filter: blur(16px);
+    background: rgba(25, 22, 20, 0.985);
     border-radius: var(--r-md); padding: var(--s2);
     box-shadow: 0 18px 50px rgba(0, 0, 0, 0.6), 0 0 0 1px var(--line-strong);
     display: flex; flex-direction: column; gap: 2px; z-index: 60;
@@ -757,10 +763,10 @@
     padding: 6px 8px; border-radius: var(--r-sm); text-align: left;
     transition: background var(--t-fast);
   }
-  .sresult:hover, .sresult.hi { background: rgba(242, 242, 244, 0.1); }
+  .sresult:hover, .sresult.hi { background: rgba(243, 237, 228, 0.1); }
   .sresult img, .sthumb {
     width: 34px; height: 50px; flex: 0 0 auto; border-radius: 4px;
-    object-fit: cover; background: rgba(242, 242, 244, 0.08);
+    object-fit: cover; background: rgba(243, 237, 228, 0.08);
   }
   .sr-text { display: flex; flex-direction: column; min-width: 0; }
   .sr-title { font-size: 0.88rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -778,7 +784,7 @@
     display: grid; place-items: center; color: var(--ink-soft);
     transition: color var(--t-fast), background var(--t-fast);
   }
-  .bellbtn:hover { color: var(--ink); background: rgba(242, 242, 244, 0.1); }
+  .bellbtn:hover { color: var(--ink); background: rgba(243, 237, 228, 0.1); }
   .ndot {
     position: absolute; top: -2px; right: -3px;
     min-width: 16px; height: 16px; padding: 0 4px;
@@ -789,7 +795,7 @@
   .npanel {
     position: absolute; top: 44px; right: 0; z-index: 60;
     width: 320px; max-width: 86vw;
-    background: rgba(17, 17, 22, 0.97); backdrop-filter: blur(14px);
+    background: rgba(25, 22, 20, 0.985);
     border-radius: var(--r-md); overflow: hidden;
     box-shadow: 0 18px 50px rgba(0, 0, 0, 0.6), 0 0 0 1px var(--line-strong);
   }
@@ -807,7 +813,7 @@
     border-top: 1px solid var(--line);
     transition: background var(--t-fast);
   }
-  .nitem:hover { background: rgba(242, 242, 244, 0.06); }
+  .nitem:hover { background: rgba(243, 237, 228, 0.06); }
   .nicon {
     flex: 0 0 26px; width: 26px; height: 26px; border-radius: 99px;
     display: grid; place-items: center; font-size: 0.82rem; font-weight: 800;
@@ -815,7 +821,7 @@
   }
   .nicon.complete { background: rgba(126, 212, 145, 0.16); color: #7ed491; }
   .nicon.added { background: rgba(109, 179, 255, 0.16); color: #6db3ff; }
-  .nicon.download { background: rgba(242, 242, 244, 0.1); color: var(--ink); }
+  .nicon.download { background: rgba(243, 237, 228, 0.1); color: var(--ink); }
   .ntext { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
   .ntitle { font-size: 0.88rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .nbody { font-size: 0.78rem; color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -826,12 +832,13 @@
     position: relative;
     width: 34px; height: 34px; border-radius: 99px;
     display: grid; place-items: center;
-    background: var(--bg-raised); color: var(--ink);
+    background: var(--accent); color: var(--accent-ink);
     font-weight: 700; font-size: 0.9rem; text-transform: uppercase;
-    box-shadow: inset 0 0 0 1px var(--line-strong);
-    transition: background var(--t-fast);
+    transition: filter var(--t-fast);
   }
-  .avatar:hover { background: rgba(242, 242, 244, 0.14); }
+  .avatar:hover { filter: brightness(1.08); }
+  /* Badges sit on the amber avatar and bell, so they are cream, not amber. */
+  .avatar .badge, .ndot { background: var(--ink); color: var(--bg); }
   .badge {
     position: absolute; top: -4px; right: -6px;
     min-width: 17px; height: 17px; padding: 0 4px;
@@ -843,7 +850,7 @@
   .dropdown {
     position: absolute; top: 44px; right: 0; z-index: 60;
     min-width: 200px;
-    background: rgba(17, 17, 22, 0.97); backdrop-filter: blur(14px);
+    background: rgba(25, 22, 20, 0.985);
     border-radius: var(--r-md); padding: var(--s2);
     box-shadow: 0 18px 50px rgba(0, 0, 0, 0.6), 0 0 0 1px var(--line-strong);
     display: flex; flex-direction: column; gap: 1px;
@@ -858,21 +865,22 @@
     padding: 9px 12px; border-radius: var(--r-sm); color: var(--ink-soft);
     transition: background var(--t-fast), color var(--t-fast);
   }
-  .dropdown > button:hover { background: rgba(242, 242, 244, 0.1); color: var(--ink); }
+  .dropdown > button:hover { background: rgba(243, 237, 228, 0.1); color: var(--ink); }
   .dropdown > button:disabled { opacity: 0.5; }
-  .dropdown .danger { color: #ff6b6b; }
+  .dropdown .danger { color: var(--bad); }
   .divider { height: 1px; background: var(--line); margin: var(--s2) 0; }
   nav a {
-    color: var(--ink-soft); font-size: 0.9rem; font-weight: 500;
-    letter-spacing: 0.02em; transition: color var(--t-fast);
+    color: var(--ink-soft); font-size: 0.95rem; font-weight: 500;
+    transition: color var(--t-fast);
     position: relative;
-    display: inline-flex; align-items: center; min-height: 36px;
+    display: inline-flex; align-items: center; min-height: 40px;
   }
   nav a:hover, nav a.active { color: var(--ink); }
   nav a.active::after {
-    content: ''; position: absolute; left: 0; right: 0; bottom: 0;
-    height: 2px; background: #9e6aff; border-radius: 2px;
+    content: ''; position: absolute; left: 0; right: 0; bottom: -2px;
+    height: 2px; background: var(--accent); border-radius: 2px;
   }
+  .nicon-svg { display: none; }
   main { position: relative; }
 
   .toast {
@@ -894,7 +902,7 @@
      side margins) so the nav and a usable search box coexist on one row
      well below desktop widths, instead of the box crushing to its icon. */
   @media (max-width: 900px) {
-    .brand { letter-spacing: 0.2em; font-size: 0.92rem; }
+    .brand { font-size: 1.5rem; }
     nav { gap: var(--s3); margin: 0 var(--s3); }
     .searchbox { min-width: 160px; margin: 0 var(--s3) 0 0; }
   }
@@ -903,18 +911,25 @@
   @media (max-width: 720px) {
     .topbar { padding: var(--s3) var(--s4); gap: var(--s2); }
     .brand { margin-right: auto; }
+    /* The tab bar: icon over label, the current tab in amber. */
     nav {
       position: fixed; inset: auto 0 0; margin: 0; gap: 0; display: flex; max-width: none; width: 100%; overflow-x: auto;
-      padding: 5px 8px calc(5px + env(safe-area-inset-bottom)); background: #111116; border-top: 1px solid var(--line-strong);
+      padding: 6px 6px calc(8px + env(safe-area-inset-bottom)); background: rgba(14, 12, 11, 0.985); border-top: 1px solid var(--line-strong);
     }
-    nav > a, .mobile-search, .nav-retry, .nav-status { display: grid; place-items: center; min-height: 44px; min-width: 64px; padding: 0 12px; font-size: .8rem; color: var(--ink-soft); }
-    nav a.active { color: #c5a6ff; }
-    nav a.active::after { bottom: 0; left: 20%; right: 20%; }
-    main { padding-bottom: calc(60px + env(safe-area-inset-bottom)); }
+    nav > a, .mobile-search, .nav-retry, .nav-status {
+      flex: 1 0 64px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+      min-height: 52px; padding: 0 6px; font-size: .7rem; font-weight: 600; color: var(--ink-soft);
+    }
+    nav > a span, .mobile-search span { max-width: 84px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .nicon-svg { display: block; }
+    .desk-only { display: none !important; }
+    nav a.active { color: var(--accent); }
+    nav a.active::after { display: none; }
+    main { padding-bottom: calc(72px + env(safe-area-inset-bottom)); }
     .searchbox { display: none; }
     .searching .searchbox {
       display: flex; position: absolute; left: var(--s4); right: var(--s4); top: 8px;
-      margin: 0; width: auto; max-width: none; padding: 0 12px; min-height: 44px; background: #202027; z-index: 2;
+      margin: 0; width: auto; max-width: none; padding: 0 14px; min-height: 44px; background: var(--bg-raised); z-index: 2;
     }
     .searching .brand, .searching .bell, .searching .usermenu { visibility: hidden; }
     .search-close { display: grid; place-items: center; min-width: 44px; min-height: 44px; }

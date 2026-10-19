@@ -62,7 +62,7 @@ async function fixture(page, { initialPath = '/title/book', items = [book], admi
     return route.fulfill({ body, contentType: file.endsWith('.js') ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : 'text/html' });
   });
   await page.goto(`${origin}${initialPath}`);
-  await expect(page.getByRole('link', { name: 'Home', exact: true })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Tonight', exact: true })).toBeVisible();
   return state;
 }
 async function listen(page) {
@@ -120,13 +120,15 @@ test('chapter and minute sleep timers pause the same audio without closing it', 
   expect(state.errors).toEqual([]);
 });
 
-test('Home limits recent continue rows to twelve and View all exposes each media kind', async ({ page }) => {
+test('Tonight features the newest video and audiobook, limits the other rows to twelve, and View all exposes each media kind', async ({ page }) => {
   const items = Array.from({ length: 18 }, (_, index) => ({ ...book, id: String(index), title: `Title ${index}`,
     mediaKind: index % 2 ? 'audio' : 'movie', type: index % 2 ? 'audio' : 'movie', filename: index % 2 ? `${index}.wav` : `${index}.mp4`,
     audioMetadata: index % 2 ? { title: `Title ${index}` } : undefined, progress: { ...book.progress, updatedAt: index } }));
   const state = await fixture(page, { initialPath: '/', items });
-  const watching = page.locator('section.row').filter({ has: page.getByRole('heading', { name: 'Continue watching', exact: true }) });
-  const listening = page.locator('section.row').filter({ has: page.getByRole('heading', { name: 'Continue listening', exact: true }) });
+  await expect(page.getByRole('article', { name: 'Pick up where you left off' }).getByRole('heading', { name: 'Title 16' })).toBeVisible();
+  await expect(page.getByRole('article', { name: 'Continue listening' }).getByRole('heading', { name: 'Title 17' })).toBeVisible();
+  const watching = page.locator('section.row').filter({ has: page.getByRole('heading', { name: 'Also watching', exact: true }) });
+  const listening = page.locator('section.row').filter({ has: page.getByRole('heading', { name: 'Also listening', exact: true }) });
   await expect(watching.locator('.card')).toHaveCount(6); await expect(listening.locator('.card')).toHaveCount(6);
   await page.getByRole('button', { name: 'View all (18)', exact: true }).click();
   const grid = page.getByRole('region', { name: 'All in-progress titles' });

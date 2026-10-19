@@ -84,7 +84,7 @@
     border-top: 1px solid var(--line); border-radius: var(--r-sm);
     cursor: pointer; transition: background var(--t-fast);
   }
-  .row:hover { background: rgba(242, 242, 244, 0.06); }
+  .row:hover { background: rgba(243, 237, 228, 0.06); }
   .thumb { flex: 0 0 52px; }
   .thumb img, .thumb .ph {
     width: 52px; aspect-ratio: 2/3; object-fit: cover;
@@ -94,7 +94,7 @@
   .t { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .bar {
     display: block; height: 3px; max-width: 220px;
-    background: rgba(242, 242, 244, 0.16); border-radius: 99px; overflow: hidden;
+    background: rgba(243, 237, 228, 0.16); border-radius: 99px; overflow: hidden;
   }
   .bar span { display: block; height: 100%; background: var(--ink); }
   .left { font-size: 0.75rem; color: var(--ink-faint); }

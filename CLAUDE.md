@@ -158,6 +158,19 @@ change). ffmpeg is killed after 5 minutes without progress (stalled pool drive).
 (`lib/compressed-json.js`). `MAX_FILE_BYTES` (16 MiB) is shared with `lib/verified-backup.js`:
 one read-along document over the backup's limit fails the entire snapshot.
 
+### Look and feel (October 2026 redesign)
+Warm dark palette with one amber accent, set as tokens in `v2/frontend/src/styles/tokens.css`
+(`--bg #0e0c0b`, `--ink #f3ede4`, `--accent #e8b04a`, `--good/--warn/--bad`); Instrument Serif for
+headings (`.display`, italic for titles), Instrument Sans for everything else. Use the tokens, not new
+hex values; there is no purple left anywhere. Home is "Tonight" (`routes/Home.svelte`, logic in
+`lib/tonight.js`): newest video as a Resume card, newest audiobook as a strip (chapter list reused
+from the shelf's own `/api/item` response via `lib/home-data.js`, Read along shown only for ids in
+`/api/audio/read-along-index`), one pick with a reason, then shelves. The title page's file facts,
+"Also by" and "If you like this one" come from `lib/title-facts.js`. **Performance rule:** no
+`backdrop-filter` on fixed or scrolling elements and no animated blur (the Firefox/Pop!_OS lag);
+the blurred poster behind Tonight's Resume card and the title hero is a static `filter: blur`.
+Poster rows need `min-width: 0` on their flex cells or a long one-line title widens the card.
+
 ### Stream modes (getStreamMode)
 - `direct`: h264 + aac/mp3/opus in .mp4 -- served as-is via byte-range
 - `remux`: h264 in .mkv or with non-browser audio -- copy video, transcode/copy audio

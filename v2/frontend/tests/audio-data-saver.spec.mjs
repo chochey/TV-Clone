@@ -94,7 +94,7 @@ async function fixture(page, { lite, dataSaver = false, unplayableOpus = false, 
     return route.fulfill({ body, contentType: file.endsWith('.js') ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : 'text/html' });
   });
   await page.goto(`${origin}/title/book`);
-  await expect(page.getByRole('link', { name: 'Home', exact: true })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Tonight', exact: true })).toBeVisible();
   return state;
 }
 async function listen(page) {
@@ -124,7 +124,7 @@ test('turning data saver on moves to the smaller copy at the same place, and thi
   await tools.scrollIntoViewIfNeeded(); await player.screenshot({ path: test.info().outputPath('data-saver-phone.png') });
   state.streams.length = 0;
   await page.reload();
-  await expect(page.getByRole('link', { name: 'Home', exact: true })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Tonight', exact: true })).toBeVisible();
   await listen(page);
   expect(await source(page)).toBe(OPUS_URL);
   expect(state.streams.length).toBeGreaterThan(0);

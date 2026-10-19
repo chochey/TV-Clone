@@ -1,7 +1,7 @@
 export const moods = [
-  {id:'Comedy',label:'Make me laugh',icon:'☺',color:'#f3bc50'},
-  {id:'Action',label:'Action night',icon:'ϟ',color:'#ff777e'},
-  {id:'Horror',label:'Something scary',icon:'☾',color:'#ba94ff'},
+  {id:'Comedy',label:'Make me laugh'},
+  {id:'Action',label:'Action night'},
+  {id:'Horror',label:'Something scary'},
 ];
 export function moodMatches(items, genre) {
   return items.filter(item => [...(item.genres || []), ...(item.genre || '').split(',')]

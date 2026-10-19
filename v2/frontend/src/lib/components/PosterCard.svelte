@@ -7,7 +7,8 @@
   import { audioPresentation } from '../audio-presentation.js';
   // resume: rendered in the Continue Watching row — show which episode and how
   // much is left, and offer a way to drop it from the row.
-  let { item, onopen, onplay, resume = false, wide = false } = $props();
+  // added: on the new-arrivals shelf the meta line says when it arrived.
+  let { item, onopen, onplay, resume = false, wide = false, added = false } = $props();
 
   // No poster? Ask OMDb once — the store patch re-renders this card.
   $effect(() => { if (!isAudioItem(item) && !posterUrl(item)) enrichItem(item.id); });
@@ -41,6 +42,12 @@
   const year = $derived(item.year || item.omdbYear || '');
   const rating = $derived(item.imdbRating && item.imdbRating !== 'N/A' ? item.imdbRating : '');
   const pct = $derived(item.seriesCard && !resume ? 0 : current.progress?.percent || 0);
+  const addedLabel = $derived.by(() => {
+    if (!added || !item.addedAt) return '';
+    const days = Math.floor((Date.now() - item.addedAt) / 86400000);
+    return days <= 0 ? 'Added today' : days === 1 ? 'Yesterday' : days < 7 ? `${days} days ago` : days < 14 ? 'Last week' : '';
+  });
+  const metaLine = $derived([year, isSeriesItem(item) ? 'Series' : '', rating ? `★ ${rating}` : '', addedLabel].filter(Boolean).join(' · '));
   const minsLeft = $derived.by(() => {
     const p = current.progress;
     if (!p?.duration || !p?.currentTime) return 0;
@@ -120,38 +127,37 @@
       </button>
     {/if}
 
-    <!-- Always-visible info strip -->
-    {#if !audio}<div class="info-strip">
-      <span class="t">{title}</span>
-      <span class="y">
-        {#if resume && resumeLine}
-          {resumeLine}
-        {:else}
-          {year}{isSeriesItem(item) ? ' · Series' : isAudioItem(item) ? ' · Audio' : ''}{rating ? ` · ★ ${rating}` : ''}
-          {#if playbackIssue}<span class="compatibility-label">Compatible copy needed</span>{/if}
-          {#if summary && summary.watched}<span class="series-progress">{summary.watched} of {summary.total} watched</span>{/if}
-        {/if}
-      </span>
-    </div>{/if}
-
     {#if audio && wide}{@render audioDetails()}{/if}
 
     {#if pct > 0 && pct < AUTO_WATCHED_PERCENT}
       <div class="progress"><span style={`width:${pct}%`}></span></div>
     {/if}
   </div>
+  <!-- Title and one line of facts under the poster: easier to read than text over artwork. -->
+  {#if !audio}<div class="info-strip">
+    <span class="t" title={title}>{title}</span>
+    <span class="y">
+      {#if resume && resumeLine}
+        {resumeLine}
+      {:else}
+        {metaLine}
+        {#if playbackIssue}<span class="compatibility-label">Compatible copy needed</span>{/if}
+        {#if summary && summary.watched}<span class="series-progress">{summary.watched} of {summary.total} watched</span>{/if}
+      {/if}
+    </span>
+  </div>{/if}
   {#if audio && !wide}{@render audioDetails()}{/if}
 </div>
 
 <style>
-  .wide .art { aspect-ratio:16 / 8; border-radius:11px; }
-  .wide .info-strip { padding-bottom:16px; }
-  .wide .hover-overlay {opacity:1;background:none;place-items:end;padding:16px 14px 54px;}
-  .wide .play {width:36px;height:36px;background:#0b0b0ebf;color:white;border:1px solid #fff8;}
+  .wide .art { aspect-ratio:16 / 8; border-radius:var(--r-md); }
+  .wide .hover-overlay {opacity:1;background:none;place-items:end;padding:14px;}
+  .wide .play {width:36px;height:36px;background:#0e0c0bbf;color:white;border:1px solid #fff8;}
   .wide .progress span {background:var(--cta);}
   .wide .t {font-size:1rem;}
   @media(prefers-reduced-motion:reduce){.card .art,.card .play{transition:none;transform:none;}}
-  .card { display: block; cursor: pointer; }
+  .card { display: flex; flex-direction: column; gap: 9px; cursor: pointer; border-radius: var(--r-sm); }
+  .card:focus-visible { outline: none; }
   .art {
     position: relative;
     aspect-ratio: 2 / 3;
@@ -161,11 +167,11 @@
     box-shadow: 0 0 0 1px var(--line);
     transition: transform var(--t-med) var(--ease), box-shadow var(--t-med) var(--ease);
   }
-  .card:hover .art, .card:focus-visible .art {
-    transform: translateY(-6px) scale(1.03);
-    box-shadow: 0 22px 44px rgba(0, 0, 0, 0.55), 0 0 0 1px var(--line-strong);
-    z-index: 5;
+  .card:hover .art {
+    transform: translateY(-4px);
+    box-shadow: 0 18px 36px rgba(0, 0, 0, 0.5), 0 0 0 1px var(--line-strong);
   }
+  .card:focus-visible .art { box-shadow: 0 0 0 2px var(--accent); }
   .art img { width: 100%; height: 100%; object-fit: cover; }
 
   /* No art: set the title itself, quietly — reads like a spine label */
@@ -187,7 +193,7 @@
     width: 22px; height: 22px; border-radius: 99px;
     display: grid; place-items: center;
     font-size: 0.7rem; font-weight: 700;
-    background: rgba(11, 11, 14, 0.88); color: var(--ink);
+    background: rgba(14, 12, 11, 0.88); color: var(--ink);
     box-shadow: 0 0 0 1px var(--line-strong);
   }
 
@@ -198,7 +204,7 @@
     position: absolute; top: 7px; left: 7px; z-index: 2;
     width: 22px; height: 22px; border-radius: 99px;
     display: grid; place-items: center;
-    background: rgba(11, 11, 14, 0.88); color: var(--ink-soft);
+    background: rgba(14, 12, 11, 0.88); color: var(--ink-soft);
     box-shadow: 0 0 0 1px var(--line-strong);
     opacity: 0; transition: opacity var(--t-fast), color var(--t-fast);
     cursor: pointer;
@@ -210,7 +216,7 @@
   .hover-overlay {
     position: absolute; inset: 0;
     display: grid; place-items: center;
-    background: rgba(11, 11, 14, 0.4);
+    background: rgba(14, 12, 11, 0.4);
     opacity: 0; transition: opacity var(--t-med);
     pointer-events: none;
   }
@@ -233,38 +239,33 @@
   .card:hover .play { transform: scale(1); }
   .play:hover { transform: scale(1.1); }
 
-  .info-strip {
-    position: absolute; left: 0; right: 0; bottom: 0;
-    padding: var(--s3);
-    padding-top: var(--s5);
-    background: linear-gradient(0deg, rgba(11, 11, 14, 0.92) 0%, rgba(11, 11, 14, 0.5) 60%, transparent 100%);
-  }
+  .info-strip { display: flex; flex-direction: column; gap: 2px; min-width: 0; padding: 0 1px; contain: inline-size; }
   .t {
-    display: block; font-weight: 600; font-size: 0.82rem; line-height: 1.2;
+    display: block; font-weight: 600; font-size: 0.88rem; line-height: 1.3;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
-  .y { display: block; font-size: 0.68rem; color: var(--ink-soft); margin-top: 2px; }
-  .series-progress { display: block; margin-top: 3px; }
-  .compatibility-label { display: block; margin-top: 3px; color: #c5a6ff; }
+  .y { display: block; font-size: 0.8rem; color: var(--ink-faint); line-height: 1.35; }
+  .series-progress { display: block; margin-top: 2px; }
+  .compatibility-label { display: block; margin-top: 2px; color: var(--accent); }
 
   .progress {
     position: absolute; left: 0; right: 0; bottom: 0; height: 3px;
     background: rgba(0, 0, 0, 0.6);
   }
-  .progress span { display: block; height: 100%; background: var(--ink); }
+  .progress span { display: block; height: 100%; background: var(--accent); }
 
   .audio .art { aspect-ratio: 1; border-radius: 10px; }
-  .audio .art img { object-fit: contain; background: #121019; }
+  .audio .art img { object-fit: contain; background: #15110e; }
   .audio .hover-overlay { place-items: center; padding: 0; }
   .audio-placeholder {
     height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center;
-    gap: 10px; color: #dfc7f0; position: relative;
-    background: linear-gradient(145deg, #5a346c, #2b1a3d 65%, #191521);
+    gap: 10px; color: #ead9bf; position: relative;
+    background: linear-gradient(145deg, #5b3f22, #2e2116 65%, #1a1410);
   }
   .audio-placeholder::before { content: ''; position: absolute; inset: 0 auto 0 0; width: 9px; background: #ffffff0b; border-right: 1px solid #ffffff17; }
   .audio-placeholder svg { width: 48%; max-width: 96px; }
-  .audio-placeholder span { font-size: .58rem; letter-spacing: .18em; color: #d8c2e6; }
-  .audio-info { padding: 10px 1px 2px; }
+  .audio-placeholder span { font-size: .58rem; letter-spacing: .18em; color: #e6d3b4; }
+  .audio-info { padding: 0 1px 2px; }
   .audio-title { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
     font-size: .92rem; font-weight: 600; line-height: 1.35; color: var(--ink); overflow-wrap: anywhere; }
   .audio-author { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
@@ -273,7 +274,7 @@
   .audio .compatibility-label { font-size: .7rem; line-height: 1.4; }
   .audio.wide .art {
     aspect-ratio: 16 / 8; border-radius: 11px;
-    background: linear-gradient(135deg, #3b284a, #251b31 65%, #17131f);
+    background: linear-gradient(135deg, #3c2b1c, #261c14 65%, #17120e);
   }
   .audio.wide .art img, .audio.wide .audio-placeholder {
     position: absolute; left: 12px; top: 12px;
