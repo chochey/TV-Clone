@@ -196,7 +196,11 @@ test('missing text and failed or cancelled loads leave playback usable and retry
   expect(await page.locator('audio').evaluate(audio => audio.paused)).toBe(false);
   state.status = 200; state.response = { available: false };
   await page.getByRole('button', { name: 'Retry reading text' }).click();
-  await expect(page.getByText('Reading text isn’t ready for this book')).toBeVisible();
+  // No prepared text at all: say so plainly, and offer no "Check again" that cannot help.
+  await expect(page.getByText('Read along isn’t set up for this book')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Check again' })).toHaveCount(0);
+  await toggle.click(); state.response = { available: false, retryable: true }; await toggle.click();
+  await expect(page.getByText('Reading text isn’t ready yet')).toBeVisible();
   await toggle.click(); state.response = document(); let resolve; state.delay = new Promise(done => resolve = done);
   await toggle.click(); await expect(page.getByText('Loading reading text…')).toBeVisible();
   await toggle.click(); resolve(); state.delay = null;
@@ -303,16 +307,18 @@ test('a long passage on a phone stays stable at large text size and manual brows
   expect(state.errors).toEqual([]);
 });
 
-test('spoken words follow seeks with exact text, paragraph fallback and no extra scrolling or layout movement', async ({ page }) => {
+test('spoken words follow seeks with exact text, bridged untimed runs, paragraph fallback and no extra scrolling or layout movement', async ({ page }) => {
   const state = await fixture(page); state.response = wordDocument(); await position(page, 1.2);
   await page.getByRole('button', { name: 'Read along', exact: true }).click();
   const reader = page.getByRole('region', { name: 'Read along', exact: true }), text = reader.getByRole('region', { name: 'Book text' });
   const spoken = reader.locator('.spoken-current');
   await expect(spoken).toHaveText('Hello'); await afterPaint(page); await watchScroll(text);
   expect(await reader.locator('.passage p').first().textContent()).toBe(state.response.chapters[0].paragraphs[0].text);
-  expect(await reader.locator('.spoken-word').count()).toBe(3);
+  // Hello, reader, stays, plus "Unmatched text" bridged between reader (ends 4 s) and stays (starts 5 s).
+  expect(await reader.locator('.spoken-word').count()).toBe(4);
   const bounds = await reader.locator('.passage p').first().boundingBox(), scroll = await text.evaluate(element => element.scrollTop);
   await position(page, 3.2); await expect(spoken).toHaveText('reader');
+  await position(page, 4.5); await expect(spoken).toHaveText('Unmatched text');
   await position(page, 2.2); await expect(spoken).toHaveCount(0);
   await expect(reader.locator('[aria-current="true"]')).toContainText('Hello');
   await position(page, 5.2); await expect(spoken).toHaveText('stays');
@@ -321,14 +327,16 @@ test('spoken words follow seeks with exact text, paragraph fallback and no extra
   expect(await text.evaluate(element => element.scrollTop)).toBe(scroll); expect(await scrollCalls(text)).toEqual([]);
   await reader.getByRole('checkbox', { name: 'Auto-scroll' }).uncheck(); await watchScroll(text);
   await position(page, 11.2); await expect(spoken).toHaveText('second');
-  expect(await reader.locator('.spoken-word').count()).toBe(2);
+  // "passage." is bridged between the last timed word (14 s) and the paragraph end (20 s).
+  expect(await reader.locator('.spoken-word').count()).toBe(3);
+  await position(page, 15); await expect(spoken).toHaveText('passage.');
   await position(page, 21.2); await expect(spoken).toHaveCount(0);
   await expect(reader.locator('[aria-current="true"]')).toContainText('paragraph level');
   expect(await reader.locator('.spoken-word').count()).toBe(0); expect(await scrollCalls(text)).toEqual([]);
   expect(state.errors).toEqual([]);
 });
 
-test('brief gaps keep consecutive words steady while omitted words and pauses remain unhighlighted', async ({ page }) => {
+test('brief gaps keep consecutive words steady, an omitted word is bridged between its neighbours, and pauses stay unhighlighted', async ({ page }) => {
   const state = await fixture(page); state.response = wordDocument();
   const paragraph = state.response.chapters[0].paragraphs[0];
   paragraph.text = 'First second omitted last after.';
@@ -341,7 +349,7 @@ test('brief gaps keep consecutive words steady while omitted words and pauses re
   const bounds = await reader.locator('.passage p').first().boundingBox(), scroll = await text.evaluate(element => element.scrollTop);
   await position(page, 2.05); await expect(spoken).toHaveText('First');
   await position(page, 2.1); await expect(spoken).toHaveText('second');
-  await position(page, 3.05); await expect(spoken).toHaveCount(0);
+  await position(page, 3.05); await expect(spoken).toHaveText('omitted');
   await position(page, 3.2); await expect(spoken).toHaveText('last');
   await position(page, 4.05); await expect(spoken).toHaveCount(0);
   await position(page, 5.2); await expect(spoken).toHaveText('after');
@@ -400,7 +408,8 @@ test('partial word preparation is explained and refreshing adds chapters without
   await expect(reader.locator('.spoken-current')).toHaveText('Chapter');
   await expect(reader.getByText(/Word highlights available in/)).toHaveCount(0);
   expect(await page.locator('audio').evaluate(media => ({ identity: media.dataset.identity, position: media.currentTime, paused: media.paused }))).toEqual({ identity: 'partial-word-player', position: 1.2, paused: true });
-  expect(await reader.locator('.spoken-word').count()).toBe(1); expect(state.requests).toBe(2);
+  expect(await reader.locator('.spoken-word').count()).toBe(2); expect(state.requests).toBe(2);
+  await position(page, 1.7); await expect(reader.locator('.spoken-current')).toHaveText('1 passage 1. A short passage.');
   const box = await reader.boundingBox(); expect(box.x).toBeGreaterThanOrEqual(0); expect(box.x + box.width).toBeLessThanOrEqual(390);
   await reader.screenshot({ path: '/tmp/readalong-phone-word.png' });
   expect(state.errors).toEqual([]);
