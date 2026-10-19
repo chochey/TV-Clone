@@ -37,8 +37,8 @@ export function summaryLine({ watching, listening, others = [], addedThisWeek = 
 export function timeLeft(progress) {
   const left = (progress?.duration || 0) - (progress?.currentTime || 0);
   if (!(left > 30)) return '';
-  const h = Math.floor(left / 3600), m = Math.round((left % 3600) / 60);
-  return h ? `${h} h ${m} min left` : `${m} min left`;
+  const minutes = Math.round(left / 60), h = Math.floor(minutes / 60), m = minutes % 60;
+  return h ? `${h}\u00a0h ${m}\u00a0min left` : `${m}\u00a0min left`;
 }
 
 export function pausedWhen(ts, now = Date.now()) {

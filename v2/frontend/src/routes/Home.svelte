@@ -25,7 +25,7 @@
   const split = $derived(splitInProgress($continueWatching));
   const watching = $derived(split.watching);
   const listening = $derived(split.listening);
-  const addedThisWeek = $derived($catalog.filter(i => i.addedAt && Date.now() - i.addedAt < 7 * 86400000).length);
+  const addedThisWeek = $derived(collapseShows($catalog.filter(i => !isAudioItem(i) && i.addedAt && Date.now() - i.addedAt < 7 * 86400000)).length);
   let now = $state(Date.now());
   $effect(() => { const t = setInterval(() => { now = Date.now(); }, 60000); return () => clearInterval(t); });
   const heading = $derived(greeting(now));
@@ -87,7 +87,7 @@
       <span class="summary">{summary}</span>
     </header>
 
-    <div class="lead-row" class:solo={!watching || !pick}>
+    <div class="lead-row">
       {#if watching}
         <article class="lead" aria-label="Pick up where you left off">
           {#if leadPoster && !leadArtFailed}<img class="lead-bg" src={leadPoster} alt="" aria-hidden="true" />{/if}
@@ -97,10 +97,10 @@
               {:else}<span class="art-fallback">{leadTitle}</span>{/if}
             </button>
             <div class="lead-text">
-              <span class="kicker">Pick up<span class="wide-inline"> where you left off</span></span>
+              <span class="kicker">Pick up<span class="wide-inline">{' where you left off'}</span></span>
               <h2 class="display lead-title">{leadTitle}</h2>
               {#if leadSub}<p class="lead-sub">{leadSub}</p>{/if}
-              <p class="lead-meta">{#if leadPaused}<span class="paused">{leadPaused}{#if leadLeft}<span aria-hidden="true"> · </span>{/if}</span>{/if}{leadLeft}</p>
+              <p class="lead-meta">{#if leadPaused}<span class="paused">{leadPaused}{#if leadLeft}<span aria-hidden="true">{' · '}</span>{/if}</span>{/if}{leadLeft}</p>
               {#if leadPct > 0}<div class="bar" aria-hidden="true"><span style={`width:${Math.min(100, leadPct)}%`}></span></div>{/if}
               <div class="lead-actions">
                 <button class="btn primary" onclick={() => onplay?.(watching)}>
@@ -135,32 +135,35 @@
           </div>
         </aside>
       {/if}
+
+      {#if listening}
+        <article class="listen" aria-label="Continue listening">
+          <button class="listen-cover" onclick={() => onopen?.(listening)} aria-label={`Details for ${book.title}`}>
+            {#if bookCover}<img src={bookCover} alt="" />
+            {:else}<svg aria-hidden="true" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg>{/if}
+          </button>
+          <div class="listen-head">
+            <span class="kicker">Continue listening</span>
+            <h2 class="display listen-title">{book.title}</h2>
+          </div>
+          <div class="listen-info">
+            <p class="listen-meta">{[book.artist, bookChapter, timeLeft(listening.progress), hasReadAlong ? 'Read-along ready' : ''].filter(Boolean).join(' · ')}</p>
+            {#if listening.progress?.percent}<div class="bar" aria-hidden="true"><span style={`width:${Math.min(100, listening.progress.percent)}%`}></span></div>{/if}
+          </div>
+          <div class="listen-actions">
+            <button class="btn primary" onclick={() => onplay?.(listening)}>
+              <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M7 4v16l13-8z"/></svg><span class="lbl">Resume</span>
+            </button>
+            {#if hasReadAlong}
+              <button class="btn" onclick={() => onplay?.(listening, { reading: true })}>
+                <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h6a3 3 0 0 1 3 3v12a2 2 0 0 0-2-2H4z"/><path d="M20 5h-6a3 3 0 0 0-3 3v12a2 2 0 0 1 2-2h7z"/></svg><span class="lbl">Read along</span>
+              </button>
+            {/if}
+          </div>
+        </article>
+      {/if}
     </div>
 
-    {#if listening}
-      <article class="listen" aria-label="Continue listening">
-        <button class="listen-cover" onclick={() => onopen?.(listening)} aria-label={`Details for ${book.title}`}>
-          {#if bookCover}<img src={bookCover} alt="" />
-          {:else}<svg aria-hidden="true" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg>{/if}
-        </button>
-        <div class="listen-text">
-          <span class="kicker">Continue listening</span>
-          <h2 class="display listen-title">{book.title}</h2>
-          <p class="listen-meta">{[book.artist, bookChapter, timeLeft(listening.progress), hasReadAlong ? 'Read-along ready' : ''].filter(Boolean).join(' · ')}</p>
-          {#if listening.progress?.percent}<div class="bar" aria-hidden="true"><span style={`width:${Math.min(100, listening.progress.percent)}%`}></span></div>{/if}
-        </div>
-        <div class="listen-actions">
-          <button class="btn primary" onclick={() => onplay?.(listening)}>
-            <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M7 4v16l13-8z"/></svg><span class="lbl">Resume</span>
-          </button>
-          {#if hasReadAlong}
-            <button class="btn" onclick={() => onplay?.(listening, { reading: true })}>
-              <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h6a3 3 0 0 1 3 3v12a2 2 0 0 0-2-2H4z"/><path d="M20 5h-6a3 3 0 0 0-3 3v12a2 2 0 0 1 2-2h7z"/></svg><span class="lbl">Read along</span>
-            </button>
-          {/if}
-        </div>
-      </article>
-    {/if}
   </section>
 
   {#if split.others.length}
@@ -223,7 +226,7 @@
 
 <style>
   .home { padding: calc(64px + var(--s5)) 0 var(--s6); }
-  .top { padding: 0 var(--gutter); display: flex; flex-direction: column; gap: 18px; max-width: var(--maxw); }
+  .top { padding: 0 var(--gutter); display: flex; flex-direction: column; gap: 18px; }
   .top-head { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
   .top-head h1 { font-size: clamp(2.2rem, 4vw, 2.9rem); }
   .summary { color: var(--ink-soft); font-size: 0.95rem; }
@@ -266,18 +269,32 @@
   .pick-meta { color: var(--ink-soft); font-size: 0.88rem; }
   .pick-reason { color: var(--ink); font-size: 0.92rem; line-height: 1.5; opacity: 0.9; }
   .pick-actions { display: flex; gap: 6px 10px; align-items: center; margin-top: auto; flex-wrap: wrap; padding-top: 6px; }
-  .pick.big { padding: 30px; }
+  .pick.big { flex: 2 1 560px; padding: 30px; }
   .pick.big .pick-poster { width: 150px; }
   .pick.big .pick-title { font-size: clamp(2.2rem, 4vw, 3.1rem); }
 
-  .listen { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; background: var(--bg-raised); box-shadow: inset 0 0 0 1px var(--line); border-radius: var(--r-lg); padding: 16px 20px; }
-  .listen-cover { width: 72px; height: 72px; border-radius: var(--r-sm); overflow: hidden; flex: 0 0 auto; display: grid; place-items: center; background: #2a2018; color: #ead9bf; box-shadow: 0 10px 24px rgba(0, 0, 0, 0.45); }
+  /* The audiobook card is a full-width strip under the other two, or a third card
+     beside them on wide screens. Without an audiobook the other two fill the row. */
+  .listen { flex: 1 1 100%; min-width: 0; display: grid; grid-template-columns: 72px minmax(0, 1fr) auto;
+    grid-template-areas: "cover head actions" "cover info actions"; column-gap: 20px; row-gap: 4px; align-items: center;
+    background: var(--bg-raised); box-shadow: inset 0 0 0 1px var(--line); border-radius: var(--r-lg); padding: 16px 20px; }
+  .listen-cover { grid-area: cover; width: 72px; height: 72px; border-radius: var(--r-sm); overflow: hidden; display: grid; place-items: center; background: #2a2018; color: #ead9bf; box-shadow: 0 10px 24px rgba(0, 0, 0, 0.45); }
   .listen-cover img { width: 100%; height: 100%; object-fit: cover; }
-  .listen-text { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1 1 320px; }
+  .listen-head { grid-area: head; display: flex; flex-direction: column; gap: 4px; min-width: 0; align-self: end; }
+  .listen-info { grid-area: info; display: flex; flex-direction: column; gap: 4px; min-width: 0; align-self: start; }
   .listen-title { font-style: italic; font-size: 1.75rem; line-height: 1.05; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .listen-meta { color: var(--ink-soft); font-size: 0.88rem; }
   .listen .bar { margin-top: 4px; max-width: 420px; }
-  .listen-actions { display: flex; gap: 10px; margin-left: auto; flex-wrap: wrap; }
+  .listen-actions { grid-area: actions; display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+  @media (min-width: 1700px) {
+    .listen { flex: 1 1 300px; grid-template-columns: 118px minmax(0, 1fr); grid-template-rows: auto auto 1fr;
+      grid-template-areas: "cover head" "info info" "actions actions"; column-gap: 20px; row-gap: 14px; align-items: start; padding: 22px; }
+    .listen-cover { width: 118px; height: 118px; }
+    .listen-head { align-self: center; }
+    .listen-title { font-size: 1.6rem; white-space: normal; display: -webkit-box; -webkit-line-clamp: 3; line-clamp: 3; -webkit-box-orient: vertical; }
+    .listen .bar { max-width: none; }
+    .listen-actions { justify-content: flex-start; align-self: end; }
+  }
 
   .continue-controls { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 40px var(--gutter) 0; color: var(--ink-soft); font-size: 0.88rem; }
   .continue-controls button { color: var(--ink-soft); min-height: 44px; font-weight: 600; text-decoration: underline; text-underline-offset: 4px; white-space: nowrap; }
@@ -340,13 +357,13 @@
     .pick.big .wide-only { display: inline-flex; }
     .pick.big .btn { min-height: 40px; padding: 0 16px; font-size: 0.88rem; }
 
-    .listen { flex-wrap: nowrap; padding: 10px 12px; gap: 12px; border-radius: 12px; }
+    .listen { grid-template-columns: 52px minmax(0, 1fr) auto; column-gap: 12px; row-gap: 3px; padding: 10px 12px; border-radius: 12px; }
     .listen-cover { width: 52px; height: 52px; border-radius: 6px; }
-    .listen-text { flex: 1 1 0; gap: 3px; }
+    .listen-head, .listen-info { gap: 3px; }
     .listen-title { font-size: 1.25rem; }
     .listen-meta { font-size: 0.78rem; }
     .listen .bar { height: 3px; }
-    .listen-actions { margin-left: 0; gap: 8px; flex-wrap: nowrap; }
+    .listen-actions { gap: 8px; flex-wrap: nowrap; }
     .listen-actions .btn { width: 44px; min-height: 44px; }
 
     .mood-pills { margin-left: 0; }

@@ -33,8 +33,11 @@ test('the summary counts what is in progress and what arrived this week', () => 
 });
 
 test('time left and when it was paused read like a person would say them', () => {
-  assert.equal(timeLeft({ currentTime: 3000, duration: 8820 }), '1 h 37 min left');
-  assert.equal(timeLeft({ currentTime: 600, duration: 1320 }), '12 min left');
+  // Non-breaking spaces keep each number with its unit when the line wraps.
+  assert.equal(timeLeft({ currentTime: 3000, duration: 8820 }), '1\u00a0h 37\u00a0min left');
+  assert.equal(timeLeft({ currentTime: 600, duration: 1320 }), '12\u00a0min left');
+  assert.equal(timeLeft({ currentTime: 0, duration: 7190 }), '2\u00a0h 0\u00a0min left');
+  assert.equal(timeLeft({ currentTime: 0, duration: 3590 }), '1\u00a0h 0\u00a0min left');
   assert.equal(timeLeft({ currentTime: 0, duration: 0 }), '');
   const now = at('2026-10-17T21:30:00');
   assert.equal(pausedWhen(at('2026-10-17T20:05:00'), now), 'Paused today at 8:05 PM');
