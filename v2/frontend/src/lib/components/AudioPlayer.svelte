@@ -355,6 +355,7 @@
 </script>
 
 <div class="audio-player" class:minimized role={minimized ? 'region' : 'dialog'} aria-modal={minimized ? undefined : 'true'} aria-label={minimized ? 'Audio mini player' : 'Audio player'} tabindex="-1" bind:this={dialog}>
+  {#if artwork && !minimized}<div class="ambient" aria-hidden="true" style={`--cover:url("${artwork.replace(/"/g, '%22')}")`}></div>{/if}
   <div class="panel" class:reading={readAlongOpen} hidden={minimized}>
     <header class="listening-header">
       <span class="listening-label"><span class="listening-dot" class:playing aria-hidden="true"></span>Now listening</span>
@@ -471,7 +472,13 @@
 </div>
 
 <style>
-  .audio-player { position:fixed; inset:0; z-index:90; overflow:auto; display:flex; align-items:center; justify-content:center; padding:32px; background:radial-gradient(ellipse at 50% 20%,#312a20 0,#110f0c 70%); color:var(--ink,#fff); }
+  .audio-player { position:fixed; inset:0; z-index:90; overflow:auto; display:flex; align-items:center; justify-content:center; padding:32px; background:var(--bg,#0e0c0b); color:var(--ink,#fff); }
+  /* The cover behind the panel: a static blur (no animation, no backdrop-filter -- the Linux/Firefox lag rule), darkened to the page at the edges. */
+  .ambient { position:fixed; inset:0; overflow:hidden; pointer-events:none; }
+  .ambient::before { content:''; position:absolute; inset:-60px; background:var(--cover) center / cover no-repeat; filter:blur(48px) saturate(1.15) brightness(.5); opacity:.6; }
+  .ambient::after { content:''; position:absolute; inset:0; background:radial-gradient(ellipse at 50% 35%, rgba(14,12,11,.15), rgba(14,12,11,.9) 80%); }
+  /* On a computer the top bar stays in view above the player, so the library is one click away while listening. */
+  @media(min-width:721px) { .audio-player:not(.minimized) { top:64px; z-index:45; } .ambient { top:64px; } }
   .audio-player.minimized {inset:auto 0 0;overflow:visible;padding:0;background:transparent;}
   .panel[hidden] {display:none;}
   .header-actions {display:flex;align-items:center;gap:8px;}
@@ -511,7 +518,7 @@
   .tool-error {font-size:.8rem;line-height:1.5;color:#f4bcbe;margin-top:8px;}
   .tool-error button {text-decoration:underline;min-height:40px;}
   @media(max-width:600px) {.header-actions {gap:0;} .header-actions .close {font-size:.7rem;padding:8px;} .mini-panel {gap:6px;} .mini-book {gap:8px;} .mini-book img {width:38px;height:38px;} .mini-control {min-width:40px;} .mini-close {min-width:32px;} }
-  .panel { width:min(100%,960px); margin:auto; border:1px solid #ffffff17; border-radius:20px; background:linear-gradient(145deg,#2a241c,#1c1813 70%); box-shadow:0 28px 100px #0008; }
+  .panel { position:relative; z-index:1; width:min(100%,960px); margin:auto; border:1px solid #ffffff17; border-radius:20px; background:linear-gradient(145deg,#2a241c,#1c1813 70%); box-shadow:0 28px 100px #0008; }
   .reader-toggle.active {background:#e8b04a25;color:#f3ddb0;}
   .panel.reading {width:min(100%,1360px);background:#121619;border-color:#ffffff14;}
   .reading .player-content {display:grid;grid-template-columns:minmax(260px,340px) minmax(0,1fr);gap:24px;padding:24px;align-items:start;}

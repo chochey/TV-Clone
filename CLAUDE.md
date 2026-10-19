@@ -140,6 +140,11 @@ panel #1A2025, text #E6E0D5, already-read passages #A8B0B7, current passage bloc
 word #E2BC78 on #18211F, reader controls accent #81B7AD; the player panel behind it takes #121619
 while reading. Read along opens by itself for a book listed in `/api/audio/read-along-index`
 unless the listener closed it (`localStorage v2ReadAlongAuto = off`, cleared when they open it again).
+On screens wider than 720px the audiobook player sits below the top bar (`top:64px`, z-index 45 under
+the bar's 50) so the library stays one click away; a nav click or search pick with the full player open
+minimizes it (`browseWhileListening` in App.svelte) and the audio keeps going. Behind the panel is the
+book's cover as a static CSS blur (`.ambient::before`, a `--cover` variable; a background, not an
+`<img>`, so tests that count images in the dialog still see one). Phones keep the full-screen player.
 
 ### Audiobook data saver and read-along caching (October 2026)
 Data saver is a per-device switch, on by default only for phones (and Save-Data browsers; `dataSaverDefault` in

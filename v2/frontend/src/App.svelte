@@ -122,6 +122,7 @@
 
   function openItem(item) {
     searchExpanded = false;
+    browseWhileListening();
     navigate(`/title/${encodeURIComponent(item.id)}`);
   }
   // opts.reading: an audiobook opened with its read-along text showing.
@@ -307,10 +308,13 @@
   }
   $effect(() => { if (phase === 'ready') refreshPending(); });
 
+  // Navigating with the full audiobook player open tucks it into the mini player; the audio keeps going.
+  const browseWhileListening = () => { if (playing && isAudioItem(playing) && !audioMinimized) audioMinimized = true; };
   function go(path) {
     searchExpanded = false;
     menuOpen = false;
     confirmRestart = false;
+    browseWhileListening();
     navigate(path);
   }
   async function scanLibrary() {

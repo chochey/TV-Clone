@@ -253,3 +253,32 @@ for (const width of [1280, 390]) {
     expect(forbidden).toEqual([]); expect(errors).toEqual([]);
   });
 }
+
+test('on a computer the audiobook player leaves the top bar in view, and a nav click browses while listening', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const { errors } = await audioApp(page, { fullItem: { ...audioItem, audioMetadata: { title: 'Fixture audiobook', artist: 'Reader', duration: 60, coverUrl: '/audio-artwork/podcast' } } });
+  const dialog = page.getByRole('dialog', { name: 'Audio player' });
+  await expect(dialog).toBeVisible();
+  const nav = page.getByRole('navigation', { name: 'Main navigation' });
+  await expect(nav.getByRole('link', { name: 'Films', exact: true })).toBeVisible();
+  const top = await dialog.boundingBox();
+  expect(top.y).toBeGreaterThanOrEqual(56);
+  // The book's cover, blurred once, sits behind the panel; nothing uses backdrop-filter (the Linux/Firefox lag rule).
+  expect(await page.locator('.audio-player .ambient').evaluate(el => getComputedStyle(el, '::before').backgroundImage)).toContain('/audio-artwork/podcast');
+  expect(await page.evaluate(() => [...document.querySelectorAll('.audio-player, .audio-player *')].every(el => getComputedStyle(el).backdropFilter === 'none'))).toBe(true);
+  await nav.getByRole('link', { name: 'Films', exact: true }).click();
+  await expect(page).toHaveURL(/\/movies$/);
+  await expect(page.getByRole('region', { name: 'Audio mini player' })).toBeVisible();
+  await expect(dialog).toHaveCount(0);
+  expect(await page.locator('audio').evaluate(audio => audio.paused)).toBe(false);
+  expect(errors).toEqual([]);
+});
+
+test('on a phone the audiobook player still takes the whole screen', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const { errors } = await audioApp(page);
+  const dialog = page.getByRole('dialog', { name: 'Audio player' });
+  await expect(dialog).toBeVisible();
+  expect((await dialog.boundingBox()).y).toBe(0);
+  expect(errors).toEqual([]);
+});
