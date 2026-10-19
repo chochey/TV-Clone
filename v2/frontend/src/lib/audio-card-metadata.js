@@ -7,12 +7,16 @@ export const audioCardIdentity = item => JSON.stringify([
 const eligible = item => !!item?.id && isAudioItem(item) && !audioPlaybackIssue(item);
 const text = value => typeof value === 'string' ? value.trim().slice(0, 512) || null : null;
 
+// This book's own cover, optionally with the version the server adds (?v=size-mtime).
+const ownCover = (url, id) => typeof url === 'string' && (url === `/audio-artwork/${encodeURIComponent(id)}`
+  || (url.startsWith(`/audio-artwork/${encodeURIComponent(id)}?v=`) && /^[a-z0-9]+-[a-z0-9]+$/.test(url.split('?v=')[1])));
+
 // Shelf metadata deliberately excludes chapter arrays and profile state.
 export function slimAudioCardMetadata(metadata, id) {
   if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return null;
   return { title: text(metadata.title), artist: text(metadata.artist), album: text(metadata.album),
     duration: Number.isFinite(metadata.duration) && metadata.duration > 0 ? metadata.duration : null,
-    coverUrl: metadata.coverUrl === `/audio-artwork/${encodeURIComponent(id)}` ? metadata.coverUrl : null };
+    coverUrl: ownCover(metadata.coverUrl, id) ? metadata.coverUrl : null };
 }
 
 export function mergeAudioCardMetadata(item, metadata) {
@@ -72,7 +76,8 @@ export function createAudioCardMetadataLoader({ load, onMetadata = () => {}, isC
     return job.promise;
   }
   function observe(item) {
-    if (!eligible(item)) return () => {};
+    // The catalog already lists the title, author and cover ('' = the book has none); nothing to fetch.
+    if (!eligible(item) || typeof item.coverUrl === 'string') return () => {};
     const key = audioCardIdentity(item);
     let watcher = watchers.get(key);
     if (!watcher) {

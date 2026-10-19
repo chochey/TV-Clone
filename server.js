@@ -36,7 +36,9 @@ const { VIDEO_EXTENSIONS, AUDIO_EXTENSIONS, isAudioFile,
   extensionsForFolder, classifyMediaKind, playbackIssueForFile } = require('./lib/library-media');
 const { sectionId } = require('./lib/library-folders');
 const SUPPORTED_EXT = [...VIDEO_EXTENSIONS, ...AUDIO_EXTENSIONS];
-const audioMetadata = require('./lib/audio-metadata')();
+// Audiobook covers are saved to disk once (data/audio-artwork) so shelves can show them straight away.
+const audioArtwork = require('./lib/audio-artwork-store')({ dir: path.join(DATA_DIR, 'audio-artwork') });
+const audioMetadata = require('./lib/audio-metadata')({ artworkStore: audioArtwork });
 const audioReadAlong = require('./lib/audio-read-along')({ DATA_DIR });
 const readAlongBodies = require('./lib/compressed-json')();
 const audioLite = require('./lib/audio-lite')({ DATA_DIR, log: message => console.log(`[DATA-SAVER] ${message}`) });
@@ -414,6 +416,18 @@ function loadLibraryCache() {
   return false;
 }
 
+// After each scan, save any audiobook covers not on disk yet, one book at a time
+// in the background. Open clients refresh once new covers are saved.
+function warmAudioArtwork() {
+  const books = (libraryCache || []).filter(item => item.mediaKind === 'audio' && !item.playbackIssue && item._filePath)
+    .map(item => ({ filePath: item._filePath, size: item.fileSize, mtimeMs: item.addedAt }));
+  if (!libraryScanState.degraded) audioArtwork.prune(books.map(book => book.filePath)).catch(() => {});
+  const before = audioArtwork.revision;
+  audioArtwork.warm(books, filePath => audioMetadata.get(filePath))
+    .then(() => { if (audioArtwork.revision !== before) notifyClients('library-updated'); })
+    .catch(() => {});
+}
+
 function invalidateLibrary(trigger) {
   // Keep serving the current (possibly stale) cache while an async rescan
   // runs in the background. The fresh library is swapped in atomically on
@@ -625,6 +639,7 @@ async function doRescan(trigger) {
   // Auto-fulfill open requests whose title just landed in the library.
   // (Clients refetch requests on the library-updated SSE event.)
   try { requests.matchLibrary(libraryCache); } catch (e) { console.error('[Requests] matchLibrary:', e.message); }
+  warmAudioArtwork();
   if (changed) {
     console.log(`  [scan] Library changed (${prev ? prev.length : 0} → ${library.length}, trigger: ${trigger}) — notifying clients`);
     notifyClients('library-updated');
@@ -762,7 +777,7 @@ require('./lib/routes/library')(app, {
   libraryVersion: () => libraryVersion, libraryScanState: () => libraryScanState, libraryCache: () => libraryCache,
   fileIndex: () => fileIndex, omdb, metadataOverrides, getMetadataForItem,
   audioMetadata, probeCache, audioTracksCache, probeFileAsync, getStreamMode, probeSubtitlesAsync,
-  getConfig: () => config, nowWatching, audioLite, AUTO_WATCHED_PERCENT, MAX_HISTORY_ITEMS,
+  getConfig: () => config, nowWatching, audioLite, AUTO_WATCHED_PERCENT, MAX_HISTORY_ITEMS, artworkStore: audioArtwork,
 });
 
 // History, queue, watchlist and dismissals per profile (lib/routes/profile-lists.js).
@@ -885,7 +900,7 @@ const { streamMediaFile } = require('./lib/direct-stream');
 const backdrop = require('./lib/backdrop')({ DATA_DIR, probeDurationAsync: probe.probeDurationAsync });
 require('./lib/routes/media-files')(app, {
   requireAuth, ensureLibrary, fileFor: id => fileIndex[id], posterFor: id => posterIndex[id], playbackIssueForFile, isAudioFile,
-  audiobookFile, audioLite, audioMetadata, backdrop, streamMediaFile, recordError,
+  audiobookFile, audioLite, audioMetadata, backdrop, streamMediaFile, recordError, artworkStore: audioArtwork,
   onDirectPlay: () => { lastPlaybackAt = Date.now(); },
 });
 

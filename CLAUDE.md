@@ -158,6 +158,14 @@ change). ffmpeg is killed after 5 minutes without progress (stalled pool drive).
 (`lib/compressed-json.js`). `MAX_FILE_BYTES` (16 MiB) is shared with `lib/verified-backup.js`:
 one read-along document over the backup's limit fails the entire snapshot.
 
+**Audiobook covers (October 2026):** embedded covers are saved once to `data/audio-artwork/`
+(`lib/audio-artwork-store.js`), keyed by a hash of the path plus size and mtime -- never inode
+(mergerfs). After every scan a background pass saves the missing ones, one book at a time. The
+catalog then carries `artist` and `coverUrl` (`/audio-artwork/:id?v=<size-mtime>`, served
+`immutable` when `v` matches; `''` = the book has no cover), so shelves show covers with no
+per-book `/api/item`. Before this, every restart emptied a memory-only cache and each fresh page
+load looked up every book two at a time (11.8 s for 34 of 55 covers, vs 0.6 s for all 55 now).
+
 ### Look and feel (October 2026 redesign)
 Warm dark palette with one amber accent, set as tokens in `v2/frontend/src/styles/tokens.css`
 (`--bg #0e0c0b`, `--ink #f3ede4`, `--accent #e8b04a`, `--good/--warn/--bad`); Instrument Serif for

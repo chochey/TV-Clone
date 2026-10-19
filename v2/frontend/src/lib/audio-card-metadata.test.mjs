@@ -101,3 +101,23 @@ test('same-item refresh preserves shelf tags, changed sources invalidate them, a
     assert.equal(get(library)[0].audioMetadata, undefined);
   } finally { stop?.(); session.set(null); globalThis.fetch = originalFetch; }
 });
+
+test('a book the catalog already gives a cover is not fetched for its card, but an explicit request still loads it', async () => {
+  let calls = 0;
+  const loader = createAudioCardMetadataLoader({ load: async id => { calls++; return detail(id); } });
+  const covered = book('covered', { coverUrl: '/audio-artwork/covered?v=2s-1', artist: 'Author' });
+  const release = loader.observe(covered); await tick();
+  assert.equal(calls, 0); release();
+  const coverless = book('coverless', { coverUrl: '', artist: 'Author' });
+  loader.observe(coverless)(); await tick();
+  assert.equal(calls, 0, 'a book known to have no cover is not fetched either');
+  await loader.request(covered);
+  assert.equal(calls, 1);
+});
+
+test('shelf data keeps a versioned cover URL for the same book only', () => {
+  const slim = cover => slimAudioCardMetadata({ ...detail('one').audioMetadata, coverUrl: cover }, 'one').coverUrl;
+  assert.equal(slim('/audio-artwork/one?v=2s-lz4k'), '/audio-artwork/one?v=2s-lz4k');
+  assert.equal(slim('/audio-artwork/two?v=2s-lz4k'), null);
+  assert.equal(slim('/audio-artwork/one?v=../../etc'), null);
+});

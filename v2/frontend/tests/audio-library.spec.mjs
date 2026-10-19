@@ -189,6 +189,22 @@ for (const width of [1280, 390]) {
   });
 }
 
+test('a shelf whose catalog lists covers and authors shows them without a lookup per book', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const books = [
+    { ...audioItem, id:'one', title:"Carl's Doomsday Scenario", filename:'one.m4b', artist:'Matt Dinniman', coverUrl:'/audio-artwork/one?v=2s-1', progress:null },
+    { ...audioItem, id:'two', title:'The Land: Founding', filename:'two.m4b', artist:'Aleron Kong', coverUrl:'/audio-artwork/two?v=3s-1', progress:null },
+  ];
+  const { itemRequests, errors } = await audioApp(page, { catalogItems:books, initialPath:'/library/podcasts', startPlayer:false });
+  const cards = page.locator('.grid .card.audio');
+  await expect(cards).toHaveCount(2);
+  await expect(cards.locator('img')).toHaveCount(2);
+  await expect(cards.filter({ hasText:'The Land: Founding' }).locator('.audio-author')).toHaveText('Aleron Kong');
+  await expect(cards.filter({ hasText:'The Land: Founding' }).locator('img')).toHaveAttribute('src', '/audio-artwork/two?v=3s-1');
+  await page.waitForTimeout(500);
+  expect(itemRequests).toEqual([]); expect(errors).toEqual([]);
+});
+
 for (const width of [1280, 390]) {
   test(`audio shelf shows authored titles, covers and a clean fallback at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });

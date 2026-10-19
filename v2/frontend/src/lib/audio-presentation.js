@@ -13,7 +13,8 @@ export function audioPresentation(item = {}) {
   const artist = String(metadata.artist || item.artist || item.author || '').trim(), album = String(metadata.album || item.album || '').trim();
   return { title, artist, album: album.toLowerCase() === title.toLowerCase() ? '' : album,
     duration: Number.isFinite(metadata.duration) && metadata.duration > 0 ? metadata.duration : 0,
-    coverUrl: typeof metadata.coverUrl === 'string' ? metadata.coverUrl : '' };
+    // The catalog's cover (saved on the server, versioned URL) comes first, so the shelf and the player share one cached image.
+    coverUrl: typeof item.coverUrl === 'string' && item.coverUrl ? item.coverUrl : typeof metadata.coverUrl === 'string' ? metadata.coverUrl : '' };
 }
 export function audioRemaining(seconds) {
   if (!Number.isFinite(seconds) || seconds < 0) return '';

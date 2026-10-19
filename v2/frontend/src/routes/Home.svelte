@@ -2,11 +2,12 @@
   // Tonight: what you're in the middle of first (the newest video as a big
   // Resume card, the newest audiobook as a strip), one pick with a reason, then
   // the shelves. Logic lives in lib/tonight.js.
+  import { untrack } from 'svelte';
   import Row from '../lib/components/Row.svelte';
   import PosterCard from '../lib/components/PosterCard.svelte';
   import CollectionCard from '../lib/components/CollectionCard.svelte';
   import { continueWatching, recentlyAdded, genreClusters, libraryStats, catalog, watchState, collapseShows,
-    dismissFromContinue, observeAudioCard, session } from '../lib/stores.js';
+    dismissFromContinue, observeAudioCard, requestAudioCard, session } from '../lib/stores.js';
   import { posterUrl } from '../lib/api.js';
   import { navigate } from '../lib/router.js';
   import { moods, moodMatches, discoveryPool, nextPick } from '../lib/home-discovery.js';
@@ -42,6 +43,9 @@
 
   // The audiobook strip loads its tags (title, author, chapters, cover) on sight.
   $effect(() => { if (listening) return observeAudioCard(listening); });
+  // Chapters come from the book's detail lookup, which the shelf skips once the catalog has a cover.
+  const listeningId = $derived(listening?.id || '');
+  $effect(() => { if (listeningId) untrack(() => { if (!$bookChapters.has(listeningId)) requestAudioCard(listening); }); });
   const book = $derived(listening ? audioPresentation(listening) : null);
   const bookCover = $derived(book?.coverUrl || listening?.posterUrl || '');
   const bookChapter = $derived.by(() => {

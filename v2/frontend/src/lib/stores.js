@@ -232,6 +232,8 @@ const audioCardMetadata = createAudioCardMetadataLoader({
 
 // Called only while a rendered audio card is near the viewport.
 export const observeAudioCard = item => activeProfile ? audioCardMetadata.observe(item) : () => {};
+// An explicit lookup (shared with the shelf's), for when a page needs more than the card shows.
+export const requestAudioCard = item => activeProfile ? audioCardMetadata.request(item) : Promise.resolve(null);
 
 export function resetSessionState() {
   sessionGeneration++;

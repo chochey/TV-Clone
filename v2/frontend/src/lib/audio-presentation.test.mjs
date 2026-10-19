@@ -29,3 +29,9 @@ test('chapter boundaries discard invalid entries and follow seeks', () => {
   assert.equal(activeAudioChapter(chapters, 12), 0); assert.equal(activeAudioChapter([], 12), -1); assert.equal(audioChapterLabel(chapters[1]), 'Second · 0:30');
   assert.equal(audioChapters(null).length, 0);
 });
+test('the catalog cover and author show before (and instead of) the per-book lookup', () => {
+  assert.deepEqual(audioPresentation({ title: 'Book title', artist: 'Author', coverUrl: '/audio-artwork/b?v=1-2' }),
+    { title: 'Book title', artist: 'Author', album: '', duration: 0, coverUrl: '/audio-artwork/b?v=1-2' });
+  assert.equal(audioPresentation({ title: 'Book title', coverUrl: '/audio-artwork/b?v=1-2', audioMetadata: { coverUrl: '/audio-artwork/b' } }).coverUrl,
+    '/audio-artwork/b?v=1-2');
+});
