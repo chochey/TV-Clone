@@ -75,3 +75,37 @@ test('every pick comes with a reason in plain words', () => {
   assert.equal(pickReason(lib[5], { library: [], collections: [], credits: null }), "A drama you haven't watched yet.");
   assert.equal(pickReason(film('y'), { library: [], collections: [], credits: null }), "From your library, not watched yet.");
 });
+
+// The pick used to be the top-ranked film on every visit, so it stayed the same for weeks.
+import { choosePick, dayKey } from './tonight.js';
+const ranked = ['aliens', 'heat', 'dune', 'jaws'].map(id => ({ id }));
+
+test('the pick changes from day to day and is the same all day', () => {
+  const picks = ['2026-10-20', '2026-10-21', '2026-10-22', '2026-10-23', '2026-10-24'].map(day => choosePick(ranked, { day })?.id);
+  assert.equal(new Set(picks).size > 1, true, `varies across days: ${picks}`);
+  assert.equal(choosePick(ranked, { day: '2026-10-20' })?.id, choosePick(ranked, { day: '2026-10-20' })?.id);
+  assert.equal(choosePick([], { day: '2026-10-20' }), null);
+});
+
+test('a film skipped with Another stays away for two weeks, and recent picks wait their turn', () => {
+  const now = Date.parse('2026-10-20T12:00:00');
+  const skippedToday = { skipped: { aliens: '2026-10-20' }, day: '2026-10-20', now };
+  for (let i = 0; i < 10; i++) assert.notEqual(choosePick(ranked, { ...skippedToday, day: `2026-10-${20 + (i % 9)}` })?.id, 'aliens');
+  const skippedLongAgo = { skipped: { aliens: '2026-09-01' }, day: '2026-10-20', now };
+  assert.equal(choosePick(ranked.slice(0, 1), skippedLongAgo)?.id, 'aliens', 'an old skip has expired');
+  const shownYesterday = { shown: [{ day: '2026-10-19', id: 'heat' }, { day: '2026-10-18', id: 'dune' }], day: '2026-10-20', now };
+  assert.equal(['heat', 'dune'].includes(choosePick(ranked, shownYesterday)?.id), false, 'recent picks are not repeated');
+  assert.equal(choosePick(ranked, { shown: [{ day: '2026-10-20', id: 'heat' }], skipped: { aliens: '2026-10-20', dune: '2026-10-20', jaws: '2026-10-20' }, day: '2026-10-20', now })?.id, 'heat',
+    "today's own pick does not count as recent");
+});
+
+test('when everything has been skipped or shown, the ranking still produces a pick', () => {
+  const now = Date.parse('2026-10-20T12:00:00');
+  const all = Object.fromEntries(ranked.map(r => [r.id, '2026-10-20']));
+  assert.ok(choosePick(ranked, { skipped: all, day: '2026-10-20', now }));
+});
+
+test('the day key is the local calendar date', () => {
+  assert.equal(dayKey(new Date(2026, 9, 20, 23, 30).getTime()), '2026-10-20');
+  assert.equal(dayKey(new Date(2026, 0, 5, 0, 10).getTime()), '2026-01-05');
+});

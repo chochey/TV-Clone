@@ -18,7 +18,8 @@
   import { episodeCode, episodeTitle } from '../lib/format.js';
   import { collections, loadCollections, collectionCards } from '../lib/collections.js';
   import { credits, readAlongIds, bookChapters, loadHomeData } from '../lib/home-data.js';
-  import { greeting, summaryLine, timeLeft, pausedWhen, splitInProgress, rankPicks, pickReason } from '../lib/tonight.js';
+  import { greeting, summaryLine, timeLeft, pausedWhen, splitInProgress, rankPicks, pickReason, choosePick, dayKey } from '../lib/tonight.js';
+  import { loadPickMemory, savePickMemory, rememberShown, rememberSkipped } from '../lib/tonight-pick-memory.js';
   let { onopen, onplay } = $props();
 
   $effect(() => { loadCollections(); loadHomeData(); });
@@ -66,8 +67,23 @@
   const movies = $derived($catalog.filter(i => mediaKindOf(i) === 'movie').map(i => ({ ...i, ...$watchState[i.id] })));
   const pickContext = $derived({ library: movies, collections: $collections, credits: $credits });
   const ranked = $derived(rankPicks(discoveryPool(movies, watching?.id), pickContext).slice(0, 12));
-  let pickIndex = $state(0);
-  const pick = $derived(ranked.length ? ranked[pickIndex % ranked.length] : null);
+  // The day picks among the ranked films (tonight.js choosePick); this device remembers skips and past picks.
+  const today = dayKey();
+  let pickMemory = $state(loadPickMemory());
+  const pick = $derived(choosePick(ranked, { day: today, skipped: pickMemory.skipped, shown: pickMemory.shown }));
+  $effect(() => {
+    if (!pick) return;
+    const id = pick.id;
+    if (pickMemory.shown.some(s => s.day === today && s.id === id)) return;
+    // The ranking settles as collections and credits load; record the pick once it has held for a moment.
+    const timer = setTimeout(() => { pickMemory = rememberShown(pickMemory, today, id); savePickMemory(pickMemory); }, 1500);
+    return () => clearTimeout(timer);
+  });
+  function anotherPick() {
+    if (!pick) return;
+    pickMemory = rememberSkipped(pickMemory, pick.id, today);
+    savePickMemory(pickMemory);
+  }
   const reason = $derived(pick ? pickReason(pick, pickContext) : '');
   let pickArtFailed = $state(false);
   $effect(() => { pick?.id; pickArtFailed = false; });
@@ -136,7 +152,7 @@
                 <svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M7 4v16l13-8z"/></svg>Play
               </button>
               <button class="textbtn wide-only" onclick={() => onopen?.(pick)}>Details</button>
-              <button class="textbtn" onclick={() => { pickIndex++; }} disabled={ranked.length < 2} aria-label="Choose another tonight's pick">Another</button>
+              <button class="textbtn" onclick={anotherPick} disabled={ranked.length < 2} aria-label="Choose another tonight's pick">Another</button>
             </div>
           </div>
         </aside>

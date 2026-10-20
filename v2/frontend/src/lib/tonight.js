@@ -95,3 +95,32 @@ export function pickReason(item, ctx) {
   if (genre && genre !== 'n/a') return `${withArticle(GENRE_NOUN[genre] || `${genre} film`)} you haven't watched yet.`;
   return 'From your library, not watched yet.';
 }
+
+// ── Which of the ranked films is tonight's pick ──
+// The ranking says which films make good picks; it does not change from day to day, so showing
+// its first entry meant the same film for weeks. The day chooses among the candidates instead,
+// the same all day and different tomorrow. A film skipped with "Another" stays away for two
+// weeks; a film that was the pick in the last week waits its turn. If that leaves nothing, the
+// rules relax one at a time rather than show no pick.
+const SKIP_DAYS = 14, REPEAT_DAYS = 7, DAY_MS = 86400000;
+
+export function dayKey(now = Date.now()) {
+  const d = new Date(now);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+const hashDay = day => [...String(day)].reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) >>> 0, 7);
+const ageDays = (day, now) => (now - Date.parse(`${day}T12:00:00`)) / DAY_MS;
+
+export function choosePick(ranked, { day = dayKey(), skipped = {}, shown = [], now = Date.now() } = {}) {
+  if (!ranked.length) return null;
+  const skippedIds = new Set(Object.entries(skipped).filter(([, on]) => ageDays(on, now) < SKIP_DAYS).map(([id]) => id));
+  const recentIds = new Set(shown.filter(s => s.day !== day && ageDays(s.day, now) < REPEAT_DAYS).map(s => s.id));
+  const tiers = [
+    ranked.filter(i => !skippedIds.has(i.id) && !recentIds.has(i.id)),
+    ranked.filter(i => !skippedIds.has(i.id)),
+    ranked,
+  ];
+  const candidates = tiers.find(t => t.length);
+  return candidates[hashDay(day) % candidates.length];
+}
