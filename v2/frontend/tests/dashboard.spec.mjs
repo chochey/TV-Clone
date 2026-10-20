@@ -16,7 +16,7 @@ const streamingFor = days => ({ days, plays: days === 7 ? 4 : 23, failed: days =
   worst: [{ itemId: 'f1', title: 'Friends · S9 E23', plays: 2, rebuffers: 5, rebufferSec: 41 }], daily: daily(days) });
 
 async function setup(page, { streaming = streamingFor } = {}) {
-  const calls = { streamingDays: [] };
+  const calls = { streamingDays: [], uptime: 5000, restartStatus: 200 };
   await page.route('**/*', route => route.abort());
   await page.route(`${origin}/**`, async route => {
     const requested = new URL(route.request().url()).pathname;
@@ -29,11 +29,16 @@ async function setup(page, { streaming = streamingFor } = {}) {
     const url = new URL(route.request().url()), pathname = url.pathname;
     if (pathname === '/api/events') return route.fulfill({ status: 204 });
     let body = {};
-    if (pathname === '/api/health') body = { ready: true };
+    if (pathname === '/api/health') body = { ready: true, uptime: calls.uptime };
     else if (pathname === '/api/me') body = { loggedIn: true, role: 'admin', profileId: 'test', name: 'Test', permissions: ['canDashboard'] };
     else if (pathname === '/api/library') body = [];
     else if (pathname === '/api/library/sections') body = { ok: true, sections: [] };
-    else if (pathname === '/api/system/restart') { calls.restarts = (calls.restarts || 0) + 1; body = { ok: true }; }
+    else if (pathname === '/api/system/restart' || pathname === '/api/restart') {
+      calls.restarts = (calls.restarts || 0) + 1;
+      if (calls.restartStatus !== 200) return route.fulfill({ status: calls.restartStatus, json: { error: 'Permission denied' } });
+      setTimeout(() => { calls.uptime = 1; }, 1500);   // the "new process" shows up a moment later
+      body = { ok: true };
+    }
     else if (pathname === '/api/system/stats') body = { cpu: { percent: 23, loadAvg: [1.2] }, memory: { percent: 41, used: 3.2e9, total: 7.8e9 }, activeTranscodes: 1 };
     else if (pathname === '/api/now-watching') body = [{ profileName: 'Ann', id: 'f1', title: 'Friends', percent: 40, delivery: 'transcode-gpu' }];
     else if (pathname === '/api/stats') body = { totalFiles: 9412, movies: 1180, shows: 210, episodes: 8100, totalSize: 10.9e12 };
@@ -118,4 +123,21 @@ test('Restart app asks first, mentions the streams it would stop, and reloads on
   await expect.poll(() => calls.restarts).toBe(1);
   await page.waitForLoadState('load');
   await expect(page.getByRole('button', { name: 'Restart app' })).toBeVisible({ timeout: 15000 });
+});
+
+test('the menu\'s Restart Server says so when the request is refused, and "back" only after a real restart', async ({ page }) => {
+  const calls = await setup(page);
+  calls.restartStatus = 403;
+  await page.goto(`${origin}/system`);
+  await page.getByRole('button', { name: 'Account menu' }).click();
+  await page.getByRole('button', { name: 'Restart Server', exact: true }).click();
+  await page.getByRole('button', { name: 'Really restart?' }).click();
+  await expect(page.locator('.toast')).toContainText('Could not restart the server: Permission denied');
+  calls.restartStatus = 200;
+  await page.getByRole('button', { name: 'Account menu' }).click();
+  await page.getByRole('button', { name: 'Restart Server', exact: true }).click();
+  await page.getByRole('button', { name: 'Really restart?' }).click();
+  await expect(page.locator('.toast')).toContainText('Restarting the server…');
+  await expect(page.locator('.toast')).toContainText('Server is back.', { timeout: 15000 });
+  expect(calls.restarts).toBe(2);
 });

@@ -4,6 +4,7 @@
   import { library, catalog, session, loadLibrary, resetSessionState, searchQuery, searchFilters, collapseShows } from './lib/stores.js';
   import { searchLibrary } from './lib/search.js';
   import { collections, loadCollections } from './lib/collections.js';
+  import { waitForRestart, currentUptime } from './lib/restart.js';
   import { autofocus } from './lib/autofocus.js';
   import { EMPTY_FILTERS } from './lib/search-filters.js';
   import { posterUrl } from './lib/api.js';
@@ -357,18 +358,18 @@
     const timer = setInterval(() => { if (scanBusy) poll(); }, 2000);
     return () => { active = false; clearInterval(timer); };
   });
+  // "Server is back" is said only once a health reading proves a new process (lower uptime);
+  // a refused or ignored request used to be reported as a successful restart.
   async function restartServer() {
     menuOpen = false;
     confirmRestart = false;
+    const uptimeBefore = await currentUptime();
     showToast('Restarting the server…');
-    try { await api.restart(); } catch {}
-    // Poll health until v1 is back, then reload state.
-    for (let i = 0; i < 40; i++) {
-      await new Promise((r) => setTimeout(r, 1500));
-      const h = await api.health();
-      if (h?.ready) { showToast('Server is back.'); await loadLibrary($session?.profileId); return; }
-    }
-    showToast('Server has not come back yet — check the dashboard.');
+    try { await api.restart(); }
+    catch (e) { showToast(`Could not restart the server: ${e.body?.error || e.message || 'request failed'}`); return; }
+    const result = await waitForRestart({ uptimeBefore });
+    if (result === 'restarted') { showToast('Server is back.'); await loadLibrary($session?.profileId); return; }
+    showToast('The server did not restart — check the dashboard.');
   }
   async function signOut() {
     menuOpen = false;
@@ -390,7 +391,10 @@
 </script>
 
 <!-- A click anywhere closes the header menus, except inside a panel marked data-keep-open. -->
-<svelte:window bind:scrollY onkeydown={dismissPanels} onclick={(e) => { if (e.target.closest?.('[data-keep-open]')) return; menuOpen = false; confirmRestart = false; bellOpen = false; }} />
+<!-- A click on a menu item that re-renders itself ("Restart Server" -> "Really restart?") reaches
+     the window with a detached target, which no longer sits inside the dropdown; such a click is
+     inside, not outside. -->
+<svelte:window bind:scrollY onkeydown={dismissPanels} onclick={(e) => { if (!e.target.isConnected || e.target.closest?.('[data-keep-open]')) return; menuOpen = false; confirmRestart = false; bellOpen = false; }} />
 
 {#if phase === 'loading'}
   <div class="splash">
@@ -553,7 +557,7 @@
               {#if confirmRestart}
                 <button class="danger" onclick={restartServer}>Really restart?</button>
               {:else}
-                <button onclick={() => { confirmRestart = true; }}>Restart Server</button>
+                <button onclick={(e) => { e.stopPropagation(); confirmRestart = true; }}>Restart Server</button>
               {/if}
             {/if}
           {/if}

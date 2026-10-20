@@ -1,6 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { api } from '../lib/api.js';
+  import { waitForRestart, currentUptime } from '../lib/restart.js';
   import { createRefreshLoop } from '../lib/refresh-loop.js';
   import { physicalDriveWarnings } from '../lib/storage-warnings.js';
   import { fmtBytes, fmtDuration, fmtAgo, percent, deliveryMix } from '../lib/dashboard-format.js';
@@ -106,15 +107,12 @@
     if (!window.confirm(`${warning}Restart the app now? It is back in about 15 seconds.`)) return;
     restartError = '';
     restartState = 'restarting';
+    const uptimeBefore = await currentUptime();
     try { await api.systemRestart(); }
     catch (e) { restartError = e.body?.error || 'Could not restart the app.'; restartState = 'idle'; return; }
-    const started = Date.now();
-    await new Promise(r => setTimeout(r, 4000));
-    while (Date.now() - started < 90000) {
-      try { const r = await fetch('/api/health', { cache: 'no-store' }); if (r.ok) { window.location.reload(); return; } } catch { /* still down */ }
-      await new Promise(r => setTimeout(r, 2000));
-    }
-    restartError = 'The app has not come back yet. Give it a moment, then reload this page.';
+    // Reload only once a health reading proves a new process; the old one answers at once.
+    if (await waitForRestart({ uptimeBefore }) === 'restarted') { window.location.reload(); return; }
+    restartError = 'The app did not restart. Give it a moment, then reload this page; if it is still the same process, restart it from a terminal.';
     restartState = 'idle';
   }
   function checkState(c) {

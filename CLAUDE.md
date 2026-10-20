@@ -228,7 +228,12 @@ while the app runs as `chocheytv`. The app answers, shuts down cleanly and syste
 than the running process's boot and is removed first, so a leftover file can never loop. The organizer
 runs as `blue`, so the deploy script sends it SIGTERM and waits for a new MainPID. If the running app
 predates this (first deploy of it), the script says so and the user runs `sudo systemctl restart
-tvclone-prod` once.
+tvclone-prod` once. **Both restart buttons prove the restart** with `v2/frontend/src/lib/restart.js`
+(`waitForRestart`: a health reading with a lower uptime than before the request, or health down and
+back); "Server is back" used to be said after a refused or ignored request because the old process
+answers health at once. The account menu's two-step "Restart Server" -> "Really restart?" was
+unreachable: the first click re-rendered the button, the window's outside-click handler saw a
+detached target and closed the menu. Clicks on a detached target are treated as inside.
 
 ### Look and feel (October 2026 redesign)
 Warm dark palette with one amber accent, set as tokens in `v2/frontend/src/styles/tokens.css`
