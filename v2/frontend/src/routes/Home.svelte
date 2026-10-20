@@ -20,6 +20,7 @@
   import { credits, readAlongIds, bookChapters, loadHomeData } from '../lib/home-data.js';
   import { greeting, summaryLine, timeLeft, pausedWhen, splitInProgress, rankPicks, pickReason, choosePick, dayKey } from '../lib/tonight.js';
   import { loadPickMemory, savePickMemory, rememberShown, rememberSkipped } from '../lib/tonight-pick-memory.js';
+  import KindBadge from '../lib/components/KindBadge.svelte';
   let { onopen, onplay } = $props();
 
   $effect(() => { loadCollections(); loadHomeData(); });
@@ -117,6 +118,7 @@
             <button class="lead-poster" onclick={() => onopen?.(watching)} aria-label={`Details for ${leadTitle}`}>
               {#if leadPoster && !leadArtFailed}<img src={leadPoster} alt="" onerror={() => { leadArtFailed = true; }} />
               {:else}<span class="art-fallback">{leadTitle}</span>{/if}
+              <KindBadge kind={isSeriesItem(watching) ? 'series' : 'film'} />
             </button>
             <div class="lead-text">
               <span class="kicker">Pick up<span class="wide-inline">{' where you left off'}</span></span>
@@ -161,6 +163,7 @@
       {#if listening}
         <article class="listen" aria-label="Continue listening">
           <button class="listen-cover" onclick={() => onopen?.(listening)} aria-label={`Details for ${book.title}`}>
+            <KindBadge kind="audio" />
             {#if bookCover}<img src={bookCover} alt="" />
             {:else}<svg aria-hidden="true" viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg>{/if}
           </button>
@@ -278,7 +281,7 @@
   .lead-bg { position: absolute; inset: -40px; width: calc(100% + 80px); height: calc(100% + 80px); object-fit: cover; filter: blur(28px) saturate(1.1); opacity: 0.5; }
   .lead::after { content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, rgba(14, 12, 11, 0.94) 0%, rgba(14, 12, 11, 0.72) 55%, rgba(14, 12, 11, 0.38) 100%); }
   .lead-body { position: relative; z-index: 1; padding: 30px; display: flex; gap: 28px; align-items: flex-end; width: 100%; }
-  .lead-poster { width: 150px; aspect-ratio: 2 / 3; border-radius: var(--r-sm); overflow: hidden; flex: 0 0 auto; box-shadow: 0 18px 40px rgba(0, 0, 0, 0.55); }
+  .lead-poster { position: relative; width: 150px; aspect-ratio: 2 / 3; border-radius: var(--r-sm); overflow: hidden; flex: 0 0 auto; box-shadow: 0 18px 40px rgba(0, 0, 0, 0.55); }
   .lead-poster img { width: 100%; height: 100%; object-fit: cover; }
   .lead-text { display: flex; flex-direction: column; gap: 10px; min-width: 0; flex: 1; }
   .lead-title { font-style: italic; font-size: clamp(2.2rem, 4vw, 3.1rem); line-height: 1; }
@@ -304,7 +307,10 @@
   .listen { flex: 1 1 100%; min-width: 0; display: grid; grid-template-columns: 72px minmax(0, 1fr) auto;
     grid-template-areas: "cover head actions" "cover info actions"; column-gap: 20px; row-gap: 4px; align-items: center;
     background: var(--bg-raised); box-shadow: inset 0 0 0 1px var(--line); border-radius: var(--r-lg); padding: 16px 20px; }
-  .listen-cover { grid-area: cover; width: 72px; height: 72px; border-radius: var(--r-sm); overflow: hidden; display: grid; place-items: center; background: #2a2018; color: #ead9bf; box-shadow: 0 10px 24px rgba(0, 0, 0, 0.45); }
+  .listen-cover { position: relative; grid-area: cover; width: 72px; height: 72px; border-radius: var(--r-sm); overflow: hidden; display: grid; place-items: center; background: #2a2018; color: #ead9bf; box-shadow: 0 10px 24px rgba(0, 0, 0, 0.45); }
+  /* The small cover has room for the badge's icon only; the wide layout's 118px cover shows the word. */
+  .listen-cover :global(.kind-badge) { left: 4px; bottom: 4px; padding: 3px 5px; }
+  .listen-cover :global(.kind-badge span) { display: none; }
   .listen-cover img { width: 100%; height: 100%; object-fit: cover; }
   .listen-head { grid-area: head; display: flex; flex-direction: column; gap: 4px; min-width: 0; align-self: end; }
   .listen-info { grid-area: info; display: flex; flex-direction: column; gap: 4px; min-width: 0; align-self: start; }
@@ -316,6 +322,8 @@
     .listen { flex: 1 1 300px; grid-template-columns: 118px minmax(0, 1fr); grid-template-rows: auto auto 1fr;
       grid-template-areas: "cover head" "info info" "actions actions"; column-gap: 20px; row-gap: 14px; align-items: start; padding: 22px; }
     .listen-cover { width: 118px; height: 118px; }
+    .listen-cover :global(.kind-badge) { left: 6px; bottom: 7px; padding: 3px 7px 3px 6px; }
+    .listen-cover :global(.kind-badge span) { display: inline; }
     .listen-head { align-self: center; }
     .listen-title { font-size: 1.6rem; white-space: normal; display: -webkit-box; -webkit-line-clamp: 3; line-clamp: 3; -webkit-box-orient: vertical; }
     .listen .bar { max-width: none; }

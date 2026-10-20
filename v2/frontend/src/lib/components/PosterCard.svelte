@@ -3,6 +3,7 @@
   import { seriesIndex, watchState, enrichItem, observeAudioCard, dismissFromContinue, AUTO_WATCHED_PERCENT } from '../stores.js';
   import { episodeCode } from '../format.js';
   import { cardPlayback, seriesSummary, isSeriesItem, isAudioItem, mediaTitle } from '../series-playback.js';
+  import KindBadge from './KindBadge.svelte';
   import { audioPlaybackIssue } from '../audio-playback.js';
   import { audioPresentation } from '../audio-presentation.js';
   // resume: rendered in the Continue Watching row — show which episode and how
@@ -111,6 +112,9 @@
     {/if}
 
     {#if watched}<span class="badge watched" title={summary ? 'All available episodes watched' : isAudioItem(item) ? 'Listened' : 'Watched'}>✓</span>{/if}
+    <!-- Poster-shaped audiobook cards sit in rows beside films and series; the badge tells them apart.
+         Wide audio cards belong to the audiobook shelves, where everything is one. -->
+    {#if audio && !wide}<KindBadge kind="audio" />{/if}
 
     <!-- Hover: play button -->
     <div class="hover-overlay">

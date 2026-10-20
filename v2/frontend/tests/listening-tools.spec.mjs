@@ -135,6 +135,12 @@ test('Tonight features the newest video and audiobook, shows the rest in one row
   await expect(row.locator('.card').nth(1)).toContainText('Title 14');
   await expect(page.getByRole('heading', { name: 'Also watching' })).toHaveCount(0);
   await expect(page.getByText('Also in progress', { exact: true })).toHaveCount(1);
+  // In a mixed row an audiobook is told apart by a badge on its cover; films and series carry none.
+  await expect(row.locator('.card.audio .kind-badge')).toHaveCount(8);
+  await expect(row.locator('.card.audio .kind-badge').first()).toHaveText('Audiobook');
+  await expect(row.locator('.card:not(.audio) .kind-badge')).toHaveCount(0);
+  await expect(page.getByRole('article', { name: 'Pick up where you left off' }).locator('.kind-badge')).toHaveText('Film');
+  await expect(page.getByRole('article', { name: 'Continue listening' }).locator('.kind-badge')).toHaveText('Audiobook');
   await row.getByRole('button', { name: /View all \(18\)/ }).click();
   const grid = page.getByRole('region', { name: 'All in-progress titles' });
   await expect(grid.locator('.card')).toHaveCount(18);
