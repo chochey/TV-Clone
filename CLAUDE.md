@@ -242,7 +242,10 @@ headings (`.display`, italic for titles), Instrument Sans for everything else. U
 hex values; there is no purple left anywhere. Home is "Tonight" (`routes/Home.svelte`, logic in
 `lib/tonight.js`): newest video as a Resume card, newest audiobook as a strip (chapter list reused
 from the shelf's own `/api/item` response via `lib/home-data.js`, Read along shown only for ids in
-`/api/audio/read-along-index`), one pick with a reason, then shelves. The title page's file facts,
+`/api/audio/read-along-index`), one pick with a reason, then one "Also in progress" row (films, series
+and audiobooks together, newest first, up to 18, `continuePreview().row`; its header carries "View all",
+which swaps the row for the filterable grid), then shelves. Two rows split by kind left a 2K screen
+mostly empty. The title page's file facts,
 "Also by" and "If you like this one" come from `lib/title-facts.js`; audiobook pages add "Also in <series>"
 and "More by <author>" from the same module (`bookSeries` reads the series out of titles shaped
 "Name: Series, Book N" / "Book One of the Series"; there is no series tag in the files). `/api/me`

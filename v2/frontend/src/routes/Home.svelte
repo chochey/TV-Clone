@@ -173,11 +173,11 @@
   </section>
 
   {#if split.others.length}
-    <div class="continue-controls">
-      <p>{allContinue ? 'Everything you have in progress' : 'Also in progress'}</p>
-      <button aria-expanded={allContinue} onclick={() => { allContinue = !allContinue; }}>{allContinue ? 'Show recent' : `View all (${allInProgress.length})`}</button>
-    </div>
     {#if allContinue}
+      <div class="continue-controls">
+        <p>Everything you have in progress</p>
+        <button aria-expanded="true" onclick={() => { allContinue = false; }}>Show recent</button>
+      </div>
       <section class="continue-all" aria-label="All in-progress titles">
         <div class="continue-tabs" aria-label="Filter titles in progress">
           {#each [['all', 'All'], ['watching', 'Watching'], ['listening', 'Listening']] as [value, label]}
@@ -188,8 +188,10 @@
         {#if !continueItems.length}<p class="continue-empty">No {continueKind === 'listening' ? 'audiobooks' : 'films or series'} in progress.</p>{/if}
       </section>
     {:else}
-      <Row title="Also watching" items={continued.watching} {onopen} {onplay} resume />
-      <Row title="Also listening" items={continued.listening} {onopen} {onplay} resume />
+      <!-- One row for films, series and audiobooks, newest first: two short rows (one per kind)
+           left most of a wide screen empty, and the "View all" link had a band to itself. -->
+      <Row title="Also in progress" items={continued.row} {onopen} {onplay} resume
+           onmore={() => { allContinue = true; }} moreLabel={`View all (${allInProgress.length})`} />
     {/if}
   {/if}
 
