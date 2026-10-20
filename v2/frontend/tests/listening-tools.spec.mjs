@@ -146,6 +146,12 @@ test('Tonight features the newest video and audiobook, shows the rest in one row
   await expect(lead.locator('.card-kind')).toHaveText('Film');
   await expect(listen.locator('.card-kind')).toHaveText('Audiobook');
   await expect(lead.locator('.kind-badge')).toHaveCount(0); await expect(listen.locator('.kind-badge')).toHaveCount(0);
+  // The label has its own room above the cover and is readable: it never sits on the artwork, in the
+  // three-column layout of a wide screen either.
+  await page.setViewportSize({ width: 2000, height: 1000 });
+  const label = await listen.locator('.card-kind').boundingBox(), cover = await listen.locator('.listen-cover').boundingBox();
+  expect(label.y + label.height).toBeLessThanOrEqual(cover.y + 1);
+  expect(await listen.locator('.card-kind').evaluate(el => parseFloat(getComputedStyle(el).fontSize))).toBeGreaterThanOrEqual(12);
   await row.getByRole('button', { name: /View all \(18\)/ }).click();
   const grid = page.getByRole('region', { name: 'All in-progress titles' });
   await expect(grid.locator('.card')).toHaveCount(18);

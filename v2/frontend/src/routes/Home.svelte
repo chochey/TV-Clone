@@ -304,12 +304,14 @@
   /* The audiobook card is a full-width strip under the other two, or a third card
      beside them on wide screens. Without an audiobook the other two fill the row. */
   .listen { position: relative; flex: 1 1 100%; min-width: 0; display: grid; grid-template-columns: 72px minmax(0, 1fr) auto;
-    grid-template-areas: "cover head actions" "cover info actions"; column-gap: 20px; row-gap: 4px; align-items: center;
-    background: var(--bg-raised); box-shadow: inset 0 0 0 1px var(--line); border-radius: var(--r-lg); padding: 40px 20px 16px; }
+    grid-template-areas: "kind kind kind" "cover head actions" "cover info actions"; column-gap: 20px; row-gap: 4px; align-items: center;
+    background: var(--bg-raised); box-shadow: inset 0 0 0 1px var(--line); border-radius: var(--r-lg); padding: 16px 20px; }
+  /* In the listening card the label is a row of the grid, above the cover, never on it. */
+  .listen .card-kind { position: static; grid-area: kind; justify-self: start; margin-bottom: 6px; }
   .listen-cover { position: relative; grid-area: cover; width: 72px; height: 72px; border-radius: var(--r-sm); overflow: hidden; display: grid; place-items: center; background: #2a2018; color: #ead9bf; box-shadow: 0 10px 24px rgba(0, 0, 0, 0.45); }
   /* What kind of title the card is about, at the top of the card where the eye lands first. */
-  .card-kind { position: absolute; top: 14px; left: 20px; z-index: 2; font-size: 0.66rem; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
-    color: var(--ink-soft); background: rgba(14, 12, 11, 0.6); box-shadow: inset 0 0 0 1px var(--line-strong); border-radius: 99px; padding: 4px 9px; line-height: 1; }
+  .card-kind { position: absolute; top: 16px; left: 20px; z-index: 2; font-size: 0.82rem; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--ink); background: rgba(14, 12, 11, 0.7); box-shadow: inset 0 0 0 1px var(--line-strong); border-radius: 99px; padding: 6px 12px; line-height: 1; }
   .listen-cover img { width: 100%; height: 100%; object-fit: cover; }
   .listen-head { grid-area: head; display: flex; flex-direction: column; gap: 4px; min-width: 0; align-self: end; }
   .listen-info { grid-area: info; display: flex; flex-direction: column; gap: 4px; min-width: 0; align-self: start; }
@@ -318,8 +320,9 @@
   .listen .bar { margin-top: 4px; max-width: 420px; }
   .listen-actions { grid-area: actions; display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
   @media (min-width: 1700px) {
-    .listen { flex: 1 1 300px; grid-template-columns: 118px minmax(0, 1fr); grid-template-rows: auto auto 1fr;
-      grid-template-areas: "cover head" "info info" "actions actions"; column-gap: 20px; row-gap: 14px; align-items: start; padding: 22px; }
+    .listen { flex: 1 1 300px; grid-template-columns: 118px minmax(0, 1fr); grid-template-rows: auto auto auto 1fr;
+      grid-template-areas: "kind kind" "cover head" "info info" "actions actions"; column-gap: 20px; row-gap: 14px; align-items: start; padding: 22px; }
+    .listen .card-kind { margin-bottom: 0; }
     .listen-cover { width: 118px; height: 118px; }
     .listen-head { align-self: center; }
     .listen-title { font-size: 1.6rem; white-space: normal; display: -webkit-box; -webkit-line-clamp: 3; line-clamp: 3; -webkit-box-orient: vertical; }
@@ -389,6 +392,9 @@
     .pick.big .btn { min-height: 40px; padding: 0 16px; font-size: 0.88rem; }
 
     .listen { grid-template-columns: 52px minmax(0, 1fr) auto; column-gap: 12px; row-gap: 3px; padding: 10px 12px; border-radius: 12px; }
+    .listen .card-kind { margin-bottom: 4px; }
+    /* The lead card is no longer bottom-aligned here; its label gets a band of its own. */
+    .lead-body { padding-top: 40px; }
     .listen-cover { width: 52px; height: 52px; border-radius: 6px; }
     .listen-head, .listen-info { gap: 3px; }
     .listen-title { font-size: 1.25rem; }
