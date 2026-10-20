@@ -21,9 +21,10 @@
     position: absolute; left: 6px; bottom: 7px; z-index: 1;
     display: inline-flex; align-items: center; gap: 4px;
     padding: 3px 7px 3px 6px; border-radius: 99px;
-    font-size: 0.6rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; line-height: 1;
-    background: rgba(14, 12, 11, 0.86); color: var(--ink);
-    box-shadow: 0 0 0 1px var(--line-strong);
+    font-size: 0.64rem; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; line-height: 1;
+    /* Amber, like a primary button: the one cover in a row of posters that is a book must be seen at a glance. */
+    background: var(--accent); color: #1a1409;
+    box-shadow: 0 1px 6px rgba(0, 0, 0, 0.45);
     pointer-events: none;
   }
 </style>

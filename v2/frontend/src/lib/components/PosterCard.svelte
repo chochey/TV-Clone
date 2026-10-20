@@ -56,9 +56,10 @@
     if (!p?.duration || !p?.currentTime) return 0;
     return Math.max(0, Math.round((p.duration - p.currentTime) / 60));
   });
-  // "S3 · E7 · 24 min left" beats repeating "2008 · Series" on a resume card.
+  // "Series · S3 · E7 · 24 min left": in a row that mixes kinds, the line says which this is.
+  const kindWord = $derived(isAudioItem(item) ? 'Audiobook' : isSeriesItem(item) ? 'Series' : 'Film');
   const resumeLine = $derived(
-    [isSeriesItem(item) && item.epInfo ? episodeCode(item) : '', minsLeft ? `${minsLeft} min left` : '']
+    [kindWord, isSeriesItem(item) && item.epInfo ? episodeCode(item) : '', minsLeft ? `${minsLeft} min left` : '']
       .filter(Boolean).join(' · '),
   );
 

@@ -246,8 +246,9 @@ from the shelf's own `/api/item` response via `lib/home-data.js`, Read along sho
 films, `choosePick` in `lib/tonight.js`: the same all day, different tomorrow; "Another" skips a film for
 two weeks and last week's picks wait their turn, remembered per device in `localStorage v2TonightPick`
 by `lib/tonight-pick-memory.js`; before this the top-ranked film showed for weeks), then one "Also in progress" row
-(`lib/components/KindBadge.svelte` marks audiobooks with a pill on the cover in poster-shaped cards, and both
-featured cards carry one: Film / Series / Audiobook) (films, series
+(`lib/components/KindBadge.svelte` puts an amber "Audiobook" pill on book covers in poster-shaped cards, every
+resume line starts with the kind, "Film · 108 min left", and the two featured cards say Film / Series / Audiobook
+in a `.card-kind` label at their top edge, where the user asked for it, not on the cover) (films, series
 and audiobooks together, newest first, up to 18, `continuePreview().row`; its header carries "View all",
 which swaps the row for the filterable grid), then shelves. Two rows split by kind left a 2K screen
 mostly empty. The title page's file facts,
