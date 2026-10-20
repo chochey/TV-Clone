@@ -1904,8 +1904,12 @@ const sys = require('./lib/system-control')({
   ALLOWED_DOCKER_ACTIONS: ['start', 'stop', 'restart'],
 });
 const { organizerServiceCmd, dockerInspect, dockerComposeRepair } = sys;
+// The app can restart itself: an admin's "Restart app", or the deploy script's restart-request
+// file in the data dir (it runs as a user that cannot restart services). systemd brings it back.
+const selfRestart = require('./lib/self-restart')({ dataDir: DATA_DIR, shutdown, log: msg => console.log(`[Restart] ${msg}`) });
+selfRestart.start();
 require('./lib/routes/system-control')(app, {
-  requireAdminSession, requirePermission, organizerScript: ORGANIZER_SCRIPT, organizerAliasFile: ORGANIZER_ALIAS_FILE, sys,
+  requireAdminSession, requirePermission, organizerScript: ORGANIZER_SCRIPT, organizerAliasFile: ORGANIZER_ALIAS_FILE, sys, selfRestart,
 });
 
 // ── Organizer watchdog + periodic safety rescan ────────────────────────

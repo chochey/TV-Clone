@@ -96,6 +96,27 @@
   // media/downloads are ARRAYS of per-folder results — aggregate them.
   // (Rendering c?.ok on an array read as "Failing" even when every folder
   // inside was fine.)
+  // Restarting the app ends every stream, so it asks first. systemd brings the app back
+  // (about 10 seconds); the page reloads once /api/health answers again.
+  let restartState = $state('idle');
+  let restartError = $state('');
+  async function restartApp() {
+    const streams = sys?.activeTranscodes || 0;
+    const warning = streams ? `${streams} stream${streams > 1 ? 's are' : ' is'} playing right now and will stop. ` : '';
+    if (!window.confirm(`${warning}Restart the app now? It is back in about 15 seconds.`)) return;
+    restartError = '';
+    restartState = 'restarting';
+    try { await api.systemRestart(); }
+    catch (e) { restartError = e.body?.error || 'Could not restart the app.'; restartState = 'idle'; return; }
+    const started = Date.now();
+    await new Promise(r => setTimeout(r, 4000));
+    while (Date.now() - started < 90000) {
+      try { const r = await fetch('/api/health', { cache: 'no-store' }); if (r.ok) { window.location.reload(); return; } } catch { /* still down */ }
+      await new Promise(r => setTimeout(r, 2000));
+    }
+    restartError = 'The app has not come back yet. Give it a moment, then reload this page.';
+    restartState = 'idle';
+  }
   function checkState(c) {
     if (Array.isArray(c)) {
       const bad = c.filter((e) => !e?.ok);
@@ -141,6 +162,13 @@
         <div class="gauge"><span style={`width:${sys.memory?.percent || 0}%`}></span></div>
         <div class="kv"><span>Active streams</span><strong>{sys.activeTranscodes ?? 0}</strong></div>
       {:else}<div class="dim">…</div>{/if}
+      <div class="actions">
+        <button class="restart" onclick={restartApp} disabled={restartState === 'restarting'}>
+          {restartState === 'restarting' ? 'Restarting…' : 'Restart app'}
+        </button>
+        {#if restartState === 'restarting'}<span class="dim" role="status">Back in about 15 seconds; this page reloads by itself.</span>{/if}
+        {#if restartError}<span class="warn" role="alert">{restartError}</span>{/if}
+      </div>
     </section>
 
     <section class="card">
@@ -342,6 +370,10 @@
   .section-head { display: flex; align-items: center; justify-content: space-between; gap: var(--s3); flex-wrap: wrap; margin: var(--s6) 0 var(--s3); }
   .section-head .section { margin: 0; }
   .seg { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 99px; overflow: hidden; }
+  .actions { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; margin-top: var(--s3); }
+  .restart { font-size: 0.82rem; font-weight: 600; padding: 6px 14px; border-radius: var(--r-sm); border: 1px solid var(--line-strong); color: var(--ink); }
+  .restart:hover:not(:disabled) { border-color: var(--ink); }
+  .restart:disabled { opacity: 0.5; cursor: not-allowed; }
   .seg button { padding: 6px 14px; font-size: 0.82rem; font-weight: 600; color: var(--ink-soft); }
   .seg button[aria-pressed='true'] { background: var(--ink); color: var(--bg); }
   .card h3 { margin: 0 0 var(--s1); }

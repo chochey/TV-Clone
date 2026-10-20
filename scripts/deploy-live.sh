@@ -6,6 +6,9 @@
 #   scripts/deploy-live.sh --rollback go back to the release before the last deploy
 #   scripts/deploy-live.sh --force ...  restart even if someone played something in the last 15 minutes
 #
+# No root needed: the app restarts itself when it sees data/restart-request (lib/self-restart.js),
+# the organizer runs as this user and is sent SIGTERM; systemd brings both back.
+#
 # The workshop (TV-Clone-prod) is where code is edited and committed; the live
 # install (/srv/chocheytv/app) only ever holds a committed revision, checked out
 # as a git worktree of the workshop's repository. State lives beside it in
@@ -65,9 +68,44 @@ if [[ " ${restart[*]} " == *" tvclone-prod "* ]] && [ "$FORCE" = 0 ]; then
     exit 1
   fi
 fi
-for unit in "${restart[@]}"; do sudo systemctl restart "$unit"; done
-if [[ " ${restart[*]} " == *" tvclone-prod "* ]]; then
-  for _ in $(seq 1 30); do curl -sf -o /dev/null "http://127.0.0.1:${PORT:-4800}/api/health" && break; sleep 2; done
-  curl -sf -o /dev/null "http://127.0.0.1:${PORT:-4800}/api/health" || { echo "Server did not come back; roll back with: $0 --rollback" >&2; exit 1; }
-fi
+# Restarts without root. The app watches for a `restart-request` file in its data dir
+# (lib/self-restart.js) and shuts itself down; systemd brings it back on the new checkout.
+# The organizer runs as this user, so a TERM signal is enough; systemd restarts it too.
+HEALTH="http://127.0.0.1:${PORT:-4800}/api/health"
+restart_app() {
+  local before; before="$(curl -sf "$HEALTH" | sed -n 's/.*"uptime":\([0-9]*\).*/\1/p')"
+  echo "deploy ${NEW:0:7} $(date +%FT%T)" > "$DATA_DIR/restart-request"
+  for _ in $(seq 1 20); do [ -e "$DATA_DIR/restart-request" ] || break; sleep 1; done
+  if [ -e "$DATA_DIR/restart-request" ]; then
+    rm -f "$DATA_DIR/restart-request"
+    echo "Checked out ${NEW:0:7}, but the running app does not watch for restart requests (it predates lib/self-restart.js)." >&2
+    echo "Restart it once by hand: sudo systemctl restart tvclone-prod" >&2
+    exit 1
+  fi
+  sleep 3
+  for _ in $(seq 1 40); do curl -sf -o /dev/null "$HEALTH" && break; sleep 2; done
+  local after; after="$(curl -sf "$HEALTH" | sed -n 's/.*"uptime":\([0-9]*\).*/\1/p')"
+  if [ -z "$after" ]; then echo "Server did not come back; roll back with: $0 --rollback" >&2; exit 1; fi
+  if [ -n "$before" ] && [ "$after" -ge "$before" ]; then echo "Server answered but did not restart (uptime ${after}s); run: sudo systemctl restart tvclone-prod" >&2; exit 1; fi
+}
+restart_organizer() {
+  local pid; pid="$(systemctl show -p MainPID --value tvclone-organizer 2>/dev/null || echo 0)"
+  if [ "${pid:-0}" -gt 0 ] && kill -TERM "$pid" 2>/dev/null; then
+    for _ in $(seq 1 30); do
+      sleep 2
+      local now; now="$(systemctl show -p MainPID --value tvclone-organizer 2>/dev/null || echo 0)"
+      if [ "${now:-0}" -gt 0 ] && [ "$now" != "$pid" ] && systemctl is-active -q tvclone-organizer; then return 0; fi
+    done
+    echo "Organizer was stopped but has not come back yet; check the Organizer page or run: sudo systemctl restart tvclone-organizer" >&2
+    exit 1
+  fi
+  echo "Could not signal the organizer (not running, or not ours); restart it from the Organizer page." >&2
+  exit 1
+}
+for unit in "${restart[@]}"; do
+  case "$unit" in
+    tvclone-prod) restart_app ;;
+    tvclone-organizer) restart_organizer ;;
+  esac
+done
 echo "Live: ${NEW:0:7} (was ${OLD:0:7}); restarted: ${restart[*]:-nothing}"

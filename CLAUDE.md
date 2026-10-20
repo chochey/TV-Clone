@@ -213,7 +213,22 @@ release are one card with the file list and one "Retry this release" (`reviewGro
 Film collections: Wikidata sometimes names one item as both a film's series and its franchise
 ("Home Alone", "Predator"); `lib/collections.js build()` adds a film to a group once, and the page's
 `collectionCards` drops repeated ids too, because a repeated key makes Svelte throw and the collection
-page stays blank after the click.
+page stays blank after the click. A collection named after another one, continuing its name after a
+word break ("Marvel Cinematic Universe Phase Four", "Star Wars original trilogy", "Spider-Man in film"),
+is folded into it by `fold()`: its films join the parent after the parent's own order and it is not a
+card of its own ("Predators" does not continue "Predator"). Card names wrap to two lines.
+
+### Restarting without root (October 2026)
+`sudo` and polkit stopped working from Claude's shells on 2026-10-19, so nothing there can restart a
+service. `lib/self-restart.js` lets the app restart itself: `POST /api/system/restart` (admin; the
+Dashboard's "Restart app" button, which asks first and reloads when `/api/health` answers again) or a
+`restart-request` file in the data dir, which `scripts/deploy-live.sh` writes because it runs as `blue`
+while the app runs as `chocheytv`. The app answers, shuts down cleanly and systemd (`Restart=always`,
+10 s) brings it back on the checked-out revision. A request file is acted on only when it is newer
+than the running process's boot and is removed first, so a leftover file can never loop. The organizer
+runs as `blue`, so the deploy script sends it SIGTERM and waits for a new MainPID. If the running app
+predates this (first deploy of it), the script says so and the user runs `sudo systemctl restart
+tvclone-prod` once.
 
 ### Look and feel (October 2026 redesign)
 Warm dark palette with one amber accent, set as tokens in `v2/frontend/src/styles/tokens.css`

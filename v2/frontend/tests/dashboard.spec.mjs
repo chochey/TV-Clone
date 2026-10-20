@@ -33,6 +33,7 @@ async function setup(page, { streaming = streamingFor } = {}) {
     else if (pathname === '/api/me') body = { loggedIn: true, role: 'admin', profileId: 'test', name: 'Test', permissions: ['canDashboard'] };
     else if (pathname === '/api/library') body = [];
     else if (pathname === '/api/library/sections') body = { ok: true, sections: [] };
+    else if (pathname === '/api/system/restart') { calls.restarts = (calls.restarts || 0) + 1; body = { ok: true }; }
     else if (pathname === '/api/system/stats') body = { cpu: { percent: 23, loadAvg: [1.2] }, memory: { percent: 41, used: 3.2e9, total: 7.8e9 }, activeTranscodes: 1 };
     else if (pathname === '/api/now-watching') body = [{ profileName: 'Ann', id: 'f1', title: 'Friends', percent: 40, delivery: 'transcode-gpu' }];
     else if (pathname === '/api/stats') body = { totalFiles: 9412, movies: 1180, shows: 210, episodes: 8100, totalSize: 10.9e12 };
@@ -100,3 +101,21 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 
     await page.screenshot({ path: test.info().outputPath(`dashboard-${viewport.width}.png`), fullPage: true });
   });
 }
+
+test('Restart app asks first, mentions the streams it would stop, and reloads once the app is back', async ({ page }) => {
+  const calls = await setup(page);
+  await page.goto(`${origin}/system`);
+  const button = page.getByRole('button', { name: 'Restart app' });
+  await expect(button).toBeVisible();
+  let asked = '';
+  page.once('dialog', d => { asked = d.message(); d.dismiss(); });
+  await button.click();
+  await expect.poll(() => asked).toMatch(/1 stream is playing right now and will stop/);
+  expect(calls.restarts || 0).toBe(0);
+  page.once('dialog', d => d.accept());
+  await button.click();
+  await expect(page.getByRole('status').filter({ hasText: 'Back in about 15 seconds' })).toBeVisible();
+  await expect.poll(() => calls.restarts).toBe(1);
+  await page.waitForLoadState('load');
+  await expect(page.getByRole('button', { name: 'Restart app' })).toBeVisible({ timeout: 15000 });
+});

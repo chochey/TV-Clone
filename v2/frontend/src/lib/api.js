@@ -114,6 +114,7 @@ export const api = {
   organizerStatus: () => fetch('/api/organizer/status', opts('GET')).then(json),
   organizerRetry: id => fetch('/api/organizer/retry',opts('POST',{id})).then(json),
   organizerRestart: () => fetch('/api/organizer/restart', opts('POST')).then(json),
+  systemRestart: () => fetch('/api/system/restart', opts('POST')).then(json),
   organizerFixQueue: () => fetch('/api/organizer/fix-queue', opts('GET')).then(json),
   organizerClearLeftovers: names => fetch('/api/organizer/clear-leftovers', opts('POST', { names })).then(json),
   organizerAliasSave: (body) => fetch('/api/organizer/aliases', opts('POST', body)).then(json),
