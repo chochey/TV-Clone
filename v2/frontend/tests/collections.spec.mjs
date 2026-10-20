@@ -103,3 +103,12 @@ test('a collection the server listed with each film twice still opens, with each
   await expect(page.getByRole('heading', { name: 'Harry Potter' })).toBeVisible();
   await expect(page.locator('.page .grid > *')).toHaveCount(2);
 });
+
+test('a long collection name wraps to a second line instead of being cut', async ({ page }) => {
+  await setup(page, { collections: [{ id: 'Q7', name: 'Peter Jackson\'s Middle-earth film series', itemIds: ['hp1', 'hp2'] }] });
+  await page.goto(`${origin}/collections`);
+  const name = page.locator('.ccard .name').first();
+  await expect(name).toHaveText("Peter Jackson's Middle-earth film series");
+  const style = await name.evaluate(el => { const s = getComputedStyle(el); return [s.whiteSpace, s.webkitLineClamp]; });
+  expect(style).toEqual(['normal', '2']);
+});

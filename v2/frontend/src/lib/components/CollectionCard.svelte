@@ -28,6 +28,7 @@
   .cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
   .initial { display: grid; place-items: center; height: 100%; font-size: 2.4rem; font-weight: 700; color: var(--ink-faint); }
   .ccard:hover .cover, .ccard:focus-visible .cover { box-shadow: 0 0 0 2px var(--ink), 0 6px 18px rgba(0, 0, 0, 0.5); }
-  .name { font-weight: 600; font-size: 0.92rem; line-height: 1.25; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Two lines, so "Peter Jackson's Middle-earth film series" and "DC Extended Universe" read in full. */
+  .name { font-weight: 600; font-size: 0.92rem; line-height: 1.25; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; white-space: normal; overflow-wrap: anywhere; }
   .count { font-size: 0.78rem; color: var(--ink-faint); }
 </style>
