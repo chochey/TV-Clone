@@ -159,6 +159,7 @@ export const api = {
   skipSegments: (id) => fetch(`/api/skip-segments/${encodeURIComponent(id)}`, opts('GET')).then(json).catch(() => ({})),
 
   // Profile management (admin)
+  changePassword: (current, next) => fetch('/api/me/password', opts('PUT', { current, next })).then(json),
   profileCreate: (body) => fetch('/api/profiles', opts('POST', body)).then(json),
   profileUpdate: (id, body) => fetch(`/api/profiles/${encodeURIComponent(id)}`, opts('PUT', body)).then(json),
   profileDelete: (id) => fetch(`/api/profiles/${encodeURIComponent(id)}`, opts('DELETE')).then(json),

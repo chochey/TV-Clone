@@ -791,7 +791,7 @@ let skipSegments = loadJSON(SKIP_SEGMENTS_FILE, {});
 
 // Routes, intro detection and the background sweep (lib/routes/skip-segments.js).
 const { backgroundDetectIntros } = require('./lib/routes/skip-segments')(app, {
-  requireAuth, skipSegments, save: () => saveJSON(SKIP_SEGMENTS_FILE, skipSegments), scanLibrary, isAudioFile,
+  requireAuth, requireAdminSession, skipSegments, save: () => saveJSON(SKIP_SEGMENTS_FILE, skipSegments), scanLibrary, isAudioFile,
   getMetadataForItem: item => getMetadataForItem(item), waitForTranscodeIdle: () => waitForTranscodeIdle(),
   introDetect: require('./lib/intro-detect')({ DATA_DIR, loadJSON, saveJSON, getFilePath: id => fileIndex[id], getLibrary: () => scanLibrary() }),
 });

@@ -5,6 +5,7 @@
   import { searchLibrary } from './lib/search.js';
   import { collections, loadCollections } from './lib/collections.js';
   import { waitForRestart, currentUptime } from './lib/restart.js';
+  import ChangePassword from './lib/components/ChangePassword.svelte';
   import { autofocus } from './lib/autofocus.js';
   import { EMPTY_FILTERS } from './lib/search-filters.js';
   import { posterUrl } from './lib/api.js';
@@ -41,6 +42,7 @@
   let error = $state('');
   let scrollY = $state(0);
 
+  let changingPassword = $state(false);
   let toast = $state('');
   let toastTimer;
   function showToast(msg) {
@@ -562,6 +564,7 @@
             {/if}
           {/if}
           <div class="divider"></div>
+          <button onclick={() => { menuOpen = false; changingPassword = true; }}>Change password</button>
           <button onclick={signOut}>Sign Out</button>
         </div>
       {/if}
@@ -639,6 +642,9 @@
 
 {#if toast}
   <div class="toast" use:portalToFullscreen>{toast}</div>
+{/if}
+{#if changingPassword}
+  <ChangePassword onclose={() => { changingPassword = false; }} ondone={() => { changingPassword = false; showToast('Password changed.'); }} />
 {/if}
 
 <style>

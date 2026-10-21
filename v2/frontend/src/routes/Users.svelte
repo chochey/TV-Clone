@@ -99,7 +99,7 @@
         <label>Display name<input type="text" bind:value={edit.name} use:autofocus /></label>
         <label>Username<input type="text" bind:value={edit.username} placeholder={edit.name ? edit.name.toLowerCase().replace(/[^a-z0-9]/g, '') : 'username'} autocomplete="off" /></label>
         <label>{edit.id ? 'New password (leave blank to keep)' : 'Password'}
-          <input type="password" bind:value={edit.password} autocomplete="new-password" />
+          <input type="password" bind:value={edit.password} autocomplete="new-password" required={!edit.id} />
         </label>
         <label>Role
           <select bind:value={edit.role}>
@@ -140,7 +140,7 @@
 
       {#if err}<p class="err">{err}</p>{/if}
       <div class="editactions">
-        <button class="cta" type="submit" disabled={busy || !edit.name.trim()}>{busy ? 'Saving…' : (edit.id ? 'Save' : 'Create')}</button>
+        <button class="cta" type="submit" disabled={busy || !edit.name.trim() || (!edit.id && !edit.password)}>{busy ? 'Saving…' : (edit.id ? 'Save' : 'Create')}</button>
         <button class="ghost" type="button" onclick={() => { edit = null; err = ''; }}>Cancel</button>
       </div>
     </form>

@@ -235,6 +235,15 @@ answers health at once. The account menu's two-step "Restart Server" -> "Really 
 unreachable: the first click re-rendered the button, the window's outside-click handler saw a
 detached target and closed the menu. Clicks on a detached target are treated as inside.
 
+### Accounts (October 2026)
+A password is required to create an account and to sign in: `verifyPassword` refuses an account with
+no stored password (an empty password used to open it), `POST /api/profiles` needs one, and
+`PUT /api/profiles/:id` rejects an empty one instead of clearing it. Everyone changes their own with
+`PUT /api/me/password` (current + next; other sessions of that profile are revoked, the caller's kept),
+from "Change password" in the account menu (`lib/components/ChangePassword.svelte`). Intro-skip
+writes (`POST`/`DELETE /api/skip-segments/:id`, `POST /api/detect-intro/:id`) are admin-only; the
+player only reads them. No minimum password length, by the user's choice.
+
 ### Look and feel (October 2026 redesign)
 Warm dark palette with one amber accent, set as tokens in `v2/frontend/src/styles/tokens.css`
 (`--bg #0e0c0b`, `--ink #f3ede4`, `--accent #e8b04a`, `--good/--warn/--bad`); Instrument Serif for
