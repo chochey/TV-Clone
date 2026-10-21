@@ -164,7 +164,10 @@
     buffering = true;
     cur = start;
     seekOffset = 0;
-    cancelStartup = startDirectPlayback(video, streamUrl(item), start, {
+    // The title page's answer (which probes the file) knows the stream mode; the catalog entry
+    // may still say "unknown" for a file that arrived minutes ago, and that must not turn a
+    // direct play into a transcode playlist fed to a plain <video>.
+    cancelStartup = startDirectPlayback(video, streamUrl({ ...item, streamMode: full?.streamMode || item.streamMode }), start, {
       isCurrent: () => seq === loadSeq && !destroyed,
       onMetadata: () => { timelineReady = true; },
       onSlow: () => { notice = 'Preparing video…'; },

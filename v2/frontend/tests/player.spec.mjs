@@ -311,3 +311,18 @@ test('closing the player sends one report of how the viewing went', async ({ pag
   expect(r.startupMs).toBeLessThan(15000);
   expect(r.watchedMs).toBeGreaterThan(5000);
 });
+
+// A file that arrived minutes ago is listed with an unknown stream mode until the server has
+// probed it; the title page's own request probes it and says "direct". The player then used the
+// catalog entry to build the URL, fed a transcode playlist to a plain <video> (which cannot play
+// it) and started a transcode session nobody consumed, blocking a slot for two minutes.
+test('a freshly added film played from Tonight (catalog entry still "unknown") plays directly, never via a transcode URL', async ({ page }) => {
+  const fresh = { ...film, streamMode: 'unknown' };
+  const calls = await setup(page, { items: [fresh, episode(1), episode(2)], detail: { film: { streamMode: 'direct' } } });
+  await page.goto(`${origin}/`);
+  // Tonight's pick hands the player the catalog entry, not the title page's probed answer.
+  await page.locator('.pick-actions').getByRole('button', { name: 'Play' }).click();
+  await expect.poll(() => videoTime(page), { timeout: 10000 }).toBeGreaterThan(0.5);
+  expect(calls.streams).toBeGreaterThan(0);
+  expect(calls.hls).toEqual([]);
+});

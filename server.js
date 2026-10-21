@@ -643,7 +643,12 @@ async function doRescan(trigger) {
   if (changed) {
     console.log(`  [scan] Library changed (${prev ? prev.length : 0} → ${library.length}, trigger: ${trigger}) — notifying clients`);
     notifyClients('library-updated');
-    setTimeout(() => { try { queueAllSpriteGen(); } catch {} }, 1000);
+    // Probe what just arrived before the sprite job takes the CPU for minutes: until a file is
+    // probed it is listed with an unknown stream mode. The rescan afterwards publishes the mode.
+    setTimeout(() => {
+      backgroundProbe().then(() => rescanLibraryAsync('post-probe')).catch(() => {})
+        .finally(() => { try { queueAllSpriteGen(); } catch {} });
+    }, 1000);
     // Log genuinely new arrivals to the notification history. prev-null is
     // the cold-boot baseline; the recent-addedAt gate keeps a rescan that
     // re-surfaces old files from spamming the bell.
@@ -1308,6 +1313,11 @@ app.get('/subtitle/embedded/:fileId/:streamIndex', requireAuth, ensureLibrary, (
 // ══════════════════════════════════════════════════════════════════════
 
 const retiredPlaybacks = new Map();
+// A session whose playlist was served but that never asked for a single segment belongs to
+// nobody (a stray warm-up, a tab closed during startup): it leaves after this instead of
+// holding a transcode slot for the full idle timeout. (Defined here, inside the block that
+// lib/hls-isolation.test.js runs on its own.)
+const UNUSED_SESSION_MS = Math.max(1, parseInt(process.env.UNUSED_SESSION_MS, 10) || 20000);
 const transcodeSessions = Object.create(null); // random playback ID -> session (including pending starts)
 const MAX_TRANSCODE_SESSIONS = Math.max(1, Math.min(5, parseInt(process.env.MAX_TRANSCODE_SESSIONS, 10) || 2));
 const HLS_SEG_DURATION = 4;
@@ -1317,6 +1327,7 @@ function cleanupSession(id, keepFiles) {
   if (!session) return;
   try { session.process?.kill('SIGTERM'); } catch {}
   clearTimeout(session.timeout);
+  clearTimeout(session.unusedTimer);
   delete transcodeSessions[id];
   retiredPlaybacks.set(id, Date.now());
   if (keepFiles) return;
@@ -1530,6 +1541,14 @@ app.get('/hls/:id/:playbackId/master.m3u8', requireAuth, ensureLibrary, async (r
     if (transcodeSessions[id] !== session) return res.status(409).send('Playback session stopped');
     clearTimeout(session.timeout);
     session.timeout = setTimeout(() => cleanupSession(id), TRANSCODE_TIMEOUT_MS);
+    if (!session.servedSegments && !session.unusedTimer) {
+      session.unusedTimer = setTimeout(() => {
+        if (transcodeSessions[id] === session && !session.servedSegments) {
+          console.log(`[transcode ${id.slice(0, 8)}] nobody played from this session; releasing its slot`);
+          cleanupSession(id);
+        }
+      }, UNUSED_SESSION_MS);
+    }
     res.set({ 'Content-Type': 'application/vnd.apple.mpegurl', 'Cache-Control': 'no-cache',
       'X-Accel-Buffering': 'no', 'X-Total-Duration': String(session.duration),
       'X-Seek-Offset': String(startTime) });
@@ -1586,10 +1605,13 @@ app.get('/hls/:id/:playbackId/:segment', requireAuth, (req, res) => {
     return res.status(400).send('Invalid path');
   }
 
-  // Reset timeout
+  // Reset timeout; a segment request is proof that a player is consuming this session.
   if (transcodeSessions[id]) {
-    clearTimeout(transcodeSessions[id].timeout);
-    transcodeSessions[id].timeout = setTimeout(() => cleanupSession(id), TRANSCODE_TIMEOUT_MS);
+    const session = transcodeSessions[id];
+    session.servedSegments = (session.servedSegments || 0) + 1;
+    clearTimeout(session.unusedTimer); session.unusedTimer = null;
+    clearTimeout(session.timeout);
+    session.timeout = setTimeout(() => cleanupSession(id), TRANSCODE_TIMEOUT_MS);
   }
   lastPlaybackAt = Date.now(); // pause sprite gen during HLS playback
 

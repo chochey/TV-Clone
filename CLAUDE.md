@@ -275,6 +275,16 @@ Watch later / Listen later / Saved. `--maxw` is 2400px so 2K screens fill edge t
 disabled primary buttons go neutral (cream 10%, faint ink), never dimmed amber. `posterUrl()` falls
 back to an audiobook's catalog `coverUrl`, so History, Stats and anything else using it show covers.
 
+### Fresh files and stray transcode sessions (October 2026)
+A file that arrived minutes ago is listed with `streamMode: 'unknown'` until probed. `/api/item/:id`
+probes on demand and answers the real mode; the player must build its direct URL from that answer,
+not the catalog entry (`streamUrl` of an 'unknown' item is a transcode playlist, which a plain
+`<video>` cannot play and which starts a session nobody consumes). After a scan change, new files are
+probed and a `post-probe` rescan publishes their mode before the sprite job runs. A transcode session
+whose playlist was served but that never got a segment request is released after
+`UNUSED_SESSION_MS` (20 s) instead of holding a slot for the 2-minute idle timeout: two such
+sessions once refused every other stream with "all transcode slots are busy".
+
 ### Stream modes (getStreamMode)
 - `direct`: h264 + aac/mp3/opus in .mp4 -- served as-is via byte-range
 - `remux`: h264 in .mkv or with non-browser audio -- copy video, transcode/copy audio
