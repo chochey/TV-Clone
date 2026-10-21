@@ -240,7 +240,10 @@ A password is required to create an account and to sign in: `verifyPassword` ref
 no stored password (an empty password used to open it), `POST /api/profiles` needs one, and
 `PUT /api/profiles/:id` rejects an empty one instead of clearing it. Everyone changes their own with
 `PUT /api/me/password` (current + next; other sessions of that profile are revoked, the caller's kept),
-from "Change password" in the account menu (`lib/components/ChangePassword.svelte`). Intro-skip
+from "Change password" in the account menu (`lib/components/ChangePassword.svelte`). The "Save files"
+permission (`canSaveMedia`) allows `GET /api/download/:id`, which sends the original file with the
+library's clean name; the title page (films, episodes, audiobooks) and the audiobook player's tools
+column show a Download link to people who have it, admins included. Intro-skip
 writes (`POST`/`DELETE /api/skip-segments/:id`, `POST /api/detect-intro/:id`) are admin-only; the
 player only reads them. No minimum password length, by the user's choice.
 

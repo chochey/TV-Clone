@@ -905,7 +905,7 @@ require('./lib/routes/library-folders')(app, {
 const { streamMediaFile } = require('./lib/direct-stream');
 const backdrop = require('./lib/backdrop')({ DATA_DIR, probeDurationAsync: probe.probeDurationAsync });
 require('./lib/routes/media-files')(app, {
-  requireAuth, ensureLibrary, fileFor: id => fileIndex[id], posterFor: id => posterIndex[id], playbackIssueForFile, isAudioFile,
+  requireAuth, ensureLibrary, requirePermission, fileFor: id => fileIndex[id], posterFor: id => posterIndex[id], playbackIssueForFile, isAudioFile,
   audiobookFile, audioLite, audioMetadata, backdrop, streamMediaFile, recordError, artworkStore: audioArtwork,
   onDirectPlay: () => { lastPlaybackAt = Date.now(); },
 });

@@ -6,6 +6,7 @@
   import { seriesEpisodes, seriesPlayTarget, isSeriesItem, isAudioItem } from '../lib/series-playback.js';
   import { episodeTitle, episodeCode } from '../lib/format.js';
   import { deleteBatchResult } from '../lib/delete-batch-result.js';
+  import { fmtBytes } from '../lib/dashboard-format.js';
   import { audioPlaybackIssue } from '../lib/audio-playback.js';
   import { audioPresentation } from '../lib/audio-presentation.js';
   import { mergeAudioDetail, audioDetailArtwork, audioDetailDuration } from '../lib/audio-detail.js';
@@ -240,6 +241,13 @@
                   <button class="ghost" class:on={saved} aria-pressed={saved} onclick={() => toggleWatchLater(m)}>
                     <svg viewBox="0 0 24 24" width="16" height="16" fill={saved ? 'currentColor' : 'none'} stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4-7 4V4a1 1 0 0 1 1-1z"/></svg>{saveLabel}
                   </button>
+                {/if}
+                {#if m.id && !isShow && ($session?.role === 'admin' || $session?.permissions?.includes('canSaveMedia'))}
+                  <!-- "Save files" permission: the original file, with the library's clean name. -->
+                  <a class="ghost" href={`/api/download/${encodeURIComponent(m.id)}`} download>
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+                    Download{m.fileSize ? ` · ${fmtBytes(m.fileSize)}` : ''}
+                  </a>
                 {/if}
                 {#if $session?.role === 'admin' && !isAudio}
                   <button class="ghost" onclick={() => { showSubtitleUpload = true; }}>
@@ -477,6 +485,7 @@
     transition: background var(--t-fast), color var(--t-fast);
   }
   .ghost:hover { background: rgba(243, 237, 228, 0.18); }
+  a.ghost { text-decoration: none; }
   .ghost.on { color: var(--good); }
   .resume { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; color: var(--ink-soft); font-size: 0.88rem; }
   .resumebar {

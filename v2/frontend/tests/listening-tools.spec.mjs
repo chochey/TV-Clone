@@ -16,7 +16,7 @@ function wav() {
   body.write('data', 36); body.writeUInt32LE(size, 40); return body;
 }
 
-async function fixture(page, { initialPath = '/title/book', items = [book], admin = false } = {}) {
+async function fixture(page, { initialPath = '/title/book', items = [book], admin = false, permissions = [] } = {}) {
   const html = await fs.readFile(path.join(dist, 'index.html'), 'utf8');
   const loadedVersion = [...new Set([...html.matchAll(/\/assets\/([^"'<> ]+\.(?:js|css))/g)].map(match => match[1]))].sort().join('|');
   const state = { version: loadedVersion, speed: 1.25, bookmarks: [], errors: [], documents: 0, libraryReads: 0,
@@ -36,7 +36,7 @@ async function fixture(page, { initialPath = '/title/book', items = [book], admi
     if (url.pathname.startsWith('/api/')) {
       let body = {};
       if (url.pathname === '/api/health') body = { ready: true };
-      else if (url.pathname === '/api/me') body = { loggedIn: true, role: admin ? 'admin' : 'user', profileId: 'listener', name: 'Listener' };
+      else if (url.pathname === '/api/me') body = { loggedIn: true, role: admin ? 'admin' : 'user', profileId: 'listener', name: 'Listener', permissions };
       else if (url.pathname === '/api/version') body = { version: state.version };
       else if (url.pathname === '/api/library') { state.libraryReads++; body = items; }
       else if (url.pathname === '/api/library/sections') body = { ok: true, sections: [] };
@@ -191,5 +191,17 @@ test('queued scans do not claim completion or refresh the catalog before status 
   await page.clock.fastForward(2000);
   await expect(page.locator('.scan-progress')).toHaveCount(0);
   await expect.poll(() => state.libraryReads).toBeGreaterThan(reads);
+  expect(state.errors).toEqual([]);
+});
+
+test('the audiobook player offers the file for download only to people with the Save files permission', async ({ page }) => {
+  await page.setViewportSize({ width: 1400, height: 900 });
+  let state = await fixture(page, { permissions: ['canSaveMedia'] }); await listen(page);
+  const link = page.locator('.listening-tools').getByRole('link', { name: /^Download audiobook/ });
+  await expect(link).toBeVisible();
+  await expect(link).toHaveAttribute('href', '/api/download/book');
+  expect(state.errors).toEqual([]);
+  state = await fixture(page); await listen(page);
+  await expect(page.locator('.listening-tools').getByRole('link', { name: /^Download audiobook/ })).toHaveCount(0);
   expect(state.errors).toEqual([]);
 });

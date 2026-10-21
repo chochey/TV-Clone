@@ -10,7 +10,7 @@ const film = { id: 'heat', title: 'Heat', year: 1995, type: 'movie', mediaKind: 
 const ep = n => ({ id: `ep${n}`, title: `Episode ${n}`, showName: 'The Sopranos', type: 'show', mediaKind: 'show', epInfo: { season: 1, episode: n }, streamMode: 'direct', addedAt: n, subtitles: [], progress: {} });
 const SRT = '1\n00:00:01,000 --> 00:00:03,000\nHola\n';
 
-async function setup(page, { role = 'admin', uploadStatus = 200 } = {}) {
+async function setup(page, { role = 'admin', uploadStatus = 200 , permissions = [] } = {}) {
   const calls = { uploads: [], itemReads: 0 };
   let uploaded = false;
   await page.route('**/*', route => route.abort());
@@ -32,7 +32,7 @@ async function setup(page, { role = 'admin', uploadStatus = 200 } = {}) {
     }
     let body = {};
     if (pathname === '/api/health') body = { ready: true };
-    else if (pathname === '/api/me') body = { loggedIn: true, role, profileId: 'test', name: 'Test' };
+    else if (pathname === '/api/me') body = { loggedIn: true, role, profileId: 'test', name: 'Test', permissions };
     else if (pathname === '/api/library') body = [film, ep(1), ep(2)];
     else if (pathname === '/api/library/sections') body = { ok: true, sections: [] };
     else if (pathname.startsWith('/api/item/')) {
@@ -100,4 +100,17 @@ test('people who are not admins do not see the button', async ({ page }) => {
   await page.goto(`${origin}/title/heat`);
   await expect(page.locator('.actions')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Add subtitles' })).toHaveCount(0);
+});
+
+test('a person with the Save files permission gets a Download link on a film; others do not', async ({ page }) => {
+  await setup(page, { role: 'user', permissions: ['canSaveMedia'] });
+  await page.goto(`${origin}/title/heat`);
+  const link = page.locator('.actions').getByRole('link', { name: /^Download/ });
+  await expect(link).toBeVisible();
+  await expect(link).toHaveAttribute('href', '/api/download/heat');
+  await expect(link).toHaveAttribute('download', '');
+  await setup(page, { role: 'user' });
+  await page.goto(`${origin}/title/heat`);
+  await expect(page.locator('.actions').getByRole('button', { name: /Watch later|Saved/ })).toBeVisible();
+  await expect(page.locator('.actions').getByRole('link', { name: /^Download/ })).toHaveCount(0);
 });

@@ -6,6 +6,7 @@
   import { audioProgressPayload, audioResumePosition, audioPlaybackError, audioPlaybackIssue, startAudioPlayback, audioTime } from '../audio-playback.js';
   import { audioPresentation, audioRemaining, audioChapters, activeAudioChapter, audioChapterLabel } from '../audio-presentation.js';
   import { mergeAudioDetail } from '../audio-detail.js';
+  import { fmtBytes } from '../dashboard-format.js';
   import { AUDIO_SPEEDS, rememberedAudioSpeed, rememberedAudioVolume, rememberAudioVolume, rememberedAudioMuted, rememberAudioMuted, audioBookmarks, createSleepTimer } from '../listening-tools.js';
   import { DATA_SAVER_POLL_MS, DATA_SAVER_MAX_BACKOFF_MS, DATA_SAVER_RETRY_FAILED_MS, rememberedDataSaver, rememberDataSaver, dataSaverFormat, rememberDataSaverFailure,
     forgetDataSaverFailures, dataSaverCopy, dataSaverMessage, originalMegabytesPerHour, copyDownloads } from '../audio-data-saver.js';
@@ -452,6 +453,12 @@
               {#if bookmarkError}<p class="tool-error" role="alert">{bookmarkError} <button onclick={loadBookmarks} disabled={bookmarkBusy}>Retry bookmarks</button></p>{/if}
               {#if bookmarks.length}<ul>{#each bookmarks as bookmark (bookmark.id)}<li><button class="bookmark-seek" onclick={() => seekTo(bookmark.time)} disabled={!ready}><span>{bookmark.label || 'Bookmark'}</span><small>{audioTime(bookmark.time)}</small></button><button class="bookmark-remove" disabled={bookmarkBusy || bookmarksLoading} aria-label={`Remove bookmark ${bookmark.label || audioTime(bookmark.time)}`} onclick={() => removeBookmark(bookmark.id)}>✕</button></li>{/each}</ul>{/if}
             </section>
+            {#if $session?.role === 'admin' || $session?.permissions?.includes('canSaveMedia')}
+              <a class="download-file" href={`/api/download/${encodeURIComponent(item.id)}`} download>
+                <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+                Download audiobook{item.fileSize ? ` · ${fmtBytes(item.fileSize)}` : ''}
+              </a>
+            {/if}
           </div>
           {#if notice && !error}<p class="notice" role="status">{notice}</p>{/if}
           {#if error}<div class="error" role="alert"><p>{error}</p><button onclick={() => load(switchPoint(), liteSource)}>Retry</button></div>{/if}
@@ -472,6 +479,8 @@
 </div>
 
 <style>
+  .download-file { display: inline-flex; align-items: center; gap: 6px; margin-top: var(--s3); font-size: 0.85rem; font-weight: 600; color: var(--ink-soft); min-height: 44px; }
+  .download-file:hover { color: var(--ink); }
   .audio-player { position:fixed; inset:0; z-index:90; overflow:auto; display:flex; align-items:center; justify-content:center; padding:32px; background:var(--bg,#0e0c0b); color:var(--ink,#fff); }
   /* The cover behind the panel: a static blur (no animation, no backdrop-filter -- the Linux/Firefox lag rule), darkened to the page at the edges. */
   .ambient { position:fixed; inset:0; overflow:hidden; pointer-events:none; }
