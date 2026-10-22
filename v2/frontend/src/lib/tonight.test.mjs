@@ -18,11 +18,11 @@ const ep = (id, extra = {}) => ({ id, title: id, type: 'show', mediaKind: 'show'
 
 test('in-progress titles split into the newest video, the newest audiobook, and the rest', () => {
   const items = [film('a', { progress: { updatedAt: 1 } }), book('b', { progress: { updatedAt: 5 } }), ep('c', { progress: { updatedAt: 9 } }), book('d', { progress: { updatedAt: 2 } })];
-  const s = splitInProgress(items);
+  const s = splitInProgress(items, 100);   // "now" just after these timestamps, so none is stale
   assert.equal(s.watching.id, 'c');
   assert.equal(s.listening.id, 'b');
   assert.deepEqual(s.others.map(i => i.id), ['d', 'a']);
-  assert.deepEqual(splitInProgress([]), { watching: null, listening: null, others: [] });
+  assert.deepEqual(splitInProgress([]), { watching: null, listening: null, others: [], older: [] });
 });
 
 test('the summary counts what is in progress and what arrived this week', () => {
@@ -108,4 +108,25 @@ test('when everything has been skipped or shown, the ranking still produces a pi
 test('the day key is the local calendar date', () => {
   assert.equal(dayKey(new Date(2026, 9, 20, 23, 30).getTime()), '2026-10-20');
   assert.equal(dayKey(new Date(2026, 0, 5, 0, 10).getTime()), '2026-01-05');
+});
+
+// Titles untouched for three months are not "in progress" any more: they used to pad the row and
+// the View all count (240 of 289 on the user's own account).
+test('in-progress titles older than ninety days are set aside as older, not featured or counted', () => {
+  const now = Date.parse('2026-10-22T12:00:00');
+  const day = 86400000;
+  const items = [
+    { id: 'fresh', mediaKind: 'movie', progress: { updatedAt: now - 2 * day } },
+    { id: 'book', mediaKind: 'audio', progress: { updatedAt: now - 10 * day } },
+    { id: 'edge', mediaKind: 'movie', progress: { updatedAt: now - 89 * day } },
+    { id: 'old', mediaKind: 'movie', progress: { updatedAt: now - 91 * day } },
+    { id: 'ancient', mediaKind: 'audio', progress: { updatedAt: now - 300 * day } },
+  ];
+  const split = splitInProgress(items, now);
+  assert.equal(split.watching.id, 'fresh');
+  assert.equal(split.listening.id, 'book');
+  assert.deepEqual(split.others.map(i => i.id), ['edge']);
+  assert.deepEqual(split.older.map(i => i.id), ['old', 'ancient']);
+  assert.equal(summaryLine({ ...split }), 'An episode in progress'.replace('An episode', '2 videos') === '2 videos in progress' ? summaryLine({ ...split }) : '');
+  assert.match(summaryLine({ ...split }), /^2 videos and an audiobook in progress$/);
 });

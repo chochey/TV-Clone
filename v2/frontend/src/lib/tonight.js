@@ -14,11 +14,16 @@ export function greeting(now = Date.now()) {
 }
 
 // Newest first; the newest video leads the page, the newest audiobook gets its own strip.
-export function splitInProgress(items = []) {
-  const recent = [...items].sort((a, b) => (b.progress?.updatedAt || 0) - (a.progress?.updatedAt || 0));
+// A title untouched for three months is not "in progress" in any useful sense: it goes to
+// `older`, which only View all shows (240 of the user's 289 were like that).
+export const STALE_AFTER_MS = 90 * 86400000;
+export function splitInProgress(items = [], now = Date.now()) {
+  const sorted = [...items].sort((a, b) => (b.progress?.updatedAt || 0) - (a.progress?.updatedAt || 0));
+  const recent = sorted.filter(i => (i.progress?.updatedAt || 0) >= now - STALE_AFTER_MS);
+  const older = sorted.filter(i => (i.progress?.updatedAt || 0) < now - STALE_AFTER_MS);
   const watching = recent.find(i => !isAudioItem(i)) || null;
   const listening = recent.find(i => isAudioItem(i)) || null;
-  return { watching, listening, others: recent.filter(i => i !== watching && i !== listening) };
+  return { watching, listening, others: recent.filter(i => i !== watching && i !== listening), older };
 }
 
 export function summaryLine({ watching, listening, others = [], addedThisWeek = 0 }) {

@@ -160,6 +160,7 @@ export const api = {
 
   // Profile management (admin)
   changePassword: (current, next) => fetch('/api/me/password', opts('PUT', { current, next })).then(json),
+  dismissOlderThan: before => fetch('/api/dismissed/continue-watching/older-than', opts('POST', { before })).then(json),
   profileCreate: (body) => fetch('/api/profiles', opts('POST', body)).then(json),
   profileUpdate: (id, body) => fetch(`/api/profiles/${encodeURIComponent(id)}`, opts('PUT', body)).then(json),
   profileDelete: (id) => fetch(`/api/profiles/${encodeURIComponent(id)}`, opts('DELETE')).then(json),

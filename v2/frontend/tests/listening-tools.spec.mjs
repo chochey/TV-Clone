@@ -37,6 +37,12 @@ async function fixture(page, { initialPath = '/title/book', items = [book], admi
       let body = {};
       if (url.pathname === '/api/health') body = { ready: true };
       else if (url.pathname === '/api/me') body = { loggedIn: true, role: admin ? 'admin' : 'user', profileId: 'listener', name: 'Listener', permissions };
+      else if (url.pathname === '/api/dismissed/continue-watching/older-than' && method === 'POST') {
+        state.clearedBefore = request.postDataJSON().before;
+        state.hidden = Object.fromEntries(items.filter(i => (i.progress?.updatedAt || 0) < state.clearedBefore).map(i => [i.id, true]));
+        body = { ok: true, hidden: Object.keys(state.hidden).length };
+      }
+      else if (url.pathname === '/api/dismissed') body = { continueWatching: state.hidden || {}, recentlyAdded: {} };
       else if (url.pathname === '/api/version') body = { version: state.version };
       else if (url.pathname === '/api/library') { state.libraryReads++; body = items; }
       else if (url.pathname === '/api/library/sections') body = { ok: true, sections: [] };
@@ -121,9 +127,13 @@ test('chapter and minute sleep timers pause the same audio without closing it', 
 });
 
 test('Tonight features the newest video and audiobook, shows the rest in one row of up to eighteen, and View all exposes each media kind', async ({ page }) => {
+  // Eighteen recent titles (newest has the highest index) and two untouched for months.
+  const now = Date.now(), day = 86400000;
   const items = Array.from({ length: 18 }, (_, index) => ({ ...book, id: String(index), title: `Title ${index}`,
     mediaKind: index % 2 ? 'audio' : 'movie', type: index % 2 ? 'audio' : 'movie', filename: index % 2 ? `${index}.wav` : `${index}.mp4`,
-    audioMetadata: index % 2 ? { title: `Title ${index}` } : undefined, progress: { ...book.progress, updatedAt: index } }));
+    audioMetadata: index % 2 ? { title: `Title ${index}` } : undefined, progress: { ...book.progress, updatedAt: now - (18 - index) * 60000 } }));
+  items.push({ ...book, id: 'old1', title: 'Old film', mediaKind: 'movie', type: 'movie', filename: 'old1.mp4', audioMetadata: undefined, progress: { ...book.progress, updatedAt: now - 120 * day } });
+  items.push({ ...book, id: 'old2', title: 'Old book', audioMetadata: { title: 'Old book' }, progress: { ...book.progress, updatedAt: now - 300 * day } });
   const state = await fixture(page, { initialPath: '/', items });
   await expect(page.getByRole('article', { name: 'Pick up where you left off' }).getByRole('heading', { name: 'Title 16' })).toBeVisible();
   await expect(page.getByRole('article', { name: 'Continue listening' }).getByRole('heading', { name: 'Title 17' })).toBeVisible();
@@ -152,10 +162,20 @@ test('Tonight features the newest video and audiobook, shows the rest in one row
   const label = await listen.locator('.card-kind').boundingBox(), cover = await listen.locator('.listen-cover').boundingBox();
   expect(label.y + label.height).toBeLessThanOrEqual(cover.y + 1);
   expect(await listen.locator('.card-kind').evaluate(el => parseFloat(getComputedStyle(el).fontSize))).toBeGreaterThanOrEqual(12);
+  await expect(row).not.toContainText('Old film');
   await row.getByRole('button', { name: /View all \(18\)/ }).click();
   const grid = page.getByRole('region', { name: 'All in-progress titles' });
   await expect(grid.locator('.card')).toHaveCount(18);
   await expect(page.getByText('Everything you have in progress', { exact: true })).toBeVisible();
+  // Titles untouched for three months sit apart, with one button to clear them all.
+  const older = page.getByRole('region', { name: 'Older in-progress titles' });
+  await expect(older).toContainText('2 titles untouched for over 3 months');
+  await older.getByRole('button', { name: 'Show them' }).click();
+  await expect(older.locator('.card')).toHaveCount(2);
+  await expect(older).toContainText('Old film');
+  await older.getByRole('button', { name: 'Clear these 2' }).click();
+  await expect.poll(() => state.clearedBefore).toBeGreaterThan(now - 91 * day);
+  await expect(older).toHaveCount(0);
   await grid.getByRole('button', { name: 'Listening', exact: true }).click(); await expect(grid.locator('.card')).toHaveCount(9);
   await grid.getByRole('button', { name: 'Watching', exact: true }).click(); await expect(grid.locator('.card')).toHaveCount(9);
   await page.getByRole('button', { name: 'Show recent', exact: true }).click();

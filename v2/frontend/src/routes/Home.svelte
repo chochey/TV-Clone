@@ -7,9 +7,9 @@
   import PosterCard from '../lib/components/PosterCard.svelte';
   import CollectionCard from '../lib/components/CollectionCard.svelte';
   import { continueWatching, recentlyAdded, genreClusters, libraryStats, catalog, watchState, collapseShows,
-    dismissFromContinue, observeAudioCard, requestAudioCard, session, mediaById, watchLater, toggleWatchLater } from '../lib/stores.js';
+    dismissFromContinue, observeAudioCard, requestAudioCard, session, mediaById, watchLater, toggleWatchLater, loadDismissed } from '../lib/stores.js';
   import { watchLaterItems } from '../lib/watch-later.js';
-  import { posterUrl } from '../lib/api.js';
+  import { api, posterUrl } from '../lib/api.js';
   import { navigate } from '../lib/router.js';
   import { moods, moodMatches, discoveryPool, nextPick } from '../lib/home-discovery.js';
   import { mediaKindOf, isAudioItem, isSeriesItem } from '../lib/series-playback.js';
@@ -18,7 +18,7 @@
   import { episodeCode, episodeTitle } from '../lib/format.js';
   import { collections, loadCollections, collectionCards } from '../lib/collections.js';
   import { credits, readAlongIds, bookChapters, loadHomeData } from '../lib/home-data.js';
-  import { greeting, summaryLine, timeLeft, pausedWhen, splitInProgress, rankPicks, pickReason, choosePick, dayKey } from '../lib/tonight.js';
+  import { greeting, summaryLine, timeLeft, pausedWhen, splitInProgress, rankPicks, pickReason, choosePick, dayKey, STALE_AFTER_MS } from '../lib/tonight.js';
   import { loadPickMemory, savePickMemory, rememberShown, rememberSkipped } from '../lib/tonight-pick-memory.js';
   let { onopen, onplay } = $props();
 
@@ -57,11 +57,20 @@
   });
   const hasReadAlong = $derived(!!listening && $readAlongIds.has(listening.id));
 
-  // Everything in progress besides the two featured above.
+  // Everything in progress besides the two featured above; titles untouched for three months are
+  // kept apart (split.older) and only appear in View all, with one button to clear them.
   const continued = $derived(continuePreview(split.others));
   let allContinue = $state(false), continueKind = $state('all');
-  const allInProgress = $derived(continuePreview($continueWatching).recent);
+  const allInProgress = $derived(continuePreview([split.watching, split.listening, ...split.others].filter(Boolean)).recent);
   const continueItems = $derived(filterContinue(allInProgress, continueKind));
+  let showOlder = $state(false), clearingOlder = $state(false), olderError = $state('');
+  async function clearOlder() {
+    if (clearingOlder) return;
+    clearingOlder = true; olderError = '';
+    try { await api.dismissOlderThan(Date.now() - STALE_AFTER_MS); await loadDismissed(); showOlder = false; }
+    catch (e) { olderError = e.body?.error || 'Could not clear them. Try again.'; }
+    finally { clearingOlder = false; }
+  }
 
   // ── Tonight's pick ──
   const movies = $derived($catalog.filter(i => mediaKindOf(i) === 'movie').map(i => ({ ...i, ...$watchState[i.id] })));
@@ -204,6 +213,17 @@
         </div>
         <div class="continue-grid">{#each continueItems as item (item.id)}<PosterCard {item} {onopen} {onplay} resume />{/each}</div>
         {#if !continueItems.length}<p class="continue-empty">No {continueKind === 'listening' ? 'audiobooks' : 'films or series'} in progress.</p>{/if}
+        {#if split.older.length}
+          <section class="continue-older" aria-label="Older in-progress titles">
+            <div class="continue-older-head">
+              <p>{split.older.length} {split.older.length === 1 ? 'title' : 'titles'} untouched for over 3 months</p>
+              <button onclick={() => { showOlder = !showOlder; }} aria-expanded={showOlder}>{showOlder ? 'Hide them' : 'Show them'}</button>
+              <button class="clear" onclick={clearOlder} disabled={clearingOlder}>{clearingOlder ? 'Clearing…' : `Clear these ${split.older.length}`}</button>
+            </div>
+            {#if olderError}<p class="continue-empty" role="alert">{olderError}</p>{/if}
+            {#if showOlder}<div class="continue-grid">{#each split.older as item (item.id)}<PosterCard {item} {onopen} {onplay} resume />{/each}</div>{/if}
+          </section>
+        {/if}
       </section>
     {:else}
       <!-- One row for films, series and audiobooks, newest first: two short rows (one per kind)
@@ -338,6 +358,12 @@
   .continue-tabs button { min-height: 40px; padding: 0 16px; border-radius: var(--r-pill); box-shadow: inset 0 0 0 1px var(--line-strong); color: var(--ink-soft); font-weight: 600; font-size: 0.88rem; }
   .continue-tabs button[aria-pressed='true'] { background: var(--ink); color: var(--bg); box-shadow: none; }
   .continue-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 24px 18px; }
+  .continue-older { margin-top: 36px; padding-top: 20px; border-top: 1px solid var(--line); }
+  .continue-older-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; color: var(--ink-soft); font-size: 0.9rem; }
+  .continue-older-head p { margin: 0; flex: 1 1 auto; }
+  .continue-older-head button { min-height: 40px; padding: 0 14px; border-radius: var(--r-pill); box-shadow: inset 0 0 0 1px var(--line-strong); color: var(--ink-soft); font-weight: 600; font-size: 0.86rem; }
+  .continue-older-head button.clear { color: var(--ink); }
+  .continue-older-head button:disabled { opacity: 0.5; }
   .continue-empty { color: var(--ink-soft); padding: 24px 0; }
 
   .moods { margin: var(--s5) 0; }
