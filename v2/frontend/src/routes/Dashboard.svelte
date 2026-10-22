@@ -115,6 +115,7 @@
     restartError = 'The app did not restart. Give it a moment, then reload this page; if it is still the same process, restart it from a terminal.';
     restartState = 'idle';
   }
+  const backupAge = hours => hours < 1 ? 'just now' : hours < 48 ? `${hours}h ago` : `${Math.round(hours / 24)} days ago`;
   function checkState(c) {
     if (Array.isArray(c)) {
       const bad = c.filter((e) => !e?.ok);
@@ -232,6 +233,21 @@
         <div class="kv"><span>Disk used</span><strong>{fmtBytes(jobs.dataSaver.bytes)}</strong> <em>of 10 GB</em></div>
         <div class="kv"><span>Making now</span><strong>{jobs.dataSaver.running ? 'Yes' : 'No'}</strong>{#if jobs.dataSaver.queued} <em>{jobs.dataSaver.queued} waiting</em>{/if}</div>
       {:else}<div class="dim">{jobs?.dataSaver?.error ? 'Unavailable' : '…'}</div>{/if}
+    </section>
+
+    <section class="card">
+      <h3 class="meta">Backups</h3>
+      {#if jobs?.backup?.missing}
+        <div class="dim">No record yet. The nightly job writes one on its next run, around 03:20.</div>
+      {:else if jobs?.backup && !jobs.backup.missing && jobs.backup.at}
+        {@const b = jobs.backup}
+        <div class="kv"><span>Last run</span><strong class={b.ok ? (b.stale ? 'warn' : 'good') : 'bad'}>{b.ok ? (b.verified ? 'Verified' : 'Completed') : 'Failed'}</strong> <em>{backupAge(b.ageHours)}</em></div>
+        {#if b.ok}<div class="kv"><span>Snapshot</span><strong>{b.fileCount} files</strong> <em>{fmtBytes(b.bytes)}{b.kept ? ` · ${b.kept} kept` : ''}</em></div>{/if}
+        {#if !b.ok && b.error}<div class="kv"><span>Reason</span><em>{b.error}</em></div>{/if}
+        <div class="kv"><span>Where</span><strong class={b.onPool ? 'good' : 'warn'}>{b.onPool ? 'on the media pool' : 'not on the media pool'}</strong></div>
+        {#if !b.onPool}<p class="warn">Snapshots on the system disk are lost with it. Point TVCLONE_BACKUP_ROOT at the pool.</p>{/if}
+        {#if b.stale}<p class="warn">No successful backup for {Math.round(b.ageHours / 24)} days.</p>{/if}
+      {:else}<div class="dim">{jobs?.backup?.error ? 'Unavailable' : '…'}</div>{/if}
     </section>
 
     <section class="card">

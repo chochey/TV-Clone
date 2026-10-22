@@ -50,7 +50,8 @@ async function setup(page, { streaming = streamingFor } = {}) {
       collections: { films: 600, inCollections: 229, lastAskedAt: Date.now() - 3 * 3600000 },
       sprites: { running: false, total: 900, completed: 900, current: '', enabled: true },
       dataSaver: { running: null, queued: 0, copies: 4, bytes: 9.5e8 },
-      libraryScan: { running: false, phase: 'idle', lastCompletedAt: Date.now() - 20 * 60000 } };
+      libraryScan: { running: false, phase: 'idle', lastCompletedAt: Date.now() - 20 * 60000 },
+      backup: calls.backup === undefined ? { at: Date.now() - 5 * 3600000, ok: true, verified: true, error: null, where: '/mnt/media/important/snapshots', fileCount: 118, bytes: 3.34e8, kept: 14, onPool: true, ageHours: 5, stale: false } : calls.backup };
     else if (pathname === '/api/dashboard/streaming') { const d = +url.searchParams.get('days'); calls.streamingDays.push(d); body = streaming(d); }
     else if (pathname === '/api/dashboard/library') body = {
       weeks: Array.from({ length: 26 }, (_, i) => ({ week: iso(today - (25 - i) * 7 * DAY), films: i % 4, episodes: (i * 3) % 11, audiobooks: i === 20 ? 2 : 0 })),
@@ -140,4 +141,23 @@ test('the menu\'s Restart Server says so when the request is refused, and "back"
   await expect(page.locator('.toast')).toContainText('Restarting the server…');
   await expect(page.locator('.toast')).toContainText('Server is back.', { timeout: 15000 });
   expect(calls.restarts).toBe(2);
+});
+
+test('the Backups card shows the last verified snapshot, and warns when it is old, failed, off the pool or missing', async ({ page }) => {
+  const calls = await setup(page);
+  await page.goto(`${origin}/system`);
+  const card = page.locator('section.card').filter({ has: page.getByRole('heading', { name: 'Backups' }) });
+  await expect(card).toContainText('Verified');
+  await expect(card).toContainText('118 files');
+  await expect(card).toContainText('334 MB');
+  await expect(card).toContainText('on the media pool');
+  await expect(card).toContainText('5h ago');
+  calls.backup = { at: Date.now() - 74 * 3600000, ok: false, verified: false, error: 'BACKUP_DIRECTORY', where: '/srv/chocheytv/app/data_backups', fileCount: 0, bytes: 0, kept: 0, onPool: false, ageHours: 74, stale: true };
+  await page.reload();
+  await expect(card).toContainText('Failed');
+  await expect(card).toContainText('3 days ago');
+  await expect(card).toContainText('not on the media pool');
+  calls.backup = { missing: true };
+  await page.reload();
+  await expect(card).toContainText('No record yet');
 });

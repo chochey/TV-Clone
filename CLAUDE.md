@@ -218,6 +218,15 @@ word break ("Marvel Cinematic Universe Phase Four", "Star Wars original trilogy"
 is folded into it by `fold()`: its films join the parent after the parent's own order and it is not a
 card of its own ("Predators" does not continue "Predator"). Card names wrap to two lines.
 
+### Backup receipt (October 2026)
+`tvclone-backup.timer` runs `tvclone-reliability.js backup` as root at ~03:20; its destination
+(`TVCLONE_BACKUP_ROOT`) is in root-only `/etc/tvclone/tvclone.env`, so nothing in the app could say
+whether backups still worked. `lib/reliability.js backup()` now writes `data/backup-receipt.json`
+(0644: at, ok, verified, error, target, backupRoot, fileCount, bytes, kept, pruned, warnings).
+`lib/dashboard-jobs.js backup()` turns it into the Dashboard's "Backups" card (age, verified/failed,
+size, on the media pool or not, stale after 36 h, "No record yet" before the first run). The receipt
+also answers where the snapshots go.
+
 ### Restarting without root (October 2026)
 `sudo` and polkit stopped working from Claude's shells on 2026-10-19, so nothing there can restart a
 service. `lib/self-restart.js` lets the app restart itself: `POST /api/system/restart` (admin; the
@@ -258,6 +267,9 @@ from the shelf's own `/api/item` response via `lib/home-data.js`, Read along sho
 films, `choosePick` in `lib/tonight.js`: the same all day, different tomorrow; "Another" skips a film for
 two weeks and last week's picks wait their turn, remembered per device in `localStorage v2TonightPick`
 by `lib/tonight-pick-memory.js`; before this the top-ranked film showed for weeks), then one "Also in progress" row
+(titles untouched for 90 days, `STALE_AFTER_MS`, are `split.older`: not featured, not in the row or the View all
+count; View all lists them under "Older" with "Clear these N", which is `POST /api/dismissed/continue-watching/older-than`
+`{before}`, one request that hides every unfinished title last touched before the date)
 (`lib/components/KindBadge.svelte` puts an amber "Audiobook" pill on book covers in poster-shaped cards, every
 resume line starts with the kind, "Film · 108 min left", and the two featured cards say Film / Series / Audiobook
 in a `.card-kind` label at their top edge, where the user asked for it, not on the cover) (films, series

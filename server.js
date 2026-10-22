@@ -787,7 +787,7 @@ require('./lib/routes/library')(app, {
 });
 
 // History, queue, watchlist and dismissals per profile (lib/routes/profile-lists.js).
-require('./lib/routes/profile-lists')(app, { requireAuth, getRequestProfile, loadProfileData, saveProfileData });
+require('./lib/routes/profile-lists')(app, { requireAuth, getRequestProfile, loadProfileData, saveProfileData, finishedPercent: AUTO_WATCHED_PERCENT });
 
 // ── Skip Intro / Outro ──────────────────────────────────────────────────
 const SKIP_SEGMENTS_FILE = path.join(DATA_DIR, 'skip_segments.json');
@@ -829,7 +829,7 @@ require('./lib/routes/dashboard')(app, {
   scanLibrary, playbackHistory, storageHistory: () => storageHealth.history(),
   jobs: require('./lib/dashboard-jobs')({
     transcribeDir: process.env.READALONG_TRANSCRIBE_WORK || '/var/lib/tvclone-readalong-transcribe',
-    readAlongDir: path.join(DATA_DIR, 'read-along'), audioLiteDir: path.join(DATA_DIR, 'audio-lite'),
+    readAlongDir: path.join(DATA_DIR, 'read-along'), audioLiteDir: path.join(DATA_DIR, 'audio-lite'), dataDir: DATA_DIR,
     isActive: unit => new Promise(resolve => execFile('systemctl', ['is-active', unit], (_err, out) => resolve(String(out).trim() === 'active'))),
     collections: () => collectionsService.status(),
     sprites: () => ({ ...sprites.spriteQueue, enabled: sprites.isEnabled() }),
