@@ -300,6 +300,18 @@ whose playlist was served but that never got a segment request is released after
 `UNUSED_SESSION_MS` (20 s) instead of holding a slot for the 2-minute idle timeout: two such
 sessions once refused every other stream with "all transcode slots are busy".
 
+### Picture behind the sound after a tab switch (October 2026)
+Firefox stops decoding a hidden tab's video after 10 s and keeps the audio; on Windows with 10-bit
+HEVC passthrough the picture then stayed behind the sound until a refresh (reported 2026-10-23,
+The Sopranos S1E6, keyframes up to 10 s apart). `v2/frontend/src/lib/resume-sync.js` runs only
+after a return to the tab: every presented frame's `requestVideoFrameCallback` media time is
+compared with `video.currentTime`; picture over 0.5 s behind (or starved while the clock moves)
+for two seconds, after a two-second settle, gets a jump in place, and if still behind, a rebuild of
+the stream at the same spot (`loadDirect`/`loadHlsSession(cur)`, what the refresh did). At most
+twice per return; the watch covers 20 s of actual playing. The frame counter now runs for every
+stream (the quality watchdog still judges only passthrough), and `qualityWatchdog.resume()` gives
+the post-return catch-up the same 8 s grace as a new session, so it can never demote HEVC for good.
+
 ### Stream modes (getStreamMode)
 - `direct`: h264 + aac/mp3/opus in .mp4 -- served as-is via byte-range
 - `remux`: h264 in .mkv or with non-browser audio -- copy video, transcode/copy audio

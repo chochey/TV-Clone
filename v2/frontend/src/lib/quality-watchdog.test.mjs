@@ -61,3 +61,14 @@ test('without a frame counter only the decoder\'s own drop count can demote', ()
   const h = harness(); h.w.start();
   assert.deepEqual(h.run(60, { fps: 0, state: { countsFrames: false } }), []);
 });
+
+// Firefox resumes a backgrounded video behind the sound; the catch-up after a return must never
+// count toward switching the browser off passthrough for good.
+test('returning to the tab gives the same grace as a new session', () => {
+  const h = harness(); h.w.start();
+  h.run(Math.ceil(QUALITY_GRACE_MS / 1000) + 12);             // settled, smooth
+  h.second({ state: { hidden: true } });
+  h.w.resume();
+  assert.deepEqual(h.run(Math.floor(QUALITY_GRACE_MS / 1000) - 1, { fps: 5 }), [], 'nothing judged during the grace');
+  assert.deepEqual(h.run(QUALITY_WINDOW_MS / 1000 * 2), [], 'and the smooth playback after it is fine');
+});

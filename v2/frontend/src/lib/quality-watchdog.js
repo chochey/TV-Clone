@@ -16,6 +16,9 @@ export function createQualityWatchdog({ now = Date.now } = {}) {
     frame() { frames++; },
     // A new session: start-up and post-seek catch-up are never sampled.
     start() { frames = 0; windowAt = now() + QUALITY_GRACE_MS; base = null; badWindows = 0; },
+    // Back from a hidden tab: the browser restarts the picture and catches up, which must never
+    // count toward switching passthrough off for good. Same grace as a new session.
+    resume() { frames = 0; windowAt = now() + QUALITY_GRACE_MS; base = null; badWindows = 0; },
     // state: active (passthrough, playing, no error or scrubbing), playbackRate,
     // readyState, hidden, quality ({ dropped, total } from the decoder, or null),
     // countsFrames (requestVideoFrameCallback is available).

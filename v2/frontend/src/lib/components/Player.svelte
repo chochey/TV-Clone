@@ -14,6 +14,7 @@
   import { hevcMaxLevel, demoteHevc, isFirefoxDesktopLinux } from '../hevc-probe.js';
   import { createStallWatchdog, RESUME_GRACE_MS } from '../stall-watchdog.js';
   import { createQualityWatchdog } from '../quality-watchdog.js';
+  import { createResumeSync } from '../resume-sync.js';
   import { hlsSettings } from '../hls-settings.js';
   import { createPlaybackReport } from '../playback-report.js';
   import { playerKeyAction } from '../player-keys.js';
@@ -174,6 +175,7 @@
       onBlocked: () => { startupPending = false; buffering = false; notice = 'Press Play to resume.'; },
       onTimeout: () => { startupPending = false; buffering = false; error = STARTUP_ERROR; },
     });
+    stopFrameCounter(); startFrameCounter();
   }
 
   function onVideoError() {
@@ -262,7 +264,9 @@
     hls.attachMedia(video);
     // Fresh measurement window per session — a seek restarts the decoder, and
     // carrying counts across would blame the new session for the old one.
-    if (passthroughActive) startFrameCounter(); else stopFrameCounter();
+    // The frame counter runs for every session: the quality watchdog only judges passthrough,
+    // but the resync after a tab switch (lib/resume-sync.js) needs frames from any stream.
+    stopFrameCounter(); startFrameCounter();
     hls.on(H.Events.MANIFEST_PARSED, () => {
       if (seq !== loadSeq) return;
       timelineReady = true;
@@ -336,10 +340,35 @@
   // tier that was about to work fine. Only sustained trouble counts.
   // Dropped-frame judgement for passthrough (lib/quality-watchdog.js).
   const qualityWatchdog = createQualityWatchdog();
+
+  // ── Picture behind the sound after a tab switch (lib/resume-sync.js) ──
+  // Firefox stops decoding a hidden tab's video after 10 s and keeps the sound. On Windows with
+  // 10-bit HEVC passthrough the picture then stayed behind the sound until the page was
+  // refreshed. After a return, a jump in place resyncs both tracks; if the picture is still
+  // behind, the stream is rebuilt at the same spot, which is what the refresh did.
+  const resumeSync = createResumeSync();
+  function resumeCheck() {
+    if (!video) return;
+    const { action } = resumeSync.check({
+      playing: !paused && !video.paused && !error && !scrubbing && !startupPending && timelineReady
+        && video.readyState >= 3 && document.visibilityState === 'visible',
+      currentTime: video.currentTime,
+    });
+    if (action === 'none') return;
+    stallWatchdog.reset(RESUME_GRACE_MS);
+    if (action === 'resync') {
+      console.info('[player] picture behind the sound after returning to the tab; resyncing in place');
+      try { video.currentTime = video.currentTime; } catch {}
+    } else if (action === 'rebuild') {
+      console.info('[player] picture still behind the sound; rebuilding the stream here');
+      if (isDirect) loadDirect(cur); else loadHlsSession(cur);
+    }
+  }
   let rvfcHandle = null;
 
-  function countPresentedFrame() {
+  function countPresentedFrame(_now, meta) {
     qualityWatchdog.frame();
+    if (meta && video) resumeSync.frame(meta.mediaTime, video.currentTime);
     if (video?.requestVideoFrameCallback) {
       rvfcHandle = video.requestVideoFrameCallback(countPresentedFrame);
     }
@@ -717,7 +746,7 @@
       if (o && typeof o.start === 'number') outro = o;
     }).catch(() => {});
     progressTimer = setInterval(() => { if (!paused) saveProgress(); }, 5000);
-    stallTimer = setInterval(() => { stallCheck(); qualityCheck(); }, 1000);
+    stallTimer = setInterval(() => { stallCheck(); qualityCheck(); resumeCheck(); }, 1000);
     // Both events, deliberately: pagehide is the reliable desktop signal for a
     // closing tab, but mobile browsers frequently kill a backgrounded page
     // without ever firing it, and visibilitychange is the one that survives an
@@ -729,8 +758,12 @@
   });
 
   function onVisibilityChange() {
-    if (document.visibilityState === 'hidden') flushProgressOnTeardown();
-    else stallWatchdog.reset(RESUME_GRACE_MS);   // a backgrounded player needs a moment to catch up
+    if (document.visibilityState === 'hidden') { flushProgressOnTeardown(); resumeSync.hidden(); return; }
+    // A backgrounded player needs a moment to catch up: neither watchdog judges it meanwhile,
+    // and the resync check watches whether the picture actually catches up with the sound.
+    stallWatchdog.reset(RESUME_GRACE_MS);
+    qualityWatchdog.resume();
+    resumeSync.shown();
   }
 
   onDestroy(() => {

@@ -326,3 +326,42 @@ test('a freshly added film played from Tonight (catalog entry still "unknown") p
   expect(calls.streams).toBeGreaterThan(0);
   expect(calls.hls).toEqual([]);
 });
+
+// Firefox stops decoding a hidden tab's video and keeps the sound; on return the picture stayed
+// behind the sound until a refresh. The test fakes the tab switch and a picture trailing the clock.
+test('after returning to the tab, a picture behind the sound is jumped in place, then rebuilt; never without a tab switch', async ({ page }) => {
+  await page.addInitScript(() => {
+    window.__vis = 'visible'; window.__lag = 0; window.__seeks = 0; window.__loads = 0;
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => window.__vis });
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => window.__vis !== 'visible' });
+    const original = HTMLVideoElement.prototype.requestVideoFrameCallback;
+    if (original) HTMLVideoElement.prototype.requestVideoFrameCallback = function (cb) {
+      return original.call(this, (now, meta) => cb(now, { ...meta, mediaTime: meta.mediaTime - window.__lag }));
+    };
+    document.addEventListener('seeking', () => { window.__seeks++; }, true);
+    document.addEventListener('loadstart', () => { window.__loads++; }, true);
+  });
+  await openFilm(page);
+  const probe = () => page.evaluate(() => ({ seeks: window.__seeks, loads: window.__loads }));
+  const setVisibility = v => page.evaluate(v => { window.__vis = v; document.dispatchEvent(new Event('visibilitychange')); }, v);
+  // Without a tab switch nothing is judged, however far behind the picture is.
+  const before = await probe();
+  await page.evaluate(() => { window.__lag = 2; });
+  await page.waitForTimeout(6000);
+  expect(await probe()).toEqual(before);
+  // Hidden, then back with the picture two seconds behind: a jump first...
+  await setVisibility('hidden');
+  await page.waitForTimeout(1200);
+  await setVisibility('visible');
+  await expect.poll(async () => (await probe()).seeks, { timeout: 9000 }).toBeGreaterThan(before.seeks);
+  const afterJump = await probe();
+  expect(afterJump.loads).toBe(before.loads);
+  // ...and, still behind, a rebuild of the stream at the same spot, as a refresh would.
+  await expect.poll(async () => (await probe()).loads, { timeout: 9000 }).toBeGreaterThan(afterJump.loads);
+  await expect.poll(() => videoTime(page), { timeout: 10000 }).toBeGreaterThan(10);
+  // Caught up: no more interventions.
+  await page.evaluate(() => { window.__lag = 0; });
+  const settled = await probe();
+  await page.waitForTimeout(5000);
+  expect(await probe()).toEqual(settled);
+});
