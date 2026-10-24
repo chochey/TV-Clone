@@ -37,8 +37,10 @@ gzip of the snapshot, key derived with scrypt from a passphrase), decrypted agai
 by file against the snapshot's SHA-256 manifest before it replaces its temporary name. The newest
 `TVCLONE_BACKUP_KEEP` copies are kept; other files in that folder are never touched.
 
-The passphrase is read from `TVCLONE_BACKUP_KEY_FILE` (default `/etc/tvclone/backup-passphrase`),
-which must be readable by its owner only, or no copy is written (`KEY_FILE_PERMISSIONS`). **Keep the
+The passphrase is read from `TVCLONE_BACKUP_KEY_FILE`, else `/etc/tvclone/backup-passphrase`, else
+`/srv/chocheytv/backup-passphrase` (creatable without sudo), and must be readable by its owner only,
+or no copy is written (`KEY_FILE_PERMISSIONS`). With no `TVCLONE_BACKUP_COPY_DIR`, the copy goes to
+`/mnt/media/important/chocheytv-encrypted-backups` as soon as a passphrase file exists. **Keep the
 passphrase in a password manager too**: the copy is only needed once the system disk is gone, and
 the passphrase file goes with it. The result of each run is in `data/backup-receipt.json` and on the
 Dashboard's Backups card.

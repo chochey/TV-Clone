@@ -5,7 +5,8 @@
 //
 //   node scripts/restore-encrypted-backup.js ARCHIVE.tvbackup NEW_FOLDER [--key-file FILE]
 //
-// The passphrase file defaults to /etc/tvclone/backup-passphrase. After losing the system disk,
+// The passphrase file defaults to /etc/tvclone/backup-passphrase, else /srv/chocheytv/backup-passphrase.
+// After losing the system disk,
 // put the passphrase from your password manager in a file only you can read and pass --key-file.
 const fs = require('fs');
 const path = require('path');
@@ -13,7 +14,8 @@ const { restoreEncryptedCopy } = require('../lib/backup-encrypted-copy');
 
 const args = process.argv.slice(2);
 const keyAt = args.indexOf('--key-file');
-const keyFile = keyAt >= 0 ? args.splice(keyAt, 2)[1] : '/etc/tvclone/backup-passphrase';
+const defaultKey = ['/etc/tvclone/backup-passphrase', '/srv/chocheytv/backup-passphrase'].find(f => fs.existsSync(f)) || '/etc/tvclone/backup-passphrase';
+const keyFile = keyAt >= 0 ? args.splice(keyAt, 2)[1] : defaultKey;
 if (args.length !== 2 || !keyFile) {
   console.error('Usage: node scripts/restore-encrypted-backup.js ARCHIVE.tvbackup NEW_FOLDER [--key-file FILE]');
   process.exit(64);

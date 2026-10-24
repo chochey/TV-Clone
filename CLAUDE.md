@@ -228,8 +228,9 @@ size, on the media pool or not, stale after 36 h, "No record yet" before the fir
 also answers where the snapshots go: `/home/blue/Desktop/Repos/TV-Clone-prod/data_backups` on the system
 disk. The pool is NTFS (all three drives, ntfs-3g uid=1000: chmod is ignored, everything is 0777), so
 snapshots must not be copied there in the clear; `lib/backup-encrypted-copy.js` writes an encrypted
-`.tvbackup` per snapshot to `TVCLONE_BACKUP_COPY_DIR` with the passphrase in root-only
-`/etc/tvclone/backup-passphrase` (refused if group/world readable), verified against the manifest
+`.tvbackup` per snapshot to `TVCLONE_BACKUP_COPY_DIR` (default `/mnt/media/important/chocheytv-encrypted-backups`
+once a passphrase file exists) with the passphrase in `/etc/tvclone/backup-passphrase` or, created without
+sudo since sudo is dead in Claude's shells, `/srv/chocheytv/backup-passphrase` (refused if group/world readable), verified against the manifest
 before it is kept; `scripts/restore-encrypted-backup.js` restores one into a new folder. The receipt
 carries `copy`, and the Backups card warns unless something verified is off the system disk
 (`offDisk`). See BACKUP_RECOVERY.md.
