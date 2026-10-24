@@ -27,6 +27,31 @@ snapshots qualify. Older legacy date directories, incomplete directories and
 corrupt snapshots are preserved for manual review rather than silently deleted.
 The old `SKIP_SPRITES` flag is unnecessary because generated caches are excluded.
 
+## Encrypted copy on the media pool
+
+The snapshots live on the system disk (`TVCLONE_BACKUP_ROOT`, root-only, private modes), so a
+disk failure would take them with it. The media pool is NTFS and cannot keep files private, so it
+gets an encrypted copy instead: when `TVCLONE_BACKUP_COPY_DIR` is set in `/etc/tvclone/tvclone.env`,
+each verified snapshot is also written there as one `<snapshot>.tvbackup` file (AES-256-GCM over a
+gzip of the snapshot, key derived with scrypt from a passphrase), decrypted again and checked file
+by file against the snapshot's SHA-256 manifest before it replaces its temporary name. The newest
+`TVCLONE_BACKUP_KEEP` copies are kept; other files in that folder are never touched.
+
+The passphrase is read from `TVCLONE_BACKUP_KEY_FILE` (default `/etc/tvclone/backup-passphrase`),
+which must be readable by its owner only, or no copy is written (`KEY_FILE_PERMISSIONS`). **Keep the
+passphrase in a password manager too**: the copy is only needed once the system disk is gone, and
+the passphrase file goes with it. The result of each run is in `data/backup-receipt.json` and on the
+Dashboard's Backups card.
+
+Restore a copy into a new private folder (never over live state) and verify it:
+
+```sh
+node scripts/restore-encrypted-backup.js /path/to/<snapshot>.tvbackup /path/to/new-folder [--key-file FILE]
+```
+
+A wrong passphrase or a damaged file is refused (`BACKUP_DECRYPT`) and leaves nothing behind. The
+restored folder is an ordinary snapshot: rehearse it below, then follow "Actual recovery".
+
 ## Non-destructive restore rehearsal
 
 From the repository, run:

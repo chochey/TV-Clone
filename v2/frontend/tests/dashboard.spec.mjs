@@ -51,7 +51,8 @@ async function setup(page, { streaming = streamingFor } = {}) {
       sprites: { running: false, total: 900, completed: 900, current: '', enabled: true },
       dataSaver: { running: null, queued: 0, copies: 4, bytes: 9.5e8 },
       libraryScan: { running: false, phase: 'idle', lastCompletedAt: Date.now() - 20 * 60000 },
-      backup: calls.backup === undefined ? { at: Date.now() - 5 * 3600000, ok: true, verified: true, error: null, where: '/mnt/media/important/snapshots', fileCount: 118, bytes: 3.34e8, kept: 14, onPool: true, ageHours: 5, stale: false } : calls.backup };
+      backup: calls.backup === undefined ? { at: Date.now() - 5 * 3600000, ok: true, verified: true, error: null, where: '/home/blue/repo/data_backups', fileCount: 118, bytes: 3.34e8, kept: 14, onPool: false, ageHours: 5, stale: false,
+        copy: { ok: true, onPool: true, error: null, bytes: 4.1e7, kept: 3 }, offDisk: true } : calls.backup };
     else if (pathname === '/api/dashboard/streaming') { const d = +url.searchParams.get('days'); calls.streamingDays.push(d); body = streaming(d); }
     else if (pathname === '/api/dashboard/library') body = {
       weeks: Array.from({ length: 26 }, (_, i) => ({ week: iso(today - (25 - i) * 7 * DAY), films: i % 4, episodes: (i * 3) % 11, audiobooks: i === 20 ? 2 : 0 })),
@@ -150,13 +151,18 @@ test('the Backups card shows the last verified snapshot, and warns when it is ol
   await expect(card).toContainText('Verified');
   await expect(card).toContainText('118 files');
   await expect(card).toContainText('334 MB');
-  await expect(card).toContainText('on the media pool');
   await expect(card).toContainText('5h ago');
-  calls.backup = { at: Date.now() - 74 * 3600000, ok: false, verified: false, error: 'BACKUP_DIRECTORY', where: '/srv/chocheytv/app/data_backups', fileCount: 0, bytes: 0, kept: 0, onPool: false, ageHours: 74, stale: true };
+  await expect(card).toContainText('system disk');
+  await expect(card).toContainText('Encrypted copy');
+  await expect(card).toContainText('on the media pool');
+  await expect(card.locator('.warn')).toHaveCount(0);
+  calls.backup = { at: Date.now() - 74 * 3600000, ok: false, verified: false, error: 'BACKUP_DIRECTORY', where: '/srv/chocheytv/app/data_backups', fileCount: 0, bytes: 0, kept: 0, onPool: false, ageHours: 74, stale: true,
+    copy: { ok: false, onPool: true, error: 'NO_KEY', bytes: 0, kept: 0 }, offDisk: false };
   await page.reload();
   await expect(card).toContainText('Failed');
   await expect(card).toContainText('3 days ago');
-  await expect(card).toContainText('not on the media pool');
+  await expect(card).toContainText('NO_KEY');
+  await expect(card).toContainText('Nothing verified is stored off the system disk');
   calls.backup = { missing: true };
   await page.reload();
   await expect(card).toContainText('No record yet');

@@ -244,8 +244,13 @@
         <div class="kv"><span>Last run</span><strong class={b.ok ? (b.stale ? 'warn' : 'good') : 'bad'}>{b.ok ? (b.verified ? 'Verified' : 'Completed') : 'Failed'}</strong> <em>{backupAge(b.ageHours)}</em></div>
         {#if b.ok}<div class="kv"><span>Snapshot</span><strong>{b.fileCount} files</strong> <em>{fmtBytes(b.bytes)}{b.kept ? ` · ${b.kept} kept` : ''}</em></div>{/if}
         {#if !b.ok && b.error}<div class="kv"><span>Reason</span><em>{b.error}</em></div>{/if}
-        <div class="kv"><span>Where</span><strong class={b.onPool ? 'good' : 'warn'}>{b.onPool ? 'on the media pool' : 'not on the media pool'}</strong></div>
-        {#if !b.onPool}<p class="warn">Snapshots on the system disk are lost with it. Point TVCLONE_BACKUP_ROOT at the pool.</p>{/if}
+        <div class="kv"><span>Snapshots</span><strong class={b.onPool ? 'good' : 'dim'}>{b.onPool ? 'on the media pool' : 'on the system disk'}</strong></div>
+        <div class="kv"><span>Encrypted copy</span>
+          {#if b.copy?.ok}<strong class={b.copy.onPool ? 'good' : 'warn'}>{b.copy.onPool ? 'on the media pool' : 'not on the media pool'}</strong> <em>{fmtBytes(b.copy.bytes)}{b.copy.kept ? ` · ${b.copy.kept} kept` : ''}</em>
+          {:else if b.copy}<strong class="bad">Failed</strong> <em>{b.copy.error}</em>
+          {:else}<strong class="dim">None</strong>{/if}
+        </div>
+        {#if !b.offDisk}<p class="warn">Nothing verified is stored off the system disk, so a disk failure would take the backups with it.</p>{/if}
         {#if b.stale}<p class="warn">No successful backup for {Math.round(b.ageHours / 24)} days.</p>{/if}
       {:else}<div class="dim">{jobs?.backup?.error ? 'Unavailable' : '…'}</div>{/if}
     </section>

@@ -225,7 +225,14 @@ whether backups still worked. `lib/reliability.js backup()` now writes `data/bac
 (0644: at, ok, verified, error, target, backupRoot, fileCount, bytes, kept, pruned, warnings).
 `lib/dashboard-jobs.js backup()` turns it into the Dashboard's "Backups" card (age, verified/failed,
 size, on the media pool or not, stale after 36 h, "No record yet" before the first run). The receipt
-also answers where the snapshots go.
+also answers where the snapshots go: `/home/blue/Desktop/Repos/TV-Clone-prod/data_backups` on the system
+disk. The pool is NTFS (all three drives, ntfs-3g uid=1000: chmod is ignored, everything is 0777), so
+snapshots must not be copied there in the clear; `lib/backup-encrypted-copy.js` writes an encrypted
+`.tvbackup` per snapshot to `TVCLONE_BACKUP_COPY_DIR` with the passphrase in root-only
+`/etc/tvclone/backup-passphrase` (refused if group/world readable), verified against the manifest
+before it is kept; `scripts/restore-encrypted-backup.js` restores one into a new folder. The receipt
+carries `copy`, and the Backups card warns unless something verified is off the system disk
+(`offDisk`). See BACKUP_RECOVERY.md.
 
 ### Restarting without root (October 2026)
 `sudo` and polkit stopped working from Claude's shells on 2026-10-19, so nothing there can restart a
