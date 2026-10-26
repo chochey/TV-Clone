@@ -245,8 +245,13 @@ no torrent is moving data and the app heard from qBittorrent in the last 2 min; 
 services whose image changed (a new gluetun recreates qBittorrent too, it uses gluetun's network); then
 prove it: gluetun healthy, qBittorrent's exit IP differs from this server's (same IP = leak: qBittorrent
 is stopped at once), its web UI answers, the app's `download-readiness.json` advances (written only on a
-poll that reached qBittorrent), the tunnel has HA connections. A failed check re-tags the old image and
-recreates; if the old one fails too the run is `failed` (and a leaking qBittorrent stays stopped). The
+poll that reached qBittorrent), the tunnel has HA connections. A failed check stops the group, puts its
+settings folder back (copied before the switch to `~/.local/state/chochey-container-updates`, 0700; the
+replaced folder is kept as `<dir>.replaced-<time>`), re-tags the old image and recreates; if the old one
+fails too the run is `failed` (and a leaking qBittorrent stays stopped). Settings matter: on the first
+run (2026-10-26) qBittorrent 5.3.0 rewrote its config, and 5.1.4 then came back with a temporary password,
+so a rollback of the image alone broke the downloader. That run also found qBittorrent 5.2+ names the
+session cookie `QBT_SID_<port>` and answers a good login with 204; `lib/qbt.js` handles both. The
 replaced image is kept as `<repo>:chochey-previous`; only the one it replaces is removed (no
 `docker image prune`: other projects' images live on this Docker). The result is
 `data/container-updates.json` (0644), shown on the Dashboard's "Containers" card with each image's age.

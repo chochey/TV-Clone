@@ -126,6 +126,7 @@
     QBITTORRENT_NOT_ANSWERING: 'qBittorrent did not answer', APP_LOST_QBITTORRENT: 'ChocheyTV could not reach qBittorrent',
     TUNNEL_NOT_CONNECTED: 'the tunnel did not reconnect', RECREATE_FAILED: 'the new version would not start',
     NOT_RUNNING: 'it did not keep running',
+    SETTINGS_COPY_FAILED: 'its settings could not be copied first, so it was not switched',
   };
   const updateProblem = error => {
     const [first, again] = String(error).split('; previous version also failed: ');

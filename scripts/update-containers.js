@@ -10,11 +10,17 @@ const fs = require('fs');
 const path = require('path');
 const { execFile } = require('child_process');
 const createContainerUpdates = require('../lib/container-updates');
-const { quietCheck } = createContainerUpdates;
+const { quietCheck, createSettingsStore } = createContainerUpdates;
 
 const dataDir = process.env.TVCLONE_DATA_DIR || '/srv/chocheytv/data';
 const composeDir = process.env.CHOCHEY_COMPOSE_DIR || '/home/blue/Desktop/Repos/Docker-Media';
 const statusFile = path.join(dataDir, 'container-updates.json');
+// Settings folders (bind mounts in the compose file) copied before a switch; they hold qBittorrent's
+// password hash, so the copies live in a private folder outside the compose repo.
+const settings = createSettingsStore({
+  dirs: { qbittorrent: path.join(composeDir, 'qbittorrent', 'config'), gluetun: path.join(composeDir, 'gluetun') },
+  backupRoot: process.env.CHOCHEY_SETTINGS_BACKUPS || path.join(process.env.HOME || '/home/blue', '.local/state/chochey-container-updates'),
+});
 const env = { ...process.env, DOCKER_HOST: process.env.DOCKER_HOST || 'unix:///var/run/docker.sock' };
 
 const run = (cmd, args, { cwd, timeout = 120_000 } = {}) => new Promise(resolve => {
@@ -32,7 +38,7 @@ async function writeStatus(status) {
 const log = line => console.log(`${new Date().toISOString()} ${line}`);
 
 const updater = createContainerUpdates({
-  run, composeDir, writeStatus, log,
+  run, composeDir, writeStatus, log, saveSettings: settings.save, restoreSettings: settings.restore,
   sleep: ms => new Promise(r => setTimeout(r, ms)),
   isQuiet: () => quietCheck({ dataDir, readdir: d => fs.promises.readdir(d), readJSON }),
   readinessUpdatedAt: async () => (await readJSON(path.join(dataDir, 'download-readiness.json')).catch(() => ({}))).updatedAt || 0,
