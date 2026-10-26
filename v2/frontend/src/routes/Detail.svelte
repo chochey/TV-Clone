@@ -1,6 +1,6 @@
 <script>
   import { api, posterUrl } from '../lib/api.js';
-  import { library, catalog, watchState, collapseShows, searchFilters, searchQuery, updateWatchState, libraryLoaded, session, enrichItem, AUTO_WATCHED_PERCENT, mediaById, watchLater, toggleWatchLater } from '../lib/stores.js';
+  import { library, catalog, watchState, collapseShows, searchFilters, searchQuery, updateWatchState, libraryLoaded, session, enrichItem, AUTO_WATCHED_PERCENT, mediaById, watchLater, toggleWatchLater, loadLibrary } from '../lib/stores.js';
   import { savedId } from '../lib/watch-later.js';
   import { navigate } from '../lib/router.js';
   import { seriesEpisodes, seriesPlayTarget, isSeriesItem, isAudioItem } from '../lib/series-playback.js';
@@ -11,6 +11,7 @@
   import { audioPresentation } from '../lib/audio-presentation.js';
   import { mergeAudioDetail, audioDetailArtwork, audioDetailDuration } from '../lib/audio-detail.js';
   import SubtitleUpload from '../lib/components/SubtitleUpload.svelte';
+  import FixMatch from '../lib/components/FixMatch.svelte';
   import { collections, loadCollections, collectionsOf } from '../lib/collections.js';
   import Row from '../lib/components/Row.svelte';
   import { EMPTY_FILTERS } from '../lib/search-filters.js';
@@ -133,6 +134,12 @@
   // ── Delete ─────────────────────────────────────────────────────────
   let showDeleteConfirm = $state(false);
   let showSubtitleUpload = $state(false);
+  let showFixMatch = $state(false);
+  // After the admin picks another OMDb record: this page's own copy and the library both refetch.
+  async function refreshDetails() {
+    try { full = await api.item(id); } catch {}
+    await loadLibrary($session?.profileId).catch(() => {});
+  }
   let deleting = $state(false);
   let deleteError = $state('');
 
@@ -250,6 +257,10 @@
                   </a>
                 {/if}
                 {#if $session?.role === 'admin' && !isAudio}
+                  <button class="ghost" onclick={() => { showFixMatch = true; }}>
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.3-1 .9-1 1.7M12 17h.01"/></svg>
+                    Wrong {isShow ? 'series' : 'film'}?
+                  </button>
                   <button class="ghost" onclick={() => { showSubtitleUpload = true; }}>
                     <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M10 10.5a2 2 0 1 0 0 3M17 10.5a2 2 0 1 0 0 3"/></svg>Add subtitles
                   </button>
@@ -364,6 +375,9 @@
     </div>
   </div>
 
+  {#if showFixMatch}
+    <FixMatch item={m} onclose={() => { showFixMatch = false; }} onchanged={refreshDetails} />
+  {/if}
   {#if showSubtitleUpload}
     <SubtitleUpload {title} items={isShow ? episodes : [m]} initialId={isShow ? (nextUp?.id || episodes[0]?.id) : m.id}
                     onclose={() => { showSubtitleUpload = false; }} />

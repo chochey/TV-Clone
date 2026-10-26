@@ -213,6 +213,20 @@ for its own year. A number that does not resolve is remembered like a no-match (
 mtime changes. The organizer re-examines Share only after a retry packet or a restart, so a pin saved by
 hand takes effect at the next restart (deploys restart it).
 
+### "Wrong film?" on the title page (October 2026)
+The app's own OMDb lookup (lib/omdb.js, by title and year) can accept the wrong record: The Weight (2026)
+became an Earth, Wind & Fire documentary. Admins get **Wrong film?** / **Wrong series?** on the title page
+(`lib/components/FixMatch.svelte`): `GET /api/metadata-match/:id[?q=]` lists what the title could be
+(`omdb.searchCandidates`: OMDb `s=` with and then without the year, then `i=` per candidate for director,
+actors and a plot line, ~8 requests per search, admin-only), `PUT` pins a number or pasted link
+(`omdb.pinMatch`: fetched by `i=`, stored under the same `title|year` cache key with `_pinned`, poster file
+overwritten since it is named after the title), `DELETE` goes back (`unpinMatch`, record marked
+`_automatic`). `fetchOmdbData` refreshes a `_pinned` record by number, never by name, and for a record
+that is neither pinned nor `_automatic` honours the organizer's Fix & retry pin (`pinnedIdFor` →
+`organizer-tools.pinnedImdbId` over the alias file), so one pin serves both sides. The page keeps the
+file's year. Design: docs/plans/2026-10-26-wrong-film-match-design.md. Not included: per-field edits
+(the older `/api/metadata-override` API still exists, without a screen) and poster uploads.
+
 ### Subtitle variants and grouped review cards (October 2026)
 Two subtitles of one language in a release ("English (SDH)" and "English (forced)", "Español (España)"
 and "(Latinoamérica)", "中文（简体）" and "（繁體）") used to plan to one name, so the organizer left both

@@ -141,6 +141,10 @@ export const api = {
 
   // On-demand OMDb enrichment (server caches hits AND misses)
   metadata: (id) => fetch(`/api/metadata/${encodeURIComponent(id)}`, opts('GET')).then(json),
+  // "Wrong film?": what the title could be, pin a choice, or go back to the automatic match (admin).
+  metadataMatch: (id, q = '') => fetch(`/api/metadata-match/${encodeURIComponent(id)}${q ? `?q=${encodeURIComponent(q)}` : ''}`, opts('GET')).then(json),
+  metadataMatchSet: (id, imdbID) => fetch(`/api/metadata-match/${encodeURIComponent(id)}`, opts('PUT', { imdbID })).then(json),
+  metadataMatchClear: (id) => fetch(`/api/metadata-match/${encodeURIComponent(id)}`, opts('DELETE')).then(json),
 
   // Watch later: the profile's save-for-later list, an array of item ids in saved order.
   watchlist: () => fetch('/api/watchlist', opts('GET')).then(json),

@@ -318,9 +318,13 @@ async function backgroundProbe() {
 // ══════════════════════════════════════════════════════════════════════
 // ── OMDB Metadata (extracted to lib/omdb.js) ────────────────────────
 // ══════════════════════════════════════════════════════════════════════
+const organizerTools = require('./lib/organizer-tools');
 const omdb = require('./lib/omdb')({
   loadJSON, saveJSON,
   OMDB_CACHE_FILE, OMDB_API_KEY, OMDB_BASE_URL, OMDB_POSTER_DIR,
+  // An IMDb number chosen in the organizer's Fix & retry decides the match here too (read on demand;
+  // lookups are rare and already wait on the network).
+  pinnedIdFor: (title, year, type) => organizerTools.pinnedImdbId(organizerTools.loadAliases(loadJSON, PATHS.organizerAliasFile), { title, year, type }),
 });
 const { parseYearFromName, stripYearFromName, omdbCacheKey,
         fetchOmdbData, saveOmdbCache, getOmdbForItem, backgroundOmdbFetch } = omdb;
@@ -1774,7 +1778,8 @@ function sendSpa(_req, res) {
     "script-src 'self'",
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
     'font-src https://fonts.gstatic.com',
-    "img-src 'self' data:",
+    // OMDb's posters live on Amazon's image host: the "Wrong film?" candidates show them directly.
+    "img-src 'self' data: https://m.media-amazon.com",
     "media-src 'self' blob:",
     "worker-src 'self' blob:",
     "connect-src 'self'",
