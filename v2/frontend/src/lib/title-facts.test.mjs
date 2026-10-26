@@ -116,3 +116,23 @@ test('moreByAuthor lists the author\'s other books, series mates excluded, unfin
   const omw = { id: 'o', mediaKind: 'audio', title: "Old Man's War", audioMetadata: { artist: ' John Scalzi ' } };
   assert.deepEqual(moreByAuthor(narrated, [...books, narrated, omw]).map(b => b.id), ['o']);
 });
+
+// 4K files: said in the file fact, and the device fact warns when this server was measured too slow for them.
+test('playFacts labels a 4K file and warns about pauses only when the server is measured too slow', () => {
+  const base = { filename: 'Oppenheimer (2023).mp4', fileSize: 9234179686, streamMode: 'transcode', videoHeight: 2160 };
+  const slow = playFacts({ ...base, fourKSpeed: 0.6, fourKDataSaverSpeed: 1.4 }, { quality: 'auto' });
+  assert.equal(slow[0].value, 'MP4 · 4K · 8.6 GB');
+  assert.equal(slow[1].value, 'Converted as it plays');
+  assert.match(slow[1].detail, /^From 4K down to 1080p \(Auto quality\)/);
+  assert.match(slow[1].detail, /about 0\.6× real time.*expect pauses.*Data Saver/);
+  const fast = playFacts({ ...base, fourKSpeed: 1.3 }, { quality: 'auto' })[1];
+  assert.equal(fast.detail, 'From 4K down to 1080p (Auto quality)');
+  assert.equal(playFacts({ ...base, fourKSpeed: null }, { quality: 'auto' })[1].detail, 'From 4K down to 1080p (Auto quality)');
+  assert.equal(playFacts({ ...base, fourKSpeed: 0.6 }, { quality: 'high' })[1].detail.startsWith('4K at source resolution (Full quality)'), true);
+  // Data Saver on a 4K file: its own measurement decides.
+  const saver = playFacts({ ...base, fourKSpeed: 0.6, fourKDataSaverSpeed: 0.8 }, { quality: 'low' })[1];
+  assert.equal(saver.value, 'Data Saver'); assert.match(saver.detail, /0\.8× real time/);
+  assert.equal(playFacts({ ...base, fourKSpeed: 0.6, fourKDataSaverSpeed: 1.4 }, { quality: 'low' })[1].detail, 'Converted to 720p, about 2 Mbps');
+  // Not 4K: untouched.
+  assert.equal(playFacts({ filename: 'a.mkv', streamMode: 'transcode', videoHeight: 1080, fourKSpeed: 0.6 }, { quality: 'auto' })[1].detail, 'Up to 1080p (Auto quality)');
+});

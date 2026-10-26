@@ -10,14 +10,27 @@ export function formatSize(bytes) {
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
+const is4K = item => (item.videoHeight || 0) >= 2160;
+// This server's measured 4K speed (lib/four-k.js); below real time, playback pauses to catch up.
+const slow = speed => (typeof speed === 'number' && speed < 1 ? speed : null);
+const pauses = (speed, tail) => ` This server converts 4K at about ${speed}× real time, so expect pauses${tail}.`;
+
 function deviceFact(item, quality) {
   const mode = item.streamMode;
   if (mode === 'unsupported') return { value: "Can't play yet", detail: item.playbackIssue || 'This file needs a compatible copy.' };
   if (!mode) return { value: 'Checking…', detail: '' };
   // Data Saver always re-encodes, even files that could play as they are (lib/ffmpeg-args.js).
-  if (quality === 'low') return { value: 'Data Saver', detail: 'Converted to 720p, about 2 Mbps' };
+  if (quality === 'low') {
+    const s = is4K(item) ? slow(item.fourKDataSaverSpeed) : null;
+    return { value: 'Data Saver', detail: 'Converted to 720p, about 2 Mbps' + (s ? pauses(s, '') : '') };
+  }
   if (mode === 'direct') return { value: 'Plays as is', detail: 'No conversion, full quality' };
   if (mode === 'remux') return { value: 'Full quality', detail: 'Repackaged as it plays; the picture is untouched' };
+  if (is4K(item)) {
+    const s = slow(item.fourKSpeed);
+    const base = quality === 'high' ? '4K at source resolution (Full quality)' : 'From 4K down to 1080p (Auto quality)';
+    return { value: 'Converted as it plays', detail: base + (s ? pauses(s, '; Data Saver is lighter') : '') };
+  }
   return { value: 'Converted as it plays', detail: quality === 'high' ? 'Source resolution (Full quality)' : 'Up to 1080p (Auto quality)' };
 }
 
@@ -28,7 +41,7 @@ export function playFacts(item, { quality = 'auto' } = {}) {
   const ext = (String(item.filename || '').match(/\.([a-z0-9]+)$/i)?.[1] || '').toUpperCase();
   const tracks = item.audioTracks || [];
   const main = tracks.find(t => t.isDefault) || tracks[0];
-  const file = { label: 'Your file', value: [ext, formatSize(item.fileSize)].filter(Boolean).join(' · ') || 'Video file',
+  const file = { label: 'Your file', value: [ext, is4K(item) ? '4K' : '', formatSize(item.fileSize)].filter(Boolean).join(' · ') || 'Video file',
     detail: main ? `${main.label}${tracks.length > 1 ? `, plus ${plural(tracks.length - 1, 'more audio track')}` : ''}` : '' };
   const subs = item.subtitles || [];
   const languages = [...new Set(subs.map(subtitleLanguage).filter(Boolean))];

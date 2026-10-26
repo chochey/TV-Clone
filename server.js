@@ -787,6 +787,7 @@ require('./lib/routes/library')(app, {
   libraryVersion: () => libraryVersion, libraryScanState: () => libraryScanState, libraryCache: () => libraryCache,
   fileIndex: () => fileIndex, omdb, metadataOverrides, getMetadataForItem,
   audioMetadata, probeCache, audioTracksCache, probeFileAsync, getStreamMode, probeSubtitlesAsync,
+  videoHeightFor: file => heightCache[file] || null, fourK: require('./lib/four-k')({ dataDir: DATA_DIR }),
   getConfig: () => config, nowWatching, audioLite, AUTO_WATCHED_PERCENT, MAX_HISTORY_ITEMS, artworkStore: audioArtwork,
 });
 
