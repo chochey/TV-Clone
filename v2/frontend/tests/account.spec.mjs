@@ -70,6 +70,8 @@ test('the Users page needs a password to create someone', async ({ page }) => {
   await page.getByRole('button', { name: 'New User' }).click();
   await expect(page.getByText('Save files', { exact: true })).toBeVisible();
   await expect(page.getByText('Fix film details', { exact: true })).toBeVisible();
+  await expect(page.getByText('Add subtitles', { exact: true })).toBeVisible();
+  await expect(page.getByText('Fix imports', { exact: true })).toBeVisible();
   await expect(page.getByText('Download the original film, episode or audiobook file')).toBeVisible();
   await page.getByLabel('Display name').fill('Friend');
   const save = page.getByRole('button', { name: /^(Create|Save)/ });

@@ -321,7 +321,10 @@ library's clean name; the title page (films, episodes, audiobooks) and the audio
 column show a Download link to people who have it, admins included. Intro-skip
 writes (`POST`/`DELETE /api/skip-segments/:id`, `POST /api/detect-intro/:id`) are admin-only; the
 player only reads them. "Fix film details" (`canFixMatch`) allows the title page's "Wrong film?" (the
-`/api/metadata-match` routes); admins always have it. No minimum password length, by the user's choice.
+`/api/metadata-match` routes); "Add subtitles" (`canSubtitles`) allows `POST /api/subtitles/:id` and the title
+page's button; "Fix imports" (`canFixImports`) allows the Organizer page's review actions (fix-queue,
+aliases, retry, clear-leftovers; the page itself still needs "Organizer"). Admins always have all of these.
+No minimum password length, by the user's choice.
 
 ### Look and feel (October 2026 redesign)
 Warm dark palette with one amber accent, set as tokens in `v2/frontend/src/styles/tokens.css`

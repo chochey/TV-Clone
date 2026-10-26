@@ -66,6 +66,7 @@
       <input bind:value={q} aria-label="Search OMDb" placeholder="Another spelling, or an IMDb link" disabled={busy} />
       <button class="ghost" type="submit" disabled={busy || loading}>Search</button>
     </form>
+    <p class="tip">Know the {data?.kind === 'series' ? 'series' : 'film'} on IMDb? Paste its link here (imdb.com/title/tt…) and press Search to pick it directly.</p>
     {#if problem}<p class="problem" role="alert">{problem}</p>{/if}
     {#if loading}
       <p class="message" role="status">Asking OMDb…</p>
@@ -112,6 +113,7 @@
   .current { margin: 0; color: var(--ink-soft); }
   .current em { font-style: normal; color: var(--ink-faint); }
   .search { display: flex; gap: var(--s2); }
+  .tip { margin: -6px 0 0; color: var(--ink-faint); font-size: 0.85rem; }
   .search input {
     flex: 1; min-width: 0; font: inherit; font-weight: 500; color: var(--ink); background: var(--bg);
     border: 1px solid var(--line-strong); border-radius: var(--r-sm); padding: 8px 10px;

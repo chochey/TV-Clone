@@ -263,7 +263,7 @@
                     Wrong {isShow ? 'series' : 'film'}?
                   </button>
                 {/if}
-                {#if $session?.role === 'admin' && !isAudio}
+                {#if !isAudio && ($session?.role === 'admin' || $session?.permissions?.includes('canSubtitles'))}
                   <button class="ghost" onclick={() => { showSubtitleUpload = true; }}>
                     <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M10 10.5a2 2 0 1 0 0 3M17 10.5a2 2 0 1 0 0 3"/></svg>Add subtitles
                   </button>

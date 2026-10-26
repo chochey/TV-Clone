@@ -844,7 +844,7 @@ require('./lib/routes/dashboard')(app, {
 
 // ── Subtitle upload (admin): saved as a sidecar beside the video (lib/routes/subtitle-upload.js) ──
 require('./lib/routes/subtitle-upload')(app, {
-  requireAdminSession, ensureLibrary, scanLibrary, fileFor: id => fileIndex[id],
+  requirePermission, ensureLibrary, scanLibrary, fileFor: id => fileIndex[id],
   // Raw body for this route only; the handler enforces the 2 MB limit with a clear message.
   textBody: express.raw({ type: () => true, limit: '3mb' }),
   // A scan already running may have read the folder before the file existed.

@@ -102,6 +102,17 @@ test('people who are not admins do not see the button', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Add subtitles' })).toHaveCount(0);
 });
 
+test('the Add subtitles permission gives a user the button, and the upload goes through', async ({ page }) => {
+  const calls = await setup(page, { role: 'user', permissions: ['canSubtitles'] });
+  await page.goto(`${origin}/title/heat`);
+  await page.getByRole('button', { name: 'Add subtitles' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Add subtitles' });
+  await dialog.getByLabel(/Subtitle file/).setInputFiles({ name: 'heat.en.srt', mimeType: 'application/x-subrip', buffer: Buffer.from(SRT) });
+  await dialog.getByRole('button', { name: 'Upload' }).click();
+  await expect(dialog.getByRole('status')).toContainText(/ready in the player|once the library finishes/, { timeout: 15000 });
+  expect(calls.uploads.map(u => u.id)).toEqual(['heat']);
+});
+
 test('a person with the Save files permission gets a Download link on a film; others do not', async ({ page }) => {
   await setup(page, { role: 'user', permissions: ['canSaveMedia'] });
   await page.goto(`${origin}/title/heat`);

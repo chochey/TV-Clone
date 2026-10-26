@@ -16,6 +16,8 @@
     { key: 'canRestart', label: 'Restart server', desc: 'Restart the media server & organizer' },
     { key: 'canSaveMedia', label: 'Save files', desc: 'Download the original film, episode or audiobook file' },
     { key: 'canFixMatch', label: 'Fix film details', desc: 'Correct a film or series matched to the wrong title ("Wrong film?")' },
+    { key: 'canSubtitles', label: 'Add subtitles', desc: 'Upload a subtitle file to a film or episode' },
+    { key: 'canFixImports', label: 'Fix imports', desc: 'Fix & retry, title aliases and clearing leftovers on the Organizer page (needs Organizer)' },
   ];
   const AVATARS = ['#00a4dc', '#e8734d', '#7ed491', '#c58af9', '#f5c518', '#6db3ff'];
 

@@ -61,6 +61,7 @@ test('an admin sees what the title could be, picks the right film, and the page 
   await page.getByRole('button', { name: 'Wrong film?' }).click();
   const dialog = page.getByRole('dialog', { name: 'Wrong film?' });
   await expect(dialog).toContainText('Matched to Earth, Wind & Fire');
+  await expect(dialog).toContainText('Paste its link here (imdb.com/title/tt…)');
   await expect(dialog).toContainText('automatic');
   const rows = dialog.getByRole('listitem');
   await expect(rows).toHaveCount(2);
