@@ -12,6 +12,7 @@
   import { mergeAudioDetail, audioDetailArtwork, audioDetailDuration } from '../lib/audio-detail.js';
   import SubtitleUpload from '../lib/components/SubtitleUpload.svelte';
   import FixMatch from '../lib/components/FixMatch.svelte';
+  import EditDetails from '../lib/components/EditDetails.svelte';
   import { collections, loadCollections, collectionsOf } from '../lib/collections.js';
   import Row from '../lib/components/Row.svelte';
   import { EMPTY_FILTERS } from '../lib/search-filters.js';
@@ -135,6 +136,7 @@
   let showDeleteConfirm = $state(false);
   let showSubtitleUpload = $state(false);
   let showFixMatch = $state(false);
+  let showEditDetails = $state(false);
   // After the admin picks another OMDb record: this page's own copy and the library both refetch.
   async function refreshDetails() {
     try { full = await api.item(id); } catch {}
@@ -262,6 +264,10 @@
                     <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.3-1 .9-1 1.7M12 17h.01"/></svg>
                     Wrong {isShow ? 'series' : 'film'}?
                   </button>
+                  <button class="ghost" onclick={() => { showEditDetails = true; }}>
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+                    Edit details
+                  </button>
                 {/if}
                 {#if !isAudio && ($session?.role === 'admin' || $session?.permissions?.includes('canSubtitles'))}
                   <button class="ghost" onclick={() => { showSubtitleUpload = true; }}>
@@ -380,6 +386,9 @@
 
   {#if showFixMatch}
     <FixMatch item={m} onclose={() => { showFixMatch = false; }} onchanged={refreshDetails} />
+  {/if}
+  {#if showEditDetails}
+    <EditDetails item={m} onclose={() => { showEditDetails = false; }} onchanged={refreshDetails} />
   {/if}
   {#if showSubtitleUpload}
     <SubtitleUpload {title} items={isShow ? episodes : [m]} initialId={isShow ? (nextUp?.id || episodes[0]?.id) : m.id}

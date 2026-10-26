@@ -145,6 +145,11 @@ export const api = {
   metadataMatch: (id, q = '') => fetch(`/api/metadata-match/${encodeURIComponent(id)}${q ? `?q=${encodeURIComponent(q)}` : ''}`, opts('GET')).then(json),
   metadataMatchSet: (id, imdbID) => fetch(`/api/metadata-match/${encodeURIComponent(id)}`, opts('PUT', { imdbID })).then(json),
   metadataMatchClear: (id) => fetch(`/api/metadata-match/${encodeURIComponent(id)}`, opts('DELETE')).then(json),
+  // "Edit details": hand edits that shadow OMDb's fields (admin, or Fix film details).
+  metadataOverride: (id) => fetch(`/api/metadata-override/${encodeURIComponent(id)}`, opts('GET')).then(json),
+  metadataOverrideSave: (id, fields) => fetch(`/api/metadata-override/${encodeURIComponent(id)}`, opts('PUT', fields)).then(json),
+  metadataOverrideClear: (id) => fetch(`/api/metadata-override/${encodeURIComponent(id)}`, opts('DELETE')).then(json),
+  metadataOverrideClearField: (id, field) => fetch(`/api/metadata-override/${encodeURIComponent(id)}/${encodeURIComponent(field)}`, opts('DELETE')).then(json),
 
   // Watch later: the profile's save-for-later list, an array of item ids in saved order.
   watchlist: () => fetch('/api/watchlist', opts('GET')).then(json),

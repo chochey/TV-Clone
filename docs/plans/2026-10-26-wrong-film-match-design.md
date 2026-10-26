@@ -28,5 +28,13 @@ periodic posterless re-check asks OMDb by number and picks one up later.
 - `v2/frontend/src/lib/components/FixMatch.svelte`, opened from `Detail.svelte`; after a change the
   page refetches the item and the library.
 
+## Added the same day: Edit details
+OMDb's record for *The Weight* turned out to be stale (director from an earlier attachment, no poster,
+no rating) while IMDb is current, and TMDb is not an option for this user. **Edit details** (same
+permission) edits description, director, cast, genres, age rating, IMDb rating, runtime and a poster
+link by hand. Only changed fields become overrides (`/api/metadata-override/:id`, now behind the
+"Fix film details" permission); a poster link is downloaded by the server and kept under the item's
+own name. "Use automatic details" clears them.
+
 ## Not included
-Editing single fields by hand; poster upload or poster links.
+Poster upload from a file.

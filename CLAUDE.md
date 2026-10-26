@@ -224,8 +224,14 @@ overwritten since it is named after the title), `DELETE` goes back (`unpinMatch`
 `_automatic`). `fetchOmdbData` refreshes a `_pinned` record by number, never by name, and for a record
 that is neither pinned nor `_automatic` honours the organizer's Fix & retry pin (`pinnedIdFor` →
 `organizer-tools.pinnedImdbId` over the alias file), so one pin serves both sides. The page keeps the
-file's year. Design: docs/plans/2026-10-26-wrong-film-match-design.md. Not included: per-field edits
-(the older `/api/metadata-override` API still exists, without a screen) and poster uploads.
+file's year. Design: docs/plans/2026-10-26-wrong-film-match-design.md. **Edit details** (same permission,
+`lib/components/EditDetails.svelte`) is the hand fix for a stale OMDb record (The Weight: wrong director,
+no poster, while IMDb itself is current; TMDb was tried before and did not work for the user): description,
+director, cast, genres, age rating, IMDb rating, runtime and a poster link. Only changed fields are saved
+as overrides (`/api/metadata-override/:id`), so untouched ones keep following OMDb; a poster given as a
+web link is downloaded by `omdb.savePosterFrom` (http(s) only, must answer `image/*`, 8 MB cap) to
+`custom:<itemId>` in the poster dir, its own file that OMDb refreshes never overwrite; the poster route
+serves PNG/WebP/GIF by their bytes. "Use automatic details" clears the item's overrides.
 
 ### Subtitle variants and grouped review cards (October 2026)
 Two subtitles of one language in a release ("English (SDH)" and "English (forced)", "Español (España)"
