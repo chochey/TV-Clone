@@ -103,10 +103,12 @@
     fixBusy[entry.id] = true;
     let aliasSaved = false;
     try {
+      // The year ties an IMDb number to this release only (the server ignores it for a title).
       await api.organizerAliasSave({
         from: entry.title,
         to,
         type: entry.type === 'show' ? 'series' : 'movie',
+        year: entry.year,
       });
       aliasSaved = true;
       if (closed) return;
@@ -300,7 +302,7 @@
           {:else}
             <div class="rfix">
               <input
-                placeholder="Correct title (as OMDb knows it)"
+                placeholder="Correct title (as OMDb knows it), or its IMDb link"
                 bind:value={fixTo[e.id]}
                 onkeydown={(ev) => ev.key === 'Enter' && saveFix(e)}
               />
@@ -368,7 +370,7 @@
           {#each fq.aliases as a (a.id)}
             <div class="hrow">
               <span class="rtype">{a.type}</span>
-              <span class="rtitle">{a.from} → {a.to}</span>
+              <span class="rtitle">{a.from}{a.year ? ` (${a.year})` : ''} → {a.to}</span>
               <button class="rdel" title="Remove alias" onclick={() => removeAlias(a.id)}>✕</button>
             </div>
           {/each}

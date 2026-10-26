@@ -196,6 +196,15 @@ every library FILE and must not be used for that. The page shows the feed by day
 All / Imports / Problems / Organizer (the old `moves`/`errors`/`scans` names still work), search, and
 the raw log behind a toggle, scrolled to the newest end.
 
+### Fix & retry with an IMDb number (October 2026)
+Some films are in OMDb under a stale placeholder: The Weight (2026) is only tt10794054, Year 2020, no cast,
+so every title search missed it or rejected it as six years off (the year rule allows +-1). Fix & retry
+accepts an IMDb link or number: `upsertAlias` (lib/organizer-tools.js) stores `to: 'tt...'` plus the
+release `year`, and the organizer's `_pinned_match` looks it up with `i=` before any title search or the
+no-match cache, skipping the similarity/year checks (a person chose it). When OMDb's year is more than a
+year from the release's, the release's year names the folder. A pinned alias with a year applies only to
+releases of that year; `get_alias_variations` never sends an IMDb number as a title. Works for series too.
+
 ### Subtitle variants and grouped review cards (October 2026)
 Two subtitles of one language in a release ("English (SDH)" and "English (forced)", "Español (España)"
 and "(Latinoamérica)", "中文（简体）" and "（繁體）") used to plan to one name, so the organizer left both

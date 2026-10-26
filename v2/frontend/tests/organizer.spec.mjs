@@ -145,3 +145,50 @@ test('review notes about files of one release are one card with one retry', asyn
   await expect.poll(() => retries).toEqual(['r1']);
   await expect(review.getByText(/Retry queued/).first()).toBeVisible();
 });
+
+// OMDb lists The Weight (2026) only as a 2020 placeholder, so no title finds it; its IMDb link does.
+test('Fix & retry takes an IMDb link and sends the release year with it', async ({ page }) => {
+  const saved = [];
+  const queue = [{ id: 'w', manualReview: false, type: 'movie', title: 'The Weight', year: 2026, source: 'The Weight 2026 1080p WEB-DL HEVC x265 5.1 BONE.mkv',
+    reason: 'No confident OMDb match', count: 2, lastSeen: Date.now() - 60000, stillPresent: true, resolved: false, suggestedAlias: '' }];
+  let aliases = [];
+  await page.route('**/*', route => route.abort());
+  await page.route(`${origin}/**`, async route => {
+    const requested = new URL(route.request().url()).pathname;
+    const file = requested.startsWith('/assets/') ? path.join(dist, requested) : path.join(dist, 'index.html');
+    let body = await fs.readFile(file);
+    if (file.endsWith('index.html')) body = body.toString().replace(/<link[^>]+https:\/\/fonts\.(?:googleapis|gstatic)\.com[^>]*>/g, '');
+    return route.fulfill({ body, contentType: file.endsWith('.js') ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : 'text/html' });
+  });
+  await page.route('**/api/**', async route => {
+    const pathname = new URL(route.request().url()).pathname;
+    if (pathname === '/api/events') return route.fulfill({ status: 204 });
+    if (pathname === '/api/organizer/aliases' && route.request().method() === 'POST') {
+      const b = route.request().postDataJSON(); saved.push(b);
+      aliases = [{ id: 'p', from: b.from, to: 'tt10794054', type: b.type, year: String(b.year), createdAt: 1, updatedAt: 1 }];
+      return route.fulfill({ json: { ok: true, alias: aliases[0], aliases } });
+    }
+    if (pathname === '/api/organizer/retry') return route.fulfill({ json: { ok: true, requestId: 'req-1' } });
+    let body = {};
+    if (pathname === '/api/health') body = { ready: true };
+    else if (pathname === '/api/me') body = { loggedIn: true, role: 'admin', profileId: 'test', name: 'Test', permissions: ['canOrganizer'] };
+    else if (pathname === '/api/library') body = [];
+    else if (pathname === '/api/library/sections') body = { ok: true, sections: [] };
+    else if (pathname === '/api/organizer/status') body = { ok: true, active: true };
+    else if (pathname === '/api/organizer/logs') body = { ok: true, lines: [], total: 0, entries: [], entriesTotal: 0, meta: { lastHeartbeat: Date.now(), lastActivity: Date.now(), moves24h: 0, skips24h: 0, errors24h: 0, status: null, lastImport: null } };
+    else if (pathname === '/api/organizer/fix-queue') body = { ok: true, queue, aliases, leftovers: [], importedLeftovers: [], retries: [] };
+    else if (pathname === '/api/dismissed') body = { continueWatching: {}, recentlyAdded: {} };
+    else if (pathname === '/api/watchlist') body = [];
+    else if (pathname === '/api/notifications') body = { ok: true, notifications: [] };
+    else if (pathname === '/api/collections') body = { ok: true, collections: [] };
+    return route.fulfill({ json: body });
+  });
+  await page.goto(`${origin}/organizer`);
+  const review = page.locator('section.review');
+  const box = review.getByPlaceholder(/IMDb/);
+  await box.fill('https://www.imdb.com/title/tt10794054/');
+  await review.getByRole('button', { name: 'Fix & retry' }).click();
+  await expect.poll(() => saved).toEqual([{ from: 'The Weight', to: 'https://www.imdb.com/title/tt10794054/', type: 'movie', year: 2026 }]);
+  await review.getByText(/1 title alias/).click();
+  await expect(review.getByText('The Weight (2026) → tt10794054')).toBeVisible();
+});

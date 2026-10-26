@@ -324,29 +324,76 @@ def infer_missing_movie_year(movie: dict, title: str, year: str | None) -> str |
     return year
 
 
-def get_alias_variations(title: str, media_type: str) -> list[str]:
-    """Read local alias rules written by TV-Clone and return matching OMDb titles."""
+IMDB_ID = re.compile(r"tt\d{7,10}")
+
+
+def _matching_aliases(title: str, media_type: str) -> list[dict]:
+    """Local alias rules written by TV-Clone ("Fix & retry") for this title and media type."""
     alias_file = Path(os.environ.get("ORGANIZER_ALIAS_FILE") or Path(__file__).with_name("organizer_aliases.json"))
     try:
         raw = json.loads(alias_file.read_text())
     except (OSError, json.JSONDecodeError):
         return []
-
     aliases = raw if isinstance(raw, list) else raw.get("aliases", [])
-    results = []
     normalized_title = title.lower().strip()
-    for alias in aliases:
-        if not isinstance(alias, dict):
-            continue
-        alias_type = alias.get("type", "all")
-        if alias_type not in ("all", media_type):
-            continue
-        if str(alias.get("from", "")).lower().strip() != normalized_title:
-            continue
+    return [alias for alias in aliases if isinstance(alias, dict)
+            and alias.get("type", "all") in ("all", media_type)
+            and str(alias.get("from", "")).lower().strip() == normalized_title]
+
+
+def get_alias_variations(title: str, media_type: str) -> list[str]:
+    """Read local alias rules written by TV-Clone and return matching OMDb titles (IMDb numbers are
+    not titles; get_pinned_imdb_id reads those)."""
+    results = []
+    for alias in _matching_aliases(title, media_type):
         target = str(alias.get("to", "")).strip()
-        if target and target not in results:
+        if target and not IMDB_ID.fullmatch(target) and target not in results:
             results.append(target)
     return results
+
+
+def get_pinned_imdb_id(title: str, year: str | None, media_type: str) -> str | None:
+    """The IMDb number someone chose for this title in Fix & retry. An alias that records a year
+    applies only to releases of that year, so another film of the same name is still searched."""
+    for alias in _matching_aliases(title, media_type):
+        target = str(alias.get("to", "")).strip()
+        alias_year = str(alias.get("year") or "").strip()
+        if IMDB_ID.fullmatch(target) and (not alias_year or alias_year == str(year or "")):
+            return target
+    return None
+
+
+def query_omdb_by_id(imdb_id: str, media_type: str) -> dict | None:
+    """One lookup by IMDb number; None unless OMDb has it as the expected type."""
+    data = _omdb_get({"apikey": config.OMDB_API_KEY, "i": imdb_id})
+    if data.get("Response") != "True" or str(data.get("Type", "")).lower() != media_type:
+        log.warning(f"  OMDb has no {media_type} with the IMDb number {imdb_id}")
+        return None
+    return {
+        "title": data.get("Title"),
+        "year": str(data.get("Year", "")).split("–")[0][:4],
+        "type": data.get("Type"),
+        "imdbID": data.get("imdbID"),
+        "runtime": data.get("Runtime"),
+    }
+
+
+def _pinned_match(title: str, year: str | None, media_type: str) -> dict | None:
+    """A person chose the exact title, so no similarity or year rule applies. When OMDb's year is more
+    than a year from the release's, OMDb still holds a placeholder (The Weight, 2026: listed as 2020
+    since its announcement) and the release's year names the folder."""
+    imdb_id = get_pinned_imdb_id(title, year, media_type)
+    if not imdb_id:
+        return None
+    result = query_omdb_by_id(imdb_id, media_type)
+    if not result:
+        log.warning(f"  The IMDb number chosen for '{title}' ({imdb_id}) did not resolve; searching by title")
+        return None
+    if year and result["year"][:4].isdigit() and abs(int(year[:4]) - int(result["year"][:4])) > 1:
+        log.warning(f"  OMDb lists {imdb_id} as {result['year']}; using the release's year {year}")
+        result["year"] = year
+    log.info(f"  Strategy: IMDb number chosen in Fix & retry ({imdb_id})")
+    return result
 
 
 def get_title_variations(title: str) -> list[str]:
@@ -659,6 +706,9 @@ def query_omdb(title: str, year: str | None = None) -> dict | None:
     Each match is validated with is_good_match() before being accepted.
     Results are cached to avoid re-querying the same titles in watch mode.
     """
+    pinned = _pinned_match(title, year, "movie")
+    if pinned:
+        return pinned
     cache_key = (title.lower().strip(), year)
     cached_time = _omdb_no_match_cache.get(cache_key)
     if cached_time and (time.time() - cached_time) < _OMDB_CACHE_TTL:
@@ -993,6 +1043,9 @@ def query_omdb_series(title: str, year: str | None = None) -> dict | None:
     local = existing_series(title, year, config.TV_DEST_DIRS)
     if local:
         return _with_omdb_id(local)
+    pinned = _pinned_match(title, year, "series")
+    if pinned:
+        return pinned
     cache_key = (f"series:{title.lower().strip()}", year)
     cached_time = _omdb_no_match_cache.get(cache_key)
     if cached_time and (time.time() - cached_time) < _OMDB_CACHE_TTL:
