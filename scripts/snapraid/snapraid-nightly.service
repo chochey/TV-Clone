@@ -1,0 +1,13 @@
+[Unit]
+Description=ChocheyTV: SnapRAID parity sync for the media pool
+After=local-fs.target
+RequiresMountsFor=/media/blue/Parity1 /media/blue/Media6TB
+
+[Service]
+Type=oneshot
+User=root
+Nice=10
+IOSchedulingClass=idle
+ExecStart=/usr/local/sbin/snapraid-nightly.sh
+# The first sync of 11 TB over USB takes a day or more.
+TimeoutStartSec=3d
