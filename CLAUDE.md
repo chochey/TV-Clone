@@ -204,6 +204,14 @@ release `year`, and the organizer's `_pinned_match` looks it up with `i=` before
 no-match cache, skipping the similarity/year checks (a person chose it). When OMDb's year is more than a
 year from the release's, the release's year names the folder. A pinned alias with a year applies only to
 releases of that year; `get_alias_variations` never sends an IMDb number as a title. Works for series too.
+The box is pre-filled with the suggested title, and the first real attempt re-saved that instead of the
+pasted link, so: a pasted IMDb link replaces the box's content (`onpaste` in Organizer.svelte) and the
+server takes the number from anywhere in the text. A title typed later for the same release replaces its
+pin (the organizer consults pins first, so the old pin would otherwise win); the page suggests a pin only
+for its own year. A number that does not resolve is remembered like a no-match (Share is scanned every
+30 s; one typo must not spend the 1,000/day OMDb allowance), and the alias file is re-read only when its
+mtime changes. The organizer re-examines Share only after a retry packet or a restart, so a pin saved by
+hand takes effect at the next restart (deploys restart it).
 
 ### Subtitle variants and grouped review cards (October 2026)
 Two subtitles of one language in a release ("English (SDH)" and "English (forced)", "Español (España)"
@@ -257,7 +265,12 @@ is stopped at once), its web UI answers, the app's `download-readiness.json` adv
 poll that reached qBittorrent), the tunnel has HA connections. A failed check stops the group, puts its
 settings folder back (copied before the switch to `~/.local/state/chochey-container-updates`, 0700; the
 replaced folder is kept as `<dir>.replaced-<time>`), re-tags the old image and recreates; if the old one
-fails too the run is `failed` (and a leaking qBittorrent stays stopped). Settings matter: on the first
+fails too the run is `failed` (and a leaking qBittorrent stays stopped); if the settings cannot be put
+back the old image is still started and `SETTINGS_RESTORE_FAILED` is appended. The two quiet waits share
+one 12 h budget (the unit's `TimeoutStartSec` is 14 h), the home IP for the leak comparison is read right
+before the switch, and backing out after the pull also removes the downloaded image. The Dashboard card
+keys on `at`, not `error`: a run that failed is a result to show, not an outage of the card. Settings
+matter: on the first
 run (2026-10-26) qBittorrent 5.3.0 rewrote its config, and 5.1.4 then came back with a temporary password,
 so a rollback of the image alone broke the downloader. That run also found qBittorrent 5.2+ names the
 session cookie `QBT_SID_<port>` and answers a good login with 204; `lib/qbt.js` handles both. The

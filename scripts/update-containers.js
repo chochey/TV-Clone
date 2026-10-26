@@ -9,6 +9,7 @@
 const fs = require('fs');
 const path = require('path');
 const { execFile } = require('child_process');
+const { loadJSON, saveJSONStrict } = require('../lib/json-store');
 const createContainerUpdates = require('../lib/container-updates');
 const { quietCheck, createSettingsStore } = createContainerUpdates;
 
@@ -28,13 +29,9 @@ const run = (cmd, args, { cwd, timeout = 120_000 } = {}) => new Promise(resolve 
     resolve({ code: error ? (typeof error.code === 'number' ? error.code : -1) : 0, stdout: String(stdout), stderr: String(stderr || error?.message || '') });
   });
 });
-const readJSON = async f => JSON.parse(await fs.promises.readFile(f, 'utf8'));
-async function writeStatus(status) {
-  const tmp = `${statusFile}.${process.pid}.tmp`;
-  await fs.promises.writeFile(tmp, JSON.stringify(status, null, 2) + '\n', { mode: 0o644 });
-  await fs.promises.chmod(tmp, 0o644);
-  await fs.promises.rename(tmp, statusFile);
-}
+const readJSON = async f => { const v = loadJSON(f, null); if (v === null) throw new Error(`cannot read ${f}`); return v; };
+// The app (another user) reads the result, hence world-readable.
+async function writeStatus(status) { await saveJSONStrict(statusFile, status); await fs.promises.chmod(statusFile, 0o644); }
 const log = line => console.log(`${new Date().toISOString()} ${line}`);
 
 const updater = createContainerUpdates({

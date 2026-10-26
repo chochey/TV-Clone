@@ -327,17 +327,32 @@ def infer_missing_movie_year(movie: dict, title: str, year: str | None) -> str |
 IMDB_ID = re.compile(r"tt\d{7,10}")
 
 
-def _matching_aliases(title: str, media_type: str) -> list[dict]:
-    """Local alias rules written by TV-Clone ("Fix & retry") for this title and media type."""
+_alias_cache: dict = {"path": None, "mtime": None, "rows": []}
+
+
+def _load_aliases() -> list[dict]:
+    """The alias file's rows, re-read only when the file changes (it is consulted on every lookup)."""
     alias_file = Path(os.environ.get("ORGANIZER_ALIAS_FILE") or Path(__file__).with_name("organizer_aliases.json"))
+    try:
+        mtime = alias_file.stat().st_mtime_ns
+    except OSError:
+        return []
+    if _alias_cache["path"] == alias_file and _alias_cache["mtime"] == mtime:
+        return _alias_cache["rows"]
     try:
         raw = json.loads(alias_file.read_text())
     except (OSError, json.JSONDecodeError):
         return []
-    aliases = raw if isinstance(raw, list) else raw.get("aliases", [])
+    rows = raw if isinstance(raw, list) else raw.get("aliases", [])
+    _alias_cache.update(path=alias_file, mtime=mtime, rows=[row for row in rows if isinstance(row, dict)])
+    return _alias_cache["rows"]
+
+
+def _matching_aliases(title: str, media_type: str) -> list[dict]:
+    """Local alias rules written by TV-Clone ("Fix & retry") for this title and media type."""
     normalized_title = title.lower().strip()
-    return [alias for alias in aliases if isinstance(alias, dict)
-            and alias.get("type", "all") in ("all", media_type)
+    return [alias for alias in _load_aliases()
+            if alias.get("type", "all") in ("all", media_type)
             and str(alias.get("from", "")).lower().strip() == normalized_title]
 
 
@@ -385,9 +400,16 @@ def _pinned_match(title: str, year: str | None, media_type: str) -> dict | None:
     imdb_id = get_pinned_imdb_id(title, year, media_type)
     if not imdb_id:
         return None
+    # A number that does not resolve is remembered like any no-match: Share is scanned every 30 s,
+    # and one mistyped number must not spend the day's OMDb allowance.
+    cache_key = (f"imdb:{imdb_id}", media_type)
+    cached_time = _omdb_no_match_cache.get(cache_key)
+    if cached_time and (time.time() - cached_time) < _OMDB_CACHE_TTL:
+        return None
     result = query_omdb_by_id(imdb_id, media_type)
     if not result:
         log.warning(f"  The IMDb number chosen for '{title}' ({imdb_id}) did not resolve; searching by title")
+        _omdb_no_match_cache[cache_key] = time.time()
         return None
     if year and result["year"][:4].isdigit() and abs(int(year[:4]) - int(result["year"][:4])) > 1:
         log.warning(f"  OMDb lists {imdb_id} as {result['year']}; using the release's year {year}")

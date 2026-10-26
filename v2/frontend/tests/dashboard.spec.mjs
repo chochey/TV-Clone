@@ -193,6 +193,15 @@ test('the Containers card shows how old each container is and how the weekly upd
   await expect(card).toContainText('265 days old');
   await expect(card).toContainText('ChocheyTV could not reach qBittorrent');
   await expect(card).toContainText('has not reported for 9 days');
+  // A run that failed outright (the job's own `error` field is set) is a result, not an outage of the card.
+  calls.containers = { at: Date.now() - 3600000, ok: false, result: 'failed', reason: '', error: 'STILL_BROKEN', hoursAgo: 1, late: false, containers: [
+    { name: 'gluetun', image: 'qmcgaw/gluetun:v3', builtAt: Date.now() - 250 * DAY, ageDays: 250, old: true, updated: false, rolledBack: true, previousBuiltAt: null, healthy: false, error: 'VPN_LEAK; previous version also failed: VPN_LEAK' },
+  ] };
+  await page.reload();
+  await expect(card).toContainText('Failed');
+  await expect(card).toContainText('downloads went out without the VPN');
+  await expect(card).toContainText('old version failed too');
+  await expect(card).not.toContainText('Unavailable');
   calls.containers = { missing: true };
   await page.reload();
   await expect(card).toContainText('No record yet');

@@ -85,6 +85,27 @@ class PinnedImdbTests(OrganizerTestCase):
         self.assertEqual((found["title"], found["imdbID"]), ("SAS: Rogue Heroes", "tt7826276"))
         self.assertEqual(self.asked, [{"i": "tt7826276"}])
 
+    def test_a_number_that_does_not_resolve_is_asked_about_once_not_every_poll(self):
+        self.aliases({"id": "a", "from": "The Weight", "to": "tt0000001", "type": "movie", "year": "2026"})
+        with self.omdb({"tt0000001": {**WEIGHT, "Type": "series", "imdbID": "tt0000001"}}):
+            for _ in range(3):
+                self.assertIsNone(m.query_omdb("The Weight", "2026"))
+        self.assertEqual(sum(1 for q in self.asked if "i" in q), 1)
+
+    def test_the_alias_file_is_read_again_only_when_it_changes(self):
+        self.aliases({"id": "a", "from": "The Weight", "to": "The Weight of Water", "type": "movie"})
+        from pathlib import Path
+        real = Path.read_text
+        with patch.object(m.Path, "read_text", autospec=True, side_effect=real) as reads:
+            m.get_alias_variations("The Weight", "movie")
+            m.get_alias_variations("The Weight", "movie")
+            m.get_pinned_imdb_id("The Weight", "2026", "movie")
+            self.assertEqual(reads.call_count, 1)
+            self.aliases({"id": "a", "from": "The Weight", "to": "tt10794054", "type": "movie", "year": "2026"})
+            os.utime(self.alias_file, (os.stat(self.alias_file).st_mtime + 5,) * 2)
+            self.assertEqual(m.get_pinned_imdb_id("The Weight", "2026", "movie"), "tt10794054")
+            self.assertEqual(reads.call_count, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

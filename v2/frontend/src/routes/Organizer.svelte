@@ -305,6 +305,7 @@
                 placeholder="Correct title (as OMDb knows it), or its IMDb link"
                 bind:value={fixTo[e.id]}
                 onkeydown={(ev) => ev.key === 'Enter' && saveFix(e)}
+                onpaste={(ev) => { const t = (ev.clipboardData?.getData('text') || '').trim(); if (/imdb\.com\/title\/tt\d+|^tt\d{7,10}$/i.test(t)) { ev.preventDefault(); fixTo[e.id] = t; } }}
               />
               <button class="rsave" onclick={() => saveFix(e)} disabled={fixBusy[e.id] || retryPending(e.id) || !(fixTo[e.id] || '').trim()}>
                 {fixBusy[e.id] ? 'Saving…' : retryPending(e.id) ? 'Retry queued' : 'Fix & retry'}

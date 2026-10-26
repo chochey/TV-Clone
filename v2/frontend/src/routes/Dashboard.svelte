@@ -127,11 +127,13 @@
     TUNNEL_NOT_CONNECTED: 'the tunnel did not reconnect', RECREATE_FAILED: 'the new version would not start',
     NOT_RUNNING: 'it did not keep running',
     SETTINGS_COPY_FAILED: 'its settings could not be copied first, so it was not switched',
+    SETTINGS_RESTORE_FAILED: 'its settings could not be put back (the copy is kept)',
   };
-  const updateProblem = error => {
-    const [first, again] = String(error).split('; previous version also failed: ');
-    return (UPDATE_PROBLEM[first] || first) + (again ? `, and the old version failed too (${UPDATE_PROBLEM[again] || again})` : '');
-  };
+  // "CODE; SETTINGS_RESTORE_FAILED; previous version also failed: CODE" -> plain words.
+  const updateProblem = error => String(error).split('; ').map(part => {
+    const again = part.match(/^previous version also failed: (.*)$/);
+    return again ? `and the old version failed too (${UPDATE_PROBLEM[again[1]] || again[1]})` : (UPDATE_PROBLEM[part] || part);
+  }).join(', ');
   const containerAge = days => days === null ? 'age unknown' : days === 0 ? 'built today' : `${days} day${days === 1 ? '' : 's'} old`;
   function checkState(c) {
     if (Array.isArray(c)) {
@@ -276,7 +278,7 @@
       <h3 class="meta">Containers</h3>
       {#if jobs?.containers?.missing}
         <div class="dim">No record yet. The weekly update writes one on Tuesday mornings.</div>
-      {:else if jobs?.containers && !jobs.containers.error && jobs.containers.at}
+      {:else if jobs?.containers?.at}
         {@const k = jobs.containers}
         {@const [label, tone] = UPDATE_RESULT[k.result] || [k.result, 'dim']}
         <div class="kv"><span>Last update</span><strong class={tone}>{label}</strong> <em>{backupAge(k.hoursAgo)}</em></div>
