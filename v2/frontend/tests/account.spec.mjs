@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 const dist = fileURLToPath(new URL('../dist/', import.meta.url));
 const origin = 'http://tvclone.test';
 
-async function setup(page, { role = 'user' } = {}) {
+async function setup(page, { role = 'user', permissions = [] } = {}) {
   const calls = { passwordChanges: [], created: [] };
   await page.route('**/*', route => route.abort());
   await page.route(`${origin}/**`, async route => {
@@ -22,7 +22,7 @@ async function setup(page, { role = 'user' } = {}) {
     if (pathname === '/api/events') return route.fulfill({ status: 204 });
     let body = {};
     if (pathname === '/api/health') body = { ready: true };
-    else if (pathname === '/api/me' && method === 'GET') body = { loggedIn: true, role, profileId: 'kid1', name: 'Kid', permissions: [] };
+    else if (pathname === '/api/me' && method === 'GET') body = { loggedIn: true, role, profileId: 'kid1', name: 'Kid', permissions };
     else if (pathname === '/api/me/password') {
       const sent = route.request().postDataJSON(); calls.passwordChanges.push(sent);
       if (sent.current !== 'kidpw') return route.fulfill({ status: 403, json: { error: 'Current password is wrong' } });
@@ -72,6 +72,9 @@ test('the Users page needs a password to create someone', async ({ page }) => {
   await expect(page.getByText('Fix film details', { exact: true })).toBeVisible();
   await expect(page.getByText('Add subtitles', { exact: true })).toBeVisible();
   await expect(page.getByText('Fix imports', { exact: true })).toBeVisible();
+  await expect(page.getByText('Delete files', { exact: true })).toBeVisible();
+  await expect(page.getByText('Conversion', { exact: true })).toBeVisible();
+  await expect(page.getByText('Library health', { exact: true })).toBeVisible();
   await expect(page.getByText('Download the original film, episode or audiobook file')).toBeVisible();
   await page.getByLabel('Display name').fill('Friend');
   const save = page.getByRole('button', { name: /^(Create|Save)/ });
@@ -81,4 +84,20 @@ test('the Users page needs a password to create someone', async ({ page }) => {
   await save.click();
   await expect.poll(() => calls.created.length).toBe(1);
   expect(calls.created[0].password).toBe('friendpw');
+});
+
+// The Conversion and Duplicates pages follow their permissions in the account menu.
+test('a user with the Conversion and Library health permissions gets those pages in the menu; a plain user does not', async ({ page }) => {
+  await setup(page, { permissions: ['canConversion', 'canLibraryHealth'] });
+  await page.goto(`${origin}/`);
+  await page.getByRole('button', { name: 'Account menu' }).click();
+  await expect(page.getByRole('button', { name: 'Conversion' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Duplicates' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Users' })).toHaveCount(0);
+  await setup(page);
+  await page.goto(`${origin}/`);
+  await page.getByRole('button', { name: 'Account menu' }).click();
+  await expect(page.getByRole('button', { name: 'Change password' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Conversion' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Duplicates' })).toHaveCount(0);
 });

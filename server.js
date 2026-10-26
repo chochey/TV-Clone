@@ -807,7 +807,7 @@ const { backgroundDetectIntros } = require('./lib/routes/skip-segments')(app, {
 
 // ── Delete media from server (admin only, lib/routes/media-delete.js) ──
 require('./lib/routes/media-delete')(app, {
-  requireAdminSession, fileIndex: () => fileIndex, posterIndex: () => posterIndex,
+  requirePermission, fileIndex: () => fileIndex, posterIndex: () => posterIndex,
   findItem: id => (libraryCache || []).find(i => i.id === id),
   removeFromLibrary: id => { if (libraryCache) libraryCache = libraryCache.filter(i => i.id !== id); },
   probeCaches: [probeCache, pixFmtCache, audioProbeCache, audioTracksCache, subProbeCache, heightCache], markDirty,
@@ -939,18 +939,18 @@ require('./lib/routes/admin-status')(app, {
 // plan endpoint reports aggregate counts/bytes per tier only; it never
 // returns individual file paths, matching how /api/library already strips
 // `_filePath` before anything reaches a client.
-app.get('/api/conversion/config', requireAdminSession, (_req, res) => {
+app.get('/api/conversion/config', requirePermission('canConversion'), (_req, res) => {
   res.json({ ok: true, config: conversionConfig.get() });
 });
 
-app.put('/api/conversion/config', requireAdminSession, (req, res) => {
+app.put('/api/conversion/config', requirePermission('canConversion'), (req, res) => {
   const updated = conversionConfig.update(req.body);
   conversionQueue.configurationChanged();
   res.json({ ok: true, config: updated });
 });
 
 const conversionStorage = require('./lib/conversion-storage')();
-app.get('/api/conversion/plan', requireAdminSession, (req, res) => {
+app.get('/api/conversion/plan', requirePermission('canConversion'), (req, res) => {
   const includeImageSubs = req.query.includeImageSubs === '1' || req.query.includeImageSubs === 'true';
   const lib = scanLibrary();
   const seenFiles = new Set();
@@ -1154,31 +1154,31 @@ function publicRepairStatus(status) {
     candidate:(item.previewReady || item.status === 'ready' && item.candidate?.verified) ? {verified:true,previewUrl:`/api/conversion/repair/preview/${item.reviewId}`} : null});
   return {ok:true,...row(status),entries:(status.entries || []).map(row)};
 }
-app.get('/api/conversion/review', requireAdminSession, async (req,res) => {
+app.get('/api/conversion/review', requirePermission('canConversion'), async (req,res) => {
   try {res.json(await conversionReview.snapshot({offset:Number(req.query.offset) || 0,limit:100}));}
   catch(error) {res.status(503).json({ok:false,error:error.message});}
 });
-app.post('/api/conversion/review/retry', requireAdminSession, ensureLibrary, async (req,res) => {
+app.post('/api/conversion/review/retry', requirePermission('canConversion'), ensureLibrary, async (req,res) => {
   const result = await conversionControl(()=>conversionQueue.retryReview(req.body?.id));
   res.status(result.ok ? 200 : 409).json(result.ok ? {...result,...conversionQueue.snapshot()} : result);
 });
-app.get('/api/conversion/repair/status', requireAdminSession, async (_req,res) => {
+app.get('/api/conversion/repair/status', requirePermission('canConversion'), async (_req,res) => {
   try {res.json(publicRepairStatus(await conversionRepair.snapshot()));}
   catch(error) {res.status(503).json({ok:false,error:error.message});}
 });
-app.post('/api/conversion/repair/start', requireAdminSession, ensureLibrary, async (req,res) => {
+app.post('/api/conversion/repair/start', requirePermission('canConversion'), ensureLibrary, async (req,res) => {
   const result = await conversionControl(()=>conversionRepair.start(req.body?.id));
   res.status(result.ok ? 200 : 409).json(result);
 });
-app.post('/api/conversion/repair/stop', requireAdminSession, async (_req,res) => {
+app.post('/api/conversion/repair/stop', requirePermission('canConversion'), async (_req,res) => {
   try {const result = await conversionRepair.stop();res.status(result.ok ? 200 : 409).json(result);}
   catch(error) {res.status(409).json({ok:false,error:error.message});}
 });
-app.post('/api/conversion/repair/apply', requireAdminSession, ensureLibrary, async (req,res) => {
+app.post('/api/conversion/repair/apply', requirePermission('canConversion'), ensureLibrary, async (req,res) => {
   const result = await conversionControl(()=>conversionRepair.apply(req.body?.id,conversionRepairInstaller.install));
   res.status(result.ok ? 200 : 409).json(result);
 });
-app.get('/api/conversion/repair/preview/:id', requireAdminSession, async (req,res) => {
+app.get('/api/conversion/repair/preview/:id', requirePermission('canConversion'), async (req,res) => {
   try {
     const candidate = await conversionRepair.preview(req.params.id);
     res.set({'Cache-Control':'private, no-store','Content-Type':'video/mp4'});
@@ -1188,13 +1188,13 @@ app.get('/api/conversion/repair/preview/:id', requireAdminSession, async (req,re
   } catch(error) {res.status(409).json({ok:false,error:error.message});}
 });
 
-app.get('/api/conversion/status', requireAdminSession, async (_req, res) => {
+app.get('/api/conversion/status', requirePermission('canConversion'), async (_req, res) => {
   const status = conversionQueue.snapshot();
   try { res.json({ ok: true, ...status, storage: await conversionStorage.snapshot(status.currentPath) }); }
   catch { res.json({ ok: true, ...status, storage: { warnings: [], current: null, unavailable: true } }); }
 });
 
-app.post('/api/conversion/start', requireAdminSession, ensureLibrary, async (req, res) => {
+app.post('/api/conversion/start', requirePermission('canConversion'), ensureLibrary, async (req, res) => {
   const all = req.body?.all;
   if (Object.prototype.hasOwnProperty.call(req.body || {}, 'all') && typeof all !== 'boolean') {
     return res.status(400).json({ ok: false, error: 'all must be a boolean' });
@@ -1204,19 +1204,19 @@ app.post('/api/conversion/start', requireAdminSession, ensureLibrary, async (req
   res.json({ ok: true, ...r, ...conversionQueue.snapshot() });
 });
 
-app.post('/api/conversion/pause', requireAdminSession, async (_req, res) => {
+app.post('/api/conversion/pause', requirePermission('canConversion'), async (_req, res) => {
   const r = await conversionQueue.pause();
   if (!r.ok) return res.status(409).json({ ok: false, error: r.error });
   res.json({ ok: true, ...conversionQueue.snapshot() });
 });
 
-app.post('/api/conversion/resume', requireAdminSession, ensureLibrary, async (_req, res) => {
+app.post('/api/conversion/resume', requirePermission('canConversion'), ensureLibrary, async (_req, res) => {
   const r = await conversionControl(()=>conversionQueue.resume());
   if (!r.ok) return res.status(409).json({ ok: false, error: r.error });
   res.json({ ok: true, ...conversionQueue.snapshot() });
 });
 
-app.post('/api/conversion/stop', requireAdminSession, async (_req, res) => {
+app.post('/api/conversion/stop', requirePermission('canConversion'), async (_req, res) => {
   const r = await conversionQueue.stop();
   if (!r.ok) return res.status(409).json({ ok: false, error: r.error });
   res.json({ ok: true, ...r, ...conversionQueue.snapshot() });
@@ -1224,7 +1224,7 @@ app.post('/api/conversion/stop', requireAdminSession, async (_req, res) => {
 
 // Cleanup — delete retained originals past their keep-days. dryRun first from
 // the UI so the admin sees exactly what would go before anything is deleted.
-app.post('/api/conversion/cleanup', requireAdminSession, async (req, res) => {
+app.post('/api/conversion/cleanup', requirePermission('canConversion'), async (req, res) => {
   if (conversionQueue.status !== 'idle' || conversionControlBusy || conversionRepair.busy || conversionRepairInstaller.busy) return res.status(409).json({ok:false,error:'Stop conversion and repair before cleaning up originals'});
   const dryRun = req.body?.dryRun !== false;
   try {
@@ -1250,7 +1250,7 @@ app.post('/api/conversion/cleanup', requireAdminSession, async (req, res) => {
 
 // Retained originals — the undo window for anything already converted.
 // Listing is admin-only because it exposes real filesystem paths.
-app.get('/api/conversion/originals', requireAdminSession, async (_req, res) => {
+app.get('/api/conversion/originals', requirePermission('canConversion'), async (_req, res) => {
   try {
     const cfg = conversionConfig.get();
     const roots = config.folders.map((f) => f.path).filter(Boolean);
@@ -1265,7 +1265,7 @@ app.get('/api/conversion/originals', requireAdminSession, async (_req, res) => {
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
-app.post('/api/conversion/restore', requireAdminSession, async (req, res) => {
+app.post('/api/conversion/restore', requirePermission('canConversion'), async (req, res) => {
   if (conversionQueue.status !== 'idle' || conversionControlBusy || conversionRepair.busy || conversionRepairInstaller.busy) return res.status(409).json({ok:false,error:'Stop conversion and repair before restoring originals'});
   const retainedPath = String(req.body?.retainedPath || '');
   // Must sit inside a configured library folder AND inside a retention dir —

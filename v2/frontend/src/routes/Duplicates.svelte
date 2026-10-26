@@ -75,12 +75,14 @@
                 {#if c.largest} · <em class="best">largest copy</em>{/if}
               </span>
             </div>
-            <button
-              class="cdel" class:armed={confirming[c.id]}
-              onclick={() => del(c)} disabled={busy[c.id]}
-            >
-              {busy[c.id] ? 'Deleting…' : confirming[c.id] ? 'Click again to delete' : 'Delete'}
-            </button>
+            {#if $session?.role === 'admin' || $session?.permissions?.includes('canDelete')}
+              <button
+                class="cdel" class:armed={confirming[c.id]}
+                onclick={() => del(c)} disabled={busy[c.id]}
+              >
+                {busy[c.id] ? 'Deleting…' : confirming[c.id] ? 'Click again to delete' : 'Delete'}
+              </button>
+            {/if}
           </div>
         {/each}
       </section>

@@ -537,14 +537,14 @@
           <button onclick={() => go('/requests')}>
             Requests {#if pendingCount > 0}<span class="badge inline">{pendingCount}</span>{/if}
           </button>
-          {#if isAdmin || can('canDownload') || can('canLogs') || can('canDashboard') || can('canOrganizer')}
+          {#if isAdmin || can('canDownload') || can('canLogs') || can('canDashboard') || can('canOrganizer') || can('canConversion') || can('canLibraryHealth')}
             <div class="divider"></div>
             <div class="who meta">Settings</div>
             {#if can('canDashboard')}<button onclick={() => go('/system')}>Dashboard</button>{/if}
             {#if isAdmin}<button onclick={() => go('/libraries')}>Libraries</button>{/if}
             {#if isAdmin}<button onclick={() => go('/users')}>Users</button>{/if}
-            {#if isAdmin}<button onclick={() => go('/duplicates')}>Duplicates</button>{/if}
-            {#if isAdmin}<button onclick={() => go('/conversion')}>Conversion</button>{/if}
+            {#if can('canLibraryHealth')}<button onclick={() => go('/duplicates')}>Duplicates</button>{/if}
+            {#if can('canConversion')}<button onclick={() => go('/conversion')}>Conversion</button>{/if}
             {#if can('canDownload')}<button onclick={() => go('/episodes')}>Episodes</button>{/if}
             {#if can('canDownload')}<button onclick={() => go('/downloads')}>Downloads</button>{/if}
             {#if can('canOrganizer')}<button onclick={() => go('/organizer')}>Organizer</button>{/if}
@@ -604,9 +604,9 @@
       <Logs />
     {:else if $route.name === 'users' && isAdmin}
       <Users />
-    {:else if $route.name === 'duplicates' && isAdmin}
+    {:else if $route.name === 'duplicates' && can('canLibraryHealth')}
       <Duplicates />
-    {:else if $route.name === 'conversion' && isAdmin}
+    {:else if $route.name === 'conversion' && can('canConversion')}
       <Conversion />
     {:else if $route.name === 'episodes' && can('canDownload')}
       <Episodes />

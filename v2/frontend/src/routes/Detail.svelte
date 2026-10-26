@@ -274,7 +274,7 @@
                     <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M10 10.5a2 2 0 1 0 0 3M17 10.5a2 2 0 1 0 0 3"/></svg>Add subtitles
                   </button>
                 {/if}
-                {#if $session?.role === 'admin'}
+                {#if $session?.role === 'admin' || $session?.permissions?.includes('canDelete')}
                   <button class="ghost danger" onclick={() => { showDeleteConfirm = true; }}>
                     <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
                     Delete

@@ -18,6 +18,9 @@
     { key: 'canFixMatch', label: 'Fix film details', desc: 'Correct a film or series matched to the wrong title ("Wrong film?"), or edit its details by hand' },
     { key: 'canSubtitles', label: 'Add subtitles', desc: 'Upload a subtitle file to a film or episode' },
     { key: 'canFixImports', label: 'Fix imports', desc: 'Fix & retry, title aliases and clearing leftovers on the Organizer page (needs Organizer)' },
+    { key: 'canDelete', label: 'Delete files', desc: 'Remove a film, episode or duplicate copy from the library and the disk' },
+    { key: 'canConversion', label: 'Conversion', desc: 'Conversion page — queue, repairs and settings' },
+    { key: 'canLibraryHealth', label: 'Library health', desc: 'Duplicates page and corrupted-file checks' },
   ];
   const AVATARS = ['#00a4dc', '#e8734d', '#7ed491', '#c58af9', '#f5c518', '#6db3ff'];
 
