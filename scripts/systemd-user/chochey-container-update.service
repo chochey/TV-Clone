@@ -1,0 +1,16 @@
+# Weekly Docker container update (scripts/update-containers.js). A user unit: blue can use Docker
+# and needs no sudo. Install: scripts/systemd-user/install.sh
+[Unit]
+Description=ChocheyTV: update the Docker containers when nothing plays or downloads
+After=network-online.target
+
+[Service]
+Type=oneshot
+Environment=PATH=/usr/local/bin:/usr/bin:/bin:/snap/bin
+Environment=DOCKER_HOST=unix:///var/run/docker.sock
+Environment=TVCLONE_DATA_DIR=/srv/chocheytv/data
+Environment=CHOCHEY_COMPOSE_DIR=/home/blue/Desktop/Repos/Docker-Media
+# Waits up to 12 hours for a quiet moment, then up to ~45 minutes to pull, switch and check.
+ExecStart=/usr/bin/node /srv/chocheytv/app/scripts/update-containers.js --wait
+TimeoutStartSec=14h
+Nice=10

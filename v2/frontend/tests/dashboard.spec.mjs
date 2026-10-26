@@ -52,7 +52,12 @@ async function setup(page, { streaming = streamingFor } = {}) {
       dataSaver: { running: null, queued: 0, copies: 4, bytes: 9.5e8 },
       libraryScan: { running: false, phase: 'idle', lastCompletedAt: Date.now() - 20 * 60000 },
       backup: calls.backup === undefined ? { at: Date.now() - 5 * 3600000, ok: true, verified: true, error: null, where: '/home/blue/repo/data_backups', fileCount: 118, bytes: 3.34e8, kept: 14, onPool: false, ageHours: 5, stale: false,
-        copy: { ok: true, onPool: true, error: null, bytes: 4.1e7, kept: 3 }, offDisk: true } : calls.backup };
+        copy: { ok: true, onPool: true, error: null, bytes: 4.1e7, kept: 3 }, offDisk: true } : calls.backup,
+      containers: calls.containers === undefined ? { at: Date.now() - 7 * 3600000, ok: true, result: 'current', reason: '', error: null, hoursAgo: 7, late: false, containers: [
+        { name: 'cloudflared', image: 'cloudflare/cloudflared:latest', builtAt: Date.now() - 0.4 * DAY, ageDays: 0, old: false, updated: false, rolledBack: false, previousBuiltAt: null, healthy: true, error: null },
+        { name: 'gluetun', image: 'qmcgaw/gluetun:v3', builtAt: Date.now() - 2.2 * DAY, ageDays: 2, old: false, updated: true, rolledBack: false, previousBuiltAt: Date.now() - 250 * DAY, healthy: true, error: null },
+        { name: 'qbittorrent', image: 'lscr.io/linuxserver/qbittorrent:latest', builtAt: Date.now() - 5.1 * DAY, ageDays: 5, old: false, updated: false, rolledBack: false, previousBuiltAt: null, healthy: true, error: null },
+      ] } : calls.containers };
     else if (pathname === '/api/dashboard/streaming') { const d = +url.searchParams.get('days'); calls.streamingDays.push(d); body = streaming(d); }
     else if (pathname === '/api/dashboard/library') body = {
       weeks: Array.from({ length: 26 }, (_, i) => ({ week: iso(today - (25 - i) * 7 * DAY), films: i % 4, episodes: (i * 3) % 11, audiobooks: i === 20 ? 2 : 0 })),
@@ -164,6 +169,31 @@ test('the Backups card shows the last verified snapshot, and warns when it is ol
   await expect(card).toContainText('NO_KEY');
   await expect(card).toContainText('Nothing verified is stored off the system disk');
   calls.backup = { missing: true };
+  await page.reload();
+  await expect(card).toContainText('No record yet');
+});
+
+test('the Containers card shows how old each container is and how the weekly update went, and warns on a rollback or a late job', async ({ page }) => {
+  const calls = await setup(page);
+  await page.goto(`${origin}/system`);
+  const card = page.locator('section.card').filter({ has: page.getByRole('heading', { name: 'Containers' }) });
+  await expect(card).toContainText('Up to date');
+  await expect(card).toContainText('7h ago');
+  await expect(card).toContainText('VPN');
+  await expect(card).toContainText('qBittorrent');
+  await expect(card).toContainText('Tunnel');
+  await expect(card).toContainText('2 days old');
+  await expect(card).toContainText('built today');
+  await expect(card.locator('.warn, .bad')).toHaveCount(0);
+  calls.containers = { at: Date.now() - 9 * DAY, ok: false, result: 'rolled-back', reason: '', error: null, hoursAgo: 216, late: true, containers: [
+    { name: 'qbittorrent', image: 'lscr.io/linuxserver/qbittorrent:latest', builtAt: Date.now() - 265 * DAY, ageDays: 265, old: true, updated: false, rolledBack: true, previousBuiltAt: null, healthy: true, error: 'APP_LOST_QBITTORRENT' },
+  ] };
+  await page.reload();
+  await expect(card).toContainText('Rolled back');
+  await expect(card).toContainText('265 days old');
+  await expect(card).toContainText('ChocheyTV could not reach qBittorrent');
+  await expect(card).toContainText('has not reported for 9 days');
+  calls.containers = { missing: true };
   await page.reload();
   await expect(card).toContainText('No record yet');
 });

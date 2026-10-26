@@ -235,6 +235,23 @@ before it is kept; `scripts/restore-encrypted-backup.js` restores one into a new
 carries `copy`, and the Backups card warns unless something verified is off the system disk
 (`offDisk`). See BACKUP_RECOVERY.md.
 
+### Container updates (October 2026)
+The Docker containers (gluetun VPN, qBittorrent, cloudflared; compose project in
+`/home/blue/Desktop/Repos/Docker-Media`) only change version when someone pulls; qBittorrent and gluetun
+were last pulled in February 2026. `chochey-container-update.timer` (a **user** unit, blue can use
+Docker without sudo; `scripts/systemd-user/install.sh`) runs `scripts/update-containers.js --wait` on
+Tuesdays around 04:30. `lib/container-updates.js`: wait (up to 12 h) until nothing was played for 30 min,
+no torrent is moving data and the app heard from qBittorrent in the last 2 min; pull; switch only
+services whose image changed (a new gluetun recreates qBittorrent too, it uses gluetun's network); then
+prove it: gluetun healthy, qBittorrent's exit IP differs from this server's (same IP = leak: qBittorrent
+is stopped at once), its web UI answers, the app's `download-readiness.json` advances (written only on a
+poll that reached qBittorrent), the tunnel has HA connections. A failed check re-tags the old image and
+recreates; if the old one fails too the run is `failed` (and a leaking qBittorrent stays stopped). The
+replaced image is kept as `<repo>:chochey-previous`; only the one it replaces is removed (no
+`docker image prune`: other projects' images live on this Docker). The result is
+`data/container-updates.json` (0644), shown on the Dashboard's "Containers" card with each image's age.
+`--status` only records versions.
+
 ### Restarting without root (October 2026)
 `sudo` and polkit stopped working from Claude's shells on 2026-10-19, so nothing there can restart a
 service. `lib/self-restart.js` lets the app restart itself: `POST /api/system/restart` (admin; the
