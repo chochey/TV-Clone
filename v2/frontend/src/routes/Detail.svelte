@@ -256,11 +256,14 @@
                     Download{m.fileSize ? ` · ${fmtBytes(m.fileSize)}` : ''}
                   </a>
                 {/if}
-                {#if $session?.role === 'admin' && !isAudio}
+                {#if !isAudio && ($session?.role === 'admin' || $session?.permissions?.includes('canFixMatch'))}
+                  <!-- "Fix film details" permission: choose the right OMDb record (lib/components/FixMatch.svelte). -->
                   <button class="ghost" onclick={() => { showFixMatch = true; }}>
                     <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.3-1 .9-1 1.7M12 17h.01"/></svg>
                     Wrong {isShow ? 'series' : 'film'}?
                   </button>
+                {/if}
+                {#if $session?.role === 'admin' && !isAudio}
                   <button class="ghost" onclick={() => { showSubtitleUpload = true; }}>
                     <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M10 10.5a2 2 0 1 0 0 3M17 10.5a2 2 0 1 0 0 3"/></svg>Add subtitles
                   </button>

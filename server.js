@@ -856,7 +856,7 @@ require('./lib/routes/subtitle-upload')(app, {
 
 // ── Metadata overrides, OMDb details and posters (lib/routes/metadata.js) ──
 require('./lib/routes/metadata')(app, {
-  requireAuth, requireAdminSession, scanLibrary, isAudioFile, parseYearFromName, stripYearFromName, omdb, fetchOmdbData, saveOmdbCache, metadataOverrides,
+  requireAuth, requireAdminSession, requirePermission, scanLibrary, isAudioFile, parseYearFromName, stripYearFromName, omdb, fetchOmdbData, saveOmdbCache, metadataOverrides,
   notifyClients: event => notifyClients(event), posterDir: OMDB_POSTER_DIR,
 });
 

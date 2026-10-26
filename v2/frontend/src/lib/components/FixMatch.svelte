@@ -88,6 +88,7 @@
           </li>
         {/each}
       </ul>
+      <p class="message">Not in the list? Paste the {data.kind === 'series' ? "series'" : "film's"} IMDb link above.</p>
     {/if}
     <div class="actions">
       <button class="ghost" onclick={() => onclose?.()} disabled={busy}>Close</button>

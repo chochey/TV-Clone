@@ -70,6 +70,7 @@ test('an admin sees what the title could be, picks the right film, and the page 
   await expect(rows.nth(1)).toContainText('2020 · Film · Leo Scherman');
   await expect(rows.nth(1)).toContainText('battle-scarred veteran');
   expect(calls.searches).toEqual([null]);
+  await expect(dialog).toContainText('Not in the list? Paste the film\'s IMDb link above.');
   await rows.nth(1).getByRole('button', { name: 'Use this' }).click();
   await expect(dialog).toHaveCount(0);
   expect(calls.pins).toEqual(['tt10794054']);
@@ -98,8 +99,12 @@ test('a pasted IMDb link is the answer itself; another spelling searches again; 
   await expect(dialog).toHaveCount(0);
   expect(calls.pins).toEqual(['tt10794054']);
 
-  await page.route('**/api/me', route => route.fulfill({ json: { loggedIn: true, role: 'viewer', profileId: 'v', name: 'Viewer', permissions: [] } }));
+  await page.route('**/api/me', route => route.fulfill({ json: { loggedIn: true, role: 'user', profileId: 'v', name: 'Viewer', permissions: [] } }));
   await page.goto(`${origin}/title/weight`);
   await expect(page.getByRole('heading', { name: 'The Weight' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Wrong film?' })).toHaveCount(0);
+  // The "Fix film details" permission gives a user the button too.
+  await page.route('**/api/me', route => route.fulfill({ json: { loggedIn: true, role: 'user', profileId: 'k', name: 'Kyle', permissions: ['canFixMatch'] } }));
+  await page.goto(`${origin}/title/weight`);
+  await expect(page.getByRole('button', { name: 'Wrong film?' })).toBeVisible();
 });

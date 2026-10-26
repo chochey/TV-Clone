@@ -15,6 +15,7 @@
     { key: 'canScan', label: 'Scan library', desc: 'Trigger library rescans' },
     { key: 'canRestart', label: 'Restart server', desc: 'Restart the media server & organizer' },
     { key: 'canSaveMedia', label: 'Save files', desc: 'Download the original film, episode or audiobook file' },
+    { key: 'canFixMatch', label: 'Fix film details', desc: 'Correct a film or series matched to the wrong title ("Wrong film?")' },
   ];
   const AVATARS = ['#00a4dc', '#e8734d', '#7ed491', '#c58af9', '#f5c518', '#6db3ff'];
 
