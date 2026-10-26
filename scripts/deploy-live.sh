@@ -109,3 +109,6 @@ for unit in "${restart[@]}"; do
   esac
 done
 echo "Live: ${NEW:0:7} (was ${OLD:0:7}); restarted: ${restart[*]:-nothing}"
+# The root-run jobs (backup, watchdog, boot-repair) use a root-owned copy of the reliability code;
+# say so when this deploy changed one of its files (the copy needs sudo to refresh).
+node "$APP/scripts/install-root-copy.js" --check --repo "$APP" || true

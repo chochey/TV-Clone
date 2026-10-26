@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 const path = require('path');
 const reliability = require('../lib/reliability');
+const { worthPrinting } = require('../lib/watchdog-quiet');
 
 function repoDirFromArgs(args) {
   const idx = args.indexOf('--repo');
@@ -21,6 +22,24 @@ function printHuman(result) {
   }
 }
 
+// watchdog --loop SECONDS: one long-running process instead of a timer firing every minute, printing
+// only what is worth reading (lib/watchdog-quiet.js). --iterations N stops after N passes (checks).
+async function watchdogLoop(args, options) {
+  const every = Math.max(5, Number(args[args.indexOf('--loop') + 1]) || 60) * 1000;
+  const limit = args.includes('--iterations') ? Number(args[args.indexOf('--iterations') + 1]) || 1 : Infinity;
+  let previous = null;
+  for (let pass = 1; pass <= limit; pass++) {
+    try {
+      const result = await reliability.watchdog(options);
+      if (worthPrinting(previous, result)) printHuman(result);
+      previous = result;
+    } catch (err) {
+      console.error(`[tvclone] watchdog pass failed: ${err.message}`);
+    }
+    if (pass < limit) await new Promise(resolve => setTimeout(resolve, every));
+  }
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const command = args[0] || 'status';
@@ -32,6 +51,7 @@ async function main() {
   if (command === 'status' || command === 'doctor') result = await reliability.status(options);
   else if (command === 'repair') result = await reliability.repair(options);
   else if (command === 'boot-repair') result = await reliability.bootRepair(options);
+  else if (command === 'watchdog' && args.includes('--loop')) return watchdogLoop(args, options);
   else if (command === 'watchdog') result = await reliability.watchdog(options);
   else if (command === 'backup') result = await reliability.backup(options);
   else if (command === 'preflight') {

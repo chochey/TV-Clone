@@ -299,6 +299,24 @@ replaced image is kept as `<repo>:chochey-previous`; only the one it replaces is
 `data/container-updates.json` (0644), shown on the Dashboard's "Containers" card with each image's age.
 `--status` only records versions.
 
+### Root-run jobs use a root-owned copy (October 2026)
+`tvclone-backup`, `tvclone-watchdog` and `tvclone-boot-repair` run as root. They used to execute
+`/srv/chocheytv/app/scripts/tvclone-reliability.js` from the live checkout, which `blue` writes, so a
+compromised user account meant root at 03:15. `scripts/install-root-copy.js` (sudo) copies the script and
+every module it reaches (`filesNeeded`, a static require scan) to `/usr/local/libexec/tvclone/app` as root
+0644/0755 and writes `<unit>.service.d/root-copy.conf` drop-ins pointing ExecStart there; the control
+helper already lived in that prefix. The watchdog becomes a long-running quiet loop (`watchdog --loop 60`,
+`lib/watchdog-quiet.js`: prints the first pass, problems, recoveries and passes that cleaned something)
+instead of a timer logging four "OK" lines a minute (~7,000 a day). `deploy-live.sh` ends with
+`install-root-copy.js --check` and prints the sudo command when the copy is stale; the user runs it.
+
+### 4K on the title page (October 2026)
+`/api/item/:id` carries `videoHeight` (from `heightCache`) and this server's measured 4K speed
+(`lib/four-k.js` reads `data/4k-benchmark.json`, written from `~/benchmark-4k.sh`: 40 s of the library's
+4K HEVC 10-bit file through the exact player pipeline, software decode + VAAPI encode capped at 1080p,
+plus the Data Saver path). `title-facts.js` labels the file "4K" and, when the measured speed is below
+1.0× real time, says "expect pauses" and points to Data Saver. Unmeasured or fast enough: no warning.
+
 ### Restarting without root (October 2026)
 `sudo` and polkit stopped working from Claude's shells on 2026-10-19, so nothing there can restart a
 service. `lib/self-restart.js` lets the app restart itself: `POST /api/system/restart` (admin; the
