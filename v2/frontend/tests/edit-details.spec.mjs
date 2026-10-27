@@ -97,3 +97,54 @@ test('a link that is not a picture is refused with the server\'s reason; a user 
   await expect(page.getByText('Directed by')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Edit details' })).toHaveCount(0);
 });
+
+// Audiobooks have no OMDb: Edit details offers the title, the author and a cover link.
+test('an audiobook\'s author can be corrected by hand', async ({ page }) => {
+  const calls = { saves: [] };
+  let edits = {};
+  const book = () => ({ id: 'book', title: 'Book One', type: 'custom-audio-books', mediaKind: 'audio', streamMode: 'direct', addedAt: 1, subtitles: [], progress: {},
+    filename: 'Book One.m4b', artist: edits.artist || 'Tag Author', coverUrl: edits.coverUrl || '',
+    audioMetadata: { title: edits.title || 'Book One', artist: edits.artist || 'Tag Author', duration: 3600, chapters: [], coverUrl: edits.coverUrl || null } });
+  await page.route('**/*', route => route.abort());
+  await page.route(`${origin}/**`, async route => {
+    const requested = new URL(route.request().url()).pathname;
+    const file = requested.startsWith('/assets/') ? path.join(dist, requested) : path.join(dist, 'index.html');
+    let body = await fs.readFile(file);
+    if (file.endsWith('index.html')) body = body.toString().replace(/<link[^>]+https:\/\/fonts\.(?:googleapis|gstatic)\.com[^>]*>/g, '');
+    return route.fulfill({ body, contentType: file.endsWith('.js') ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : 'text/html' });
+  });
+  await page.route('**/api/**', async route => {
+    const pathname = new URL(route.request().url()).pathname, method = route.request().method();
+    if (pathname === '/api/events') return route.fulfill({ status: 204 });
+    if (pathname === '/api/metadata-override/book') {
+      if (method === 'PUT') { const b = route.request().postDataJSON(); calls.saves.push(b); edits = { ...edits, ...b }; return route.fulfill({ json: { ok: true, override: edits } }); }
+      return route.fulfill({ json: edits });
+    }
+    let body = {};
+    if (pathname === '/api/health') body = { ready: true };
+    else if (pathname === '/api/me') body = { loggedIn: true, role: 'admin', profileId: 'test', name: 'Test', permissions: [] };
+    else if (pathname === '/api/library') body = [book()];
+    else if (pathname === '/api/library/sections') body = { ok: true, sections: [] };
+    else if (pathname.startsWith('/api/item/')) body = book();
+    else if (pathname === '/api/audio/read-along-index') body = { ok: true, ids: [] };
+    else if (pathname === '/api/dismissed') body = { continueWatching: {}, recentlyAdded: {} };
+    else if (pathname === '/api/requests') body = { requests: [] };
+    else if (pathname === '/api/notifications') body = { notifications: [] };
+    else if (pathname === '/api/collections') body = { ok: true, collections: [] };
+    else if (pathname.startsWith('/api/metadata/')) body = { found: false };
+    return route.fulfill({ json: body });
+  });
+  await page.goto(`${origin}/title/book`);
+  await expect(page.locator('.audio-author')).toHaveText('Tag Author');
+  await expect(page.getByRole('button', { name: 'Wrong film?' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Edit details' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Edit details' });
+  await expect(dialog.getByLabel('Author')).toHaveValue('Tag Author');
+  await expect(dialog.getByLabel('Cover link')).toBeVisible();
+  await expect(dialog.getByLabel('Director')).toHaveCount(0);
+  await dialog.getByLabel('Author').fill('Real Author');
+  await dialog.getByRole('button', { name: 'Save' }).click();
+  await expect(dialog).toHaveCount(0);
+  expect(calls.saves).toEqual([{ artist: 'Real Author' }]);
+  await expect(page.locator('.audio-author')).toHaveText('Real Author');
+});

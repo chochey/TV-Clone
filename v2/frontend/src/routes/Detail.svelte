@@ -269,6 +269,12 @@
                     Edit details
                   </button>
                 {/if}
+                {#if isAudio && ($session?.role === 'admin' || $session?.permissions?.includes('canFixMatch'))}
+                  <button class="ghost" onclick={() => { showEditDetails = true; }}>
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+                    Edit details
+                  </button>
+                {/if}
                 {#if !isAudio && ($session?.role === 'admin' || $session?.permissions?.includes('canSubtitles'))}
                   <button class="ghost" onclick={() => { showSubtitleUpload = true; }}>
                     <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M10 10.5a2 2 0 1 0 0 3M17 10.5a2 2 0 1 0 0 3"/></svg>Add subtitles
@@ -388,7 +394,7 @@
     <FixMatch item={m} onclose={() => { showFixMatch = false; }} onchanged={refreshDetails} />
   {/if}
   {#if showEditDetails}
-    <EditDetails item={m} onclose={() => { showEditDetails = false; }} onchanged={refreshDetails} />
+    <EditDetails item={m} kind={isAudio ? 'audio' : 'video'} onclose={() => { showEditDetails = false; }} onchanged={refreshDetails} />
   {/if}
   {#if showSubtitleUpload}
     <SubtitleUpload {title} items={isShow ? episodes : [m]} initialId={isShow ? (nextUp?.id || episodes[0]?.id) : m.id}

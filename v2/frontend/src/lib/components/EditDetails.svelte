@@ -5,9 +5,15 @@
   // "Use automatic details" drops every hand edit. See lib/routes/metadata.js.
   import { api } from '../api.js';
 
-  let { item, onclose, onchanged } = $props();
+  let { item, kind = 'video', onclose, onchanged } = $props();
 
-  const FIELDS = [
+  // Audiobooks have no OMDb record: what they show comes from the file's tags, so the fields differ.
+  const AUDIO_FIELDS = [
+    { key: 'title', label: 'Title' },
+    { key: 'artist', label: 'Author' },
+    { key: 'coverUrl', label: 'Cover link', hint: 'paste a web link to the picture; the app downloads and keeps it' },
+  ];
+  const VIDEO_FIELDS = [
     { key: 'plot', label: 'Description', multiline: true },
     { key: 'director', label: 'Director' },
     { key: 'actors', label: 'Cast', hint: 'names separated by commas' },
@@ -17,7 +23,9 @@
     { key: 'runtime', label: 'Runtime', hint: 'for example 113 min' },
     { key: 'omdbPosterUrl', label: 'Poster link', hint: 'paste a web link to the picture; the app downloads and keeps it' },
   ];
-  const current = key => { const v = item?.[key]; return v && v !== 'N/A' ? String(v) : ''; };
+  const FIELDS = kind === 'audio' ? AUDIO_FIELDS : VIDEO_FIELDS;
+  const tagged = key => (kind === 'audio' ? (key === 'coverUrl' ? item?.coverUrl || item?.audioMetadata?.coverUrl : item?.audioMetadata?.[key] || item?.[key]) : item?.[key]);
+  const current = key => { const v = tagged(key); return v && v !== 'N/A' ? String(v) : ''; };
   const original = Object.fromEntries(FIELDS.map(f => [f.key, current(f.key)]));
   let values = $state({ ...original });
   let edited = $state({});       // the override on file: which fields were set by hand
