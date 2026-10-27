@@ -22,7 +22,7 @@ import json, os, sys, time
 result, error, deleted, scrubbed, start, path = sys.argv[1:7]
 tmp = f"{path}.{os.getpid()}.tmp"
 with open(tmp, 'w') as f:
-    json.dump({'version': 1, 'at': int(time.time() * 1000), 'ok': result in ('synced', 'nothing-to-do'), 'result': result,
+    json.dump({'version': 1, 'at': int(time.time() * 1000), 'ok': result in ('synced', 'nothing-to-do', 'syncing'), 'result': result,
                'error': error or None, 'deleted': int(deleted or 0), 'scrubbed': scrubbed == '1',
                'seconds': int(time.time()) - int(start)}, f)
 os.chmod(tmp, 0o644)
@@ -45,6 +45,7 @@ fi
 result=nothing-to-do
 if [ $rc -eq 2 ]; then
   log "syncing ($deleted removed)"
+  receipt syncing "" "$deleted" 0   # the first sync takes a day; the Dashboard should not show the last run meanwhile
   "$SNAPRAID" -c "$CONF" sync >>"$LOG" 2>&1 || fail SYNC_FAILED "sync failed; see $LOG" "$deleted"
   result=synced
 fi

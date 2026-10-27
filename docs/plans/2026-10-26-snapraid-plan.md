@@ -1,6 +1,7 @@
 # Redundancy for the media pool with SnapRAID
 
-**Date:** 2026-10-26. **Status:** plan and scripts ready; waiting for a parity drive.
+**Date:** 2026-10-26. **Status:** live since 2026-10-27 (Media6TB is parity; the first attempt failed on
+quoted paths in snapraid.conf, fixed the same evening; first sync re-run by the user).
 
 ## What it gives
 One extra drive holds *parity* for the four data drives. If any one data drive dies, its files are

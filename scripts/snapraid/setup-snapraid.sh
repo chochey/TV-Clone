@@ -27,14 +27,15 @@ config() {
 parity $MNT/snapraid.parity
 
 # Three copies of the file list, on different disks (never on the parity drive).
+# Paths run to the end of the line, spaces included; quotes would become part of the name.
 content /var/snapraid/snapraid.content
-content "$DATA2/snapraid.content"
-content "$DATA3/snapraid.content"
+content $DATA2/snapraid.content
+content $DATA3/snapraid.content
 
 # The data drives of the pool (one line each; names stay fixed once used).
-data d1 "$DATA1/"
-data d2 "$DATA2/"
-data d3 "$DATA3/"
+data d1 $DATA1/
+data d2 $DATA2/
+data d3 $DATA3/
 
 # Churn that is not worth parity: downloads in progress, the organizer's staging, temp files.
 exclude /Share/
@@ -106,7 +107,14 @@ sed "s#@PARITY@#$MNT#" "$HERE/snapraid-nightly.service" > /etc/systemd/system/sn
 install -m 644 "$HERE/snapraid-nightly.timer" /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable --now snapraid-nightly.timer
+systemctl reset-failed snapraid-nightly.service 2>/dev/null || true
 systemctl start --no-block snapraid-nightly.service
-echo "First sync started in the background: journalctl -u snapraid-nightly -f   (a day or more; the pool stays usable)"
+# A configuration snapraid rejects fails within seconds; say so here instead of in tomorrow's bell.
+sleep 8
+if systemctl is-failed --quiet snapraid-nightly.service; then
+  die "the first sync did not start:
+$(journalctl -u snapraid-nightly -n 3 --no-pager -o cat)"
+fi
+echo "First sync running in the background: journalctl -u snapraid-nightly -f   (a day or more; the pool stays usable)"
 
 say "Done. Nightly at 04:00 from now on; the Dashboard gets its card once a receipt exists."

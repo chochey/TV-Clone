@@ -315,7 +315,18 @@ a SnapRAID sync refused (too many vanished files, with the `--force` way out) or
 announced is kept in `data/health-alerts.json`, keyed by the receipt's `at`, so restarts do not repeat it.
 A receipt's own `error` (a failed run) is not the same as a source being unreadable
 (`{ error: 'unavailable' }` from `safe()`, no `at`); only the latter is skipped. `dashboard-jobs.js` also
-has a `snapraid()` source (`snapraid-receipt.json`; late after 48 h) with no Dashboard card yet.
+has a `snapraid()` source (`snapraid-receipt.json`; late after 48 h, except while `result: 'syncing'`) with no
+Dashboard card yet.
+
+### SnapRAID parity (October 2026)
+`scripts/snapraid/setup-snapraid.sh <mount>` (sudo, once) made Media6TB the parity drive on 2026-10-27:
+removed from the pool live and in fstab, `/etc/snapraid.conf`, `snapraid-nightly.timer` at 04:00
+(`snapraid-nightly.sh`: diff, refuse if >200 files vanished, sync, Sunday scrub; receipt
+`data/snapraid-receipt.json`, `syncing` while a sync runs since the first takes a day). **Paths in
+snapraid.conf are never quoted**: the rest of the line is the path, spaces included; the first live run
+failed on `content "/media/blue/New Volume/..."`. `lib/snapraid-scripts.test.js` runs the real snapraid
+on folders with spaces when it is installed. The setup script waits 8 s after starting the first sync
+and stops with the journal if the service failed. Plan: docs/plans/2026-10-26-snapraid-plan.md.
 
 ### Audiobook details by hand (October 2026)
 Audiobooks have no OMDb record; title, author and cover come from the file's tags. "Edit details" on an
