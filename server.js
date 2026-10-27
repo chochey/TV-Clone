@@ -700,10 +700,12 @@ app.get('/api/profiles', (_req, res) => {
 
 // ── Admin event logs (ring buffers via lib/log-ring.js) ─────────────────
 const createLogRing = require('./lib/log-ring');
-const _loginLog  = createLogRing(500);
-const _scanLog   = createLogRing(200);
-const _streamLog = createLogRing(500);
-const _errorLog  = createLogRing(300);
+// Kept in the data dir, so a restart does not empty the Logs page.
+const logRing = (name, max) => createLogRing(max, { file: path.join(DATA_DIR, `event-log-${name}.json`), loadJSON, saveJSON });
+const _loginLog  = logRing('login', 500);
+const _scanLog   = logRing('scan', 200);
+const _streamLog = logRing('stream', 500);
+const _errorLog  = logRing('error', 300);
 const loginLog = _loginLog.entries, scanLog = _scanLog.entries;
 const streamLog = _streamLog.entries, errorLog = _errorLog.entries;
 

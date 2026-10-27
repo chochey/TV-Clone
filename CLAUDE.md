@@ -299,6 +299,12 @@ replaced image is kept as `<repo>:chochey-previous`; only the one it replaces is
 `data/container-updates.json` (0644), shown on the Dashboard's "Containers" card with each image's age.
 `--status` only records versions.
 
+### Logs page survives restarts (October 2026)
+The Logs page's Logins, Streams, Scans and Errors are ring buffers (`lib/log-ring.js`). They were memory
+only, so every restart emptied them ("Nothing logged yet" after a deploy day). With `{ file, loadJSON,
+saveJSON }` they load at start and save about a second after each burst of pushes: `data/event-log-{login,
+scan,stream,error}.json`. Watch history is separate (profile data) and always persisted.
+
 ### Health alerts (October 2026)
 `lib/health-alerts.js` runs once an hour from server.js (first pass 3 min after boot) over the same
 `dashboardJobs.snapshot()` the Dashboard uses and rings the notification bell (`type: 'health'`,
