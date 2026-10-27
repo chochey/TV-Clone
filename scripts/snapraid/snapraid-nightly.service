@@ -1,7 +1,7 @@
 [Unit]
 Description=ChocheyTV: SnapRAID parity sync for the media pool
 After=local-fs.target
-RequiresMountsFor=/media/blue/Parity1 /media/blue/Media6TB
+RequiresMountsFor=@PARITY@
 
 [Service]
 Type=oneshot

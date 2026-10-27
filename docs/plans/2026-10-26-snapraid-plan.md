@@ -24,20 +24,28 @@ dead parity drive loses nothing. Files are written normally; parity is computed 
 All four sit in one USB enclosure (`152D00539000`, four bays). The parity drive needs a fifth bay
 or another USB port: a single-drive USB 3 enclosure is fine.
 
-## What to buy
+## Decision (2026-10-26, evening): Media6TB becomes the parity drive now
+The user chose protection now over space: Media6TB (6 TB, ext4, the same size class as the two biggest
+data drives) is emptied (`~/move-shows-back.sh`: the ten shows go back to New Volume and the 2 TB drive,
+plus the two films that had landed on it) and becomes parity for the three NTFS data drives. The pool
+shrinks to about 14 TB with ~1.8 TB free. **When drives are cheaper, the next one is added as a data
+drive** (space), the way `~/setup-6tb-drive.sh` did; parity stays as long as no data drive is bigger than it.
+
+## What to buy (later: a data drive; or a bigger parity drive if a data drive ever outgrows 6 TB)
 - **Size:** at least as big as the largest data drive (6 TB). **8 TB** gives room for a future 8 TB
   data drive; 6 TB is the minimum.
 - **Type:** CMR, not SMR (parity is rewritten constantly; SMR drives crawl). Known CMR choices:
   Seagate IronWolf 8 TB, WD Red *Plus* 8 TB (not plain WD Red), Toshiba N300 8 TB, Seagate Exos 8 TB.
 - Plus a USB 3 enclosure/dock if the current one has no free bay.
 
-## Setup (when the drive is here)
-1. Plug it in; find its id with `ls -l /dev/disk/by-id/ | grep -v part`.
-2. `sudo bash scripts/snapraid/setup-snapraid.sh /dev/disk/by-id/ata-<the new drive>` — installs
-   SnapRAID, formats the drive as ext4 labelled `parity1` mounted at `/media/blue/Parity1`, writes
-   `/etc/snapraid.conf` (parity on the new drive; content files on the system disk, Media6TB and
-   New Volume; downloads, temp and recycle folders excluded), installs the nightly job, and starts
-   the **first sync in the background** (11 TB over USB: expect a day or more; the pool stays usable).
+## Setup
+1. Wait for `~/move-shows-back.sh` to report that Media6TB is empty (`tail ~/move-shows-back.log`).
+2. `sudo bash /srv/chocheytv/app/scripts/snapraid/setup-snapraid.sh /media/blue/Media6TB` — installs
+   SnapRAID, checks the drive is mounted, ext4 and empty, takes it out of the pool (live and in
+   `/etc/fstab`, backup kept), writes `/etc/snapraid.conf` (parity on it; content files on the system
+   disk, New Volume and the 2 TB drive; downloads, temp and recycle folders excluded), installs the
+   nightly job, and starts the **first sync in the background** (11 TB over USB: expect a day or more;
+   the pool stays usable).
 3. From then on `snapraid-nightly.timer` runs at 04:00: refuses to sync if more than 200 files were
    deleted since last time (a guard against a wrong mass delete; override with
    `snapraid-nightly.sh --force`), syncs, and on Sundays scrubs 8% of the data. It writes
