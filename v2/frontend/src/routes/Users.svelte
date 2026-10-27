@@ -118,7 +118,12 @@
 
       {#if edit.role !== 'admin'}
         <div class="permwrap">
-          <span class="meta">Permissions</span>
+          <div class="permhead">
+            <span class="meta">Permissions</span>
+            <!-- Everything a trusted helper needs; deleting stays a deliberate extra tick. -->
+            <button type="button" class="preset" onclick={() => { edit.permissions = PERMISSIONS.filter((p) => p.key !== 'canDelete').map((p) => p.key); }}>Trusted helper</button>
+            <button type="button" class="preset" onclick={() => { edit.permissions = []; }}>None</button>
+          </div>
           <div class="perms">
             {#each PERMISSIONS as p (p.key)}
               <label class="perm">
@@ -282,4 +287,7 @@
   }
   .actions button:hover { color: var(--ink); background: rgba(243, 237, 228, 0.08); }
   .actions .danger:hover { color: #ff6b6b; }
+  .permhead { display: flex; align-items: center; gap: var(--s2); }
+  .permhead .meta { margin-right: auto; }
+  .preset { font-size: 0.8rem; font-weight: 600; padding: 4px 10px; border-radius: var(--r-sm); background: rgba(243, 237, 228, 0.12); color: var(--ink); }
 </style>
