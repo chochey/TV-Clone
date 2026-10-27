@@ -299,6 +299,26 @@ replaced image is kept as `<repo>:chochey-previous`; only the one it replaces is
 `data/container-updates.json` (0644), shown on the Dashboard's "Containers" card with each image's age.
 `--status` only records versions.
 
+### Health alerts (October 2026)
+`lib/health-alerts.js` runs once an hour from server.js (first pass 3 min after boot) over the same
+`dashboardJobs.snapshot()` the Dashboard uses and rings the notification bell (`type: 'health'`,
+`audience: 'dashboard'`: admins and Dashboard users) **once per incident**: a failed backup (and once
+when backups work again), backups stale (>36 h, once; "running again" once), a container update that
+failed or rolled back (with the per-container problems in plain words), the weekly update late (>8 days),
+a SnapRAID sync refused (too many vanished files, with the `--force` way out) or failed. What was
+announced is kept in `data/health-alerts.json`, keyed by the receipt's `at`, so restarts do not repeat it.
+A receipt's own `error` (a failed run) is not the same as a source being unreadable
+(`{ error: 'unavailable' }` from `safe()`, no `at`); only the latter is skipped. `dashboard-jobs.js` also
+has a `snapraid()` source (`snapraid-receipt.json`; late after 48 h) with no Dashboard card yet.
+
+### Audiobook details by hand (October 2026)
+Audiobooks have no OMDb record; title, author and cover come from the file's tags. "Edit details" on an
+audiobook page (same `canFixMatch` permission; no "Wrong film?") offers Title, Author and Cover link.
+Overrides for `artist` and `coverUrl` are allowed (`lib/metadata-overrides.js`) and laid over the tagged
+fields by `lib/audio-overrides.js` in both the catalog (`serializeItem`) and `/api/item/:id`
+(`audioMetadata` and the top-level fields). A cover link is downloaded by `omdb.savePosterFrom` under
+`custom:<id>:cover`. `/api/item/:id` is now unit-tested (`lib/routes/library-item.test.js`).
+
 ### Root-run jobs use a root-owned copy (October 2026)
 `tvclone-backup`, `tvclone-watchdog` and `tvclone-boot-repair` run as root. They used to execute
 `/srv/chocheytv/app/scripts/tvclone-reliability.js` from the live checkout, which `blue` writes, so a
@@ -350,7 +370,8 @@ page's button; "Fix imports" (`canFixImports`) allows the Organizer page's revie
 aliases, retry, clear-leftovers; the page itself still needs "Organizer"); "Delete files" (`canDelete`) the
 media delete routes and the Delete buttons; "Conversion" (`canConversion`) the Conversion page and every
 `/api/conversion/*` route; "Library health" (`canLibraryHealth`) the Duplicates page and `/api/duplicates`,
-`/api/corrupted*`. Admins always have all of these.
+`/api/corrupted*`. Admins always have all of these. The Users page has a **Trusted helper** button that
+ticks every permission except Delete files, and **None**.
 No minimum password length, by the user's choice.
 
 ### Look and feel (October 2026 redesign)

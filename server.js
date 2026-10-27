@@ -829,10 +829,7 @@ const { refreshCollections } = require('./lib/routes/collections')(app, {
 
 // ── Dashboard: background jobs, streaming history, library growth (lib/routes/dashboard.js) ──
 const playbackHistory = require('./lib/playback-history')({ dataDir: DATA_DIR, loadJSON, saveJSON });
-require('./lib/routes/dashboard')(app, {
-  requireAuth, requirePermission, getSession, profileName: id => config.profiles.find(p => p.id === id)?.name,
-  scanLibrary, playbackHistory, storageHistory: () => storageHealth.history(),
-  jobs: require('./lib/dashboard-jobs')({
+const dashboardJobs = require('./lib/dashboard-jobs')({
     transcribeDir: process.env.READALONG_TRANSCRIBE_WORK || '/var/lib/tvclone-readalong-transcribe',
     readAlongDir: path.join(DATA_DIR, 'read-along'), audioLiteDir: path.join(DATA_DIR, 'audio-lite'), dataDir: DATA_DIR,
     isActive: unit => new Promise(resolve => execFile('systemctl', ['is-active', unit], (_err, out) => resolve(String(out).trim() === 'active'))),
@@ -840,8 +837,20 @@ require('./lib/routes/dashboard')(app, {
     sprites: () => ({ ...sprites.spriteQueue, enabled: sprites.isEnabled() }),
     dataSaver: () => audioLite.snapshot(),
     libraryScan: () => libraryRefresh.status(),
-  }),
+  });
+require('./lib/routes/dashboard')(app, {
+  requireAuth, requirePermission, getSession, profileName: id => config.profiles.find(p => p.id === id)?.name,
+  scanLibrary, playbackHistory, storageHistory: () => storageHealth.history(),
+  jobs: dashboardJobs,
 });
+
+// Once an hour: ring the bell once per failed/stale backup, failed or rolled-back container update,
+// late weekly update, refused or failed SnapRAID sync (lib/health-alerts.js). Admins and Dashboard users see them.
+const healthAlerts = require('./lib/health-alerts')({
+  jobs: dashboardJobs, loadJSON, saveJSON, stateFile: path.join(DATA_DIR, 'health-alerts.json'),
+  notify: spec => { notifyLog.push(spec); notifyClients('notifications-updated'); }, log: line => console.log(line),
+});
+healthAlerts.start();
 
 // ── Subtitle upload (admin): saved as a sidecar beside the video (lib/routes/subtitle-upload.js) ──
 require('./lib/routes/subtitle-upload')(app, {
