@@ -315,8 +315,9 @@ a SnapRAID sync refused (too many vanished files, with the `--force` way out) or
 announced is kept in `data/health-alerts.json`, keyed by the receipt's `at`, so restarts do not repeat it.
 A receipt's own `error` (a failed run) is not the same as a source being unreadable
 (`{ error: 'unavailable' }` from `safe()`, no `at`); only the latter is skipped. `dashboard-jobs.js` also
-has a `snapraid()` source (`snapraid-receipt.json`; late after 48 h, except while `result: 'syncing'`) with no
-Dashboard card yet.
+has a `snapraid()` source (`snapraid-receipt.json`; late after 48 h, except while `result: 'syncing'`), shown by
+the Dashboard's Parity card (`PARITY_RESULT`/`PARITY_PROBLEM` in Dashboard.svelte put the script's codes in words;
+the bell uses `SNAPRAID_REASON` for the same, and `FILES_CHANGED` gets its own gentler title).
 
 ### SnapRAID parity (October 2026)
 `scripts/snapraid/setup-snapraid.sh <mount>` (sudo, once) made Media6TB the parity drive on 2026-10-27:
@@ -326,7 +327,15 @@ removed from the pool live and in fstab, `/etc/snapraid.conf`, `snapraid-nightly
 snapraid.conf are never quoted**: the rest of the line is the path, spaces included; the first live run
 failed on `content "/media/blue/New Volume/..."`. `lib/snapraid-scripts.test.js` runs the real snapraid
 on folders with spaces when it is installed. The setup script waits 8 s after starting the first sync
-and stops with the journal if the service failed. Plan: docs/plans/2026-10-26-snapraid-plan.md.
+and stops with the journal if the service failed. **Files changing under a sync**: snapraid then ends with
+"N file errors / 0 io errors / 0 data errors" and exit 1 but keeps everything else (the first live sync ran
+23 h and ended that way at 99% because a film had been deleted under it). The nightly script detects
+exactly that pattern, runs the vanished-files guard again and syncs once more; the receipt carries
+`retried: true`, and a second such failure is `FILES_CHANGED` (the bell says "could not finish", not
+"failed"). Any other sync failure stays `SYNC_FAILED` with no retry. The installed copy is
+`/usr/local/sbin/snapraid-nightly.sh` (root): after changing the script the user re-runs
+`sudo install -m 755 /srv/chocheytv/app/scripts/snapraid/snapraid-nightly.sh /usr/local/sbin/snapraid-nightly.sh`.
+Plan: docs/plans/2026-10-26-snapraid-plan.md.
 
 ### Audiobook details by hand (October 2026)
 Audiobooks have no OMDb record; title, author and cover come from the file's tags. "Edit details" on an

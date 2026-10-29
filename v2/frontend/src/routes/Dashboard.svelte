@@ -135,6 +135,16 @@
     return again ? `and the old version failed too (${UPDATE_PROBLEM[again[1]] || again[1]})` : (UPDATE_PROBLEM[part] || part);
   }).join(', ');
   const containerAge = days => days === null ? 'age unknown' : days === 0 ? 'built today' : `${days} day${days === 1 ? '' : 's'} old`;
+  // The nightly SnapRAID parity job (scripts/snapraid/snapraid-nightly.sh) in plain words.
+  const PARITY_RESULT = { synced: ['Synced', 'good'], 'nothing-to-do': ['Nothing to do', 'good'], syncing: ['Syncing now', 'warn'],
+    refused: ['Held back', 'bad'], failed: ['Failed', 'bad'] };
+  const PARITY_PROBLEM = {
+    FILES_CHANGED: 'Files kept changing while it ran, twice in a row, so parity is behind by those files. Tonight\'s run will try again.',
+    SYNC_FAILED: 'The sync itself failed. See /var/log/snapraid-nightly.log.', DIFF_FAILED: 'SnapRAID could not read the pool. See /var/log/snapraid-nightly.log.',
+    SCRUB_FAILED: 'The Sunday check of the stored data found problems. See /var/log/snapraid-nightly.log.',
+    NO_CONFIG: 'There is no SnapRAID configuration on this computer.',
+  };
+  const took = seconds => seconds < 60 ? `${seconds} s` : seconds < 7200 ? `${Math.round(seconds / 60)} min` : `${Math.floor(seconds / 3600)} h ${Math.round((seconds % 3600) / 60)} min`;
   function checkState(c) {
     if (Array.isArray(c)) {
       const bad = c.filter((e) => !e?.ok);
@@ -272,6 +282,23 @@
         {#if !b.offDisk}<p class="warn">Nothing verified is stored off the system disk, so a disk failure would take the backups with it.</p>{/if}
         {#if b.stale}<p class="warn">No successful backup for {Math.round(b.ageHours / 24)} days.</p>{/if}
       {:else}<div class="dim">{jobs?.backup?.error ? 'Unavailable' : '…'}</div>{/if}
+    </section>
+
+    <section class="card">
+      <h3 class="meta">Parity</h3>
+      {#if jobs?.snapraid?.missing}
+        <div class="dim">No record yet. The nightly SnapRAID job writes one at 04:00.</div>
+      {:else if jobs?.snapraid?.at}
+        {@const r = jobs.snapraid}
+        {@const [label, tone] = r.result === 'failed' && r.error === 'FILES_CHANGED' ? ['Did not finish', 'warn'] : PARITY_RESULT[r.result] || [r.result, 'dim']}
+        <div class="kv"><span>{r.result === 'syncing' ? 'Started' : 'Last run'}</span><strong class={tone}>{label}</strong> <em>{backupAge(r.hoursAgo)}</em></div>
+        {#if r.ok && r.result !== 'syncing'}<div class="kv"><span>Took</span><strong>{took(r.seconds)}</strong>{#if r.scrubbed} <em>and checked 8% of the data</em>{/if}</div>{/if}
+        {#if r.deleted}<div class="kv"><span>Files gone</span><strong>{r.deleted}</strong> <em>since the sync before</em></div>{/if}
+        {#if r.retried}<p class="dim">Files changed during the first pass, so it ran twice.</p>{/if}
+        {#if r.result === 'refused'}<p class="warn">More than 200 files vanished since the last sync, so parity was left as it was. If that was intended, run: sudo snapraid-nightly.sh --force</p>{/if}
+        {#if r.result === 'failed'}<p class="warn">{PARITY_PROBLEM[r.error] || r.error || 'See /var/log/snapraid-nightly.log.'}</p>{/if}
+        {#if r.late}<p class="warn">No parity update for {Math.round(r.hoursAgo / 24)} days.</p>{/if}
+      {:else}<div class="dim">{jobs?.snapraid?.error ? 'Unavailable' : '…'}</div>{/if}
     </section>
 
     <section class="card">

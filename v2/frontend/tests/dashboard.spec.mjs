@@ -57,7 +57,8 @@ async function setup(page, { streaming = streamingFor } = {}) {
         { name: 'cloudflared', image: 'cloudflare/cloudflared:latest', builtAt: Date.now() - 0.4 * DAY, ageDays: 0, old: false, updated: false, rolledBack: false, previousBuiltAt: null, healthy: true, error: null },
         { name: 'gluetun', image: 'qmcgaw/gluetun:v3', builtAt: Date.now() - 2.2 * DAY, ageDays: 2, old: false, updated: true, rolledBack: false, previousBuiltAt: Date.now() - 250 * DAY, healthy: true, error: null },
         { name: 'qbittorrent', image: 'lscr.io/linuxserver/qbittorrent:latest', builtAt: Date.now() - 5.1 * DAY, ageDays: 5, old: false, updated: false, rolledBack: false, previousBuiltAt: null, healthy: true, error: null },
-      ] } : calls.containers };
+      ] } : calls.containers,
+      snapraid: calls.snapraid === undefined ? { at: Date.now() - 7 * 3600000, ok: true, result: 'synced', error: null, deleted: 2, scrubbed: true, seconds: 1500, retried: true, hoursAgo: 7, late: false } : calls.snapraid };
     else if (pathname === '/api/dashboard/streaming') { const d = +url.searchParams.get('days'); calls.streamingDays.push(d); body = streaming(d); }
     else if (pathname === '/api/dashboard/library') body = {
       weeks: Array.from({ length: 26 }, (_, i) => ({ week: iso(today - (25 - i) * 7 * DAY), films: i % 4, episodes: (i * 3) % 11, audiobooks: i === 20 ? 2 : 0 })),
@@ -203,6 +204,36 @@ test('the Containers card shows how old each container is and how the weekly upd
   await expect(card).toContainText('old version failed too');
   await expect(card).not.toContainText('Unavailable');
   calls.containers = { missing: true };
+  await page.reload();
+  await expect(card).toContainText('No record yet');
+});
+
+// The nightly SnapRAID job's receipt (scripts/snapraid/snapraid-nightly.sh) in plain words.
+test('the Parity card says what the nightly SnapRAID job did', async ({ page }) => {
+  const calls = await setup(page);
+  await page.goto(`${origin}/system`);
+  const card = page.locator('section.card').filter({ has: page.getByRole('heading', { name: 'Parity' }) });
+  await expect(card).toContainText('Synced');
+  await expect(card).toContainText('7h ago');
+  await expect(card).toContainText('25 min');
+  await expect(card).toContainText('checked 8% of the data');
+  await expect(card).toContainText('ran twice');
+  await expect(card.locator('.warn, .bad')).toHaveCount(0);
+  calls.snapraid = { at: Date.now() - 9 * DAY, ok: false, result: 'failed', error: 'FILES_CHANGED', deleted: 1, scrubbed: false, seconds: 84067, retried: true, hoursAgo: 216, late: true };
+  await page.reload();
+  await expect(card).toContainText('Did not finish');
+  await expect(card).toContainText('kept changing');
+  await expect(card).toContainText('No parity update for 9 days');
+  calls.snapraid = { at: Date.now() - 3600000, ok: false, result: 'refused', error: 'TOO_MANY_DELETED', deleted: 450, scrubbed: false, seconds: 12, retried: false, hoursAgo: 1, late: false };
+  await page.reload();
+  await expect(card).toContainText('Held back');
+  await expect(card).toContainText('450');
+  await expect(card).toContainText('--force');
+  calls.snapraid = { at: Date.now() - 20 * 3600000, ok: true, result: 'syncing', error: null, deleted: 0, scrubbed: false, seconds: 90, retried: false, hoursAgo: 20, late: false };
+  await page.reload();
+  await expect(card).toContainText('Syncing now');
+  await expect(card).toContainText('20h ago');
+  calls.snapraid = { missing: true };
   await page.reload();
   await expect(card).toContainText('No record yet');
 });

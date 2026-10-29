@@ -1,7 +1,11 @@
 # Redundancy for the media pool with SnapRAID
 
 **Date:** 2026-10-26. **Status:** live since 2026-10-27 (Media6TB is parity; the first attempt failed on
-quoted paths in snapraid.conf, fixed the same evening; first sync re-run by the user).
+quoted paths in snapraid.conf, fixed the same evening; first sync re-run by the user). The first sync ran
+23 h and ended "failed" at 99% because a film had been deleted under it (snapraid: "file errors", exit 1,
+everything else saved). Since 2026-10-29 the nightly job re-runs the sync once in that case (after the
+vanished-files guard again), the receipt carries `retried`, a second failure is `FILES_CHANGED` in
+plain words, and the Dashboard has a Parity card.
 
 ## What it gives
 One extra drive holds *parity* for the four data drives. If any one data drive dies, its files are
@@ -56,5 +60,7 @@ drive** (space), the way `~/setup-6tb-drive.sh` did; parity stays as long as no 
 Replace it with one at least as big, mount it at the same path, then `sudo snapraid -d <dataN> -l /root/fix.log fix`
 and `sudo snapraid check`. Until then, do not sync (syncing would record the drive as empty).
 
-## Not included yet
-A Dashboard card for the receipt, and alerts; both follow once the first syncs have run.
+## Dashboard and alerts
+The Parity card (Dashboard, Background jobs) shows the receipt: last run and result, how long it took,
+files gone since the sync before, whether it ran twice, and the reason in words when it was held back or
+failed. The hourly health check rings the bell once per failed or refused run (`lib/health-alerts.js`).
