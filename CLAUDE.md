@@ -440,6 +440,20 @@ are the update server's own folder, `RIFTWARDEN_FILES_DIR` (default `/mnt/media/
 readable by chocheytv through the /media/blue ACL), so a new release needs no deploy; the launcher name comes from
 `latest.json` only if it is a plain `*.exe` name. The launcher's own updates still use the nginx server on :8088.
 
+### Security review of the October 30-31 features (2026-10-31)
+An independent review plus a permission matrix (one throwaway account per permission against every new route)
+found, and these fixed: `fileIndex`/`posterIndex`/`subtitleIndex` are `Object.create(null)`, because ids come
+straight from URLs and `{}['constructor']` returned a function (`/api/download/constructor` crashed the server
+through the Saved-files `finish` listener reading a reset `req.params`; `/stream/constructor` hung). The download
+route reads its id once, logs in try/catch, answers 404 when `res.download` fails, and does not log HEAD. Saved
+files merges repeat requests (same person, address and file within 10 min, `requests` count) so the 500 cannot be
+flooded; `log-ring` has `touch()`. Who's on shows and counts playback only for ids in the library (`known`), so a
+made-up `/api/progress` id cannot put text in front of admins or block restarts. The launcher is opened once with
+`O_NOFOLLOW` on its resolved path, checked with `fstat` and streamed from that handle (no check-then-open race).
+Residual by design: whoever can write to the release folder (blue, and the app/jellyfin accounts, NTFS 0777)
+controls the .exe, and the page's SHA-256 comes from the same folder; signing the launcher would fix that.
+`scripts/smoke-boot.sh` requests built-in object names on the stream, poster, artwork, item and download routes.
+
 ### Look and feel (October 2026 redesign)
 Warm dark palette with one amber accent, set as tokens in `v2/frontend/src/styles/tokens.css`
 (`--bg #0e0c0b`, `--ink #f3ede4`, `--accent #e8b04a`, `--good/--warn/--bad`); Instrument Serif for

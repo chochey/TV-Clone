@@ -53,6 +53,13 @@ for _ in $(seq 1 60); do
     [ -n "$etag" ] || fail "the library sent no ETag"
     code="$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" -H "If-None-Match: $etag" "$BASE/api/library")"
     [ "$code" = 304 ] || fail "an unchanged library answered $code instead of 304"
+    # Names every plain JavaScript object answers to are not files: each route says 404 and the
+    # server stays up (a "constructor" download once crashed it).
+    for route in /api/download/constructor /stream/constructor /stream/toString /poster/constructor /audio-artwork/constructor /api/item/constructor; do
+      code="$(curl -s -o /dev/null --max-time 10 -w '%{http_code}' -b "$JAR" "$BASE$route" || true)"
+      case "$code" in 404|400) ;; 000) fail "$route never answered";; *) fail "$route answered $code instead of 404";; esac
+    done
+    sleep 1; kill -0 "$PID" 2>/dev/null || fail "the server died after requests for built-in object names"
     # "Who's on" answers the signed-in admin (registered late, and it reaches into several services).
     curl -s -b "$JAR" "$BASE/api/activity" | grep -q '"counts":{"online":' || fail "/api/activity did not answer the signed-in admin"
     echo "smoke boot ok"; exit 0

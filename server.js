@@ -254,9 +254,12 @@ const { selectAudioTrack, selectAudioTrackIndex, audioTrackFromStream, hasAudioT
 const { embeddedTracks, BITMAP_CODECS } = require('./lib/subtitle-tracks');
 const findPosterInDir = (dir, baseName) => _findPoster(dir, baseName, POSTER_EXT);
 
-let fileIndex = {};      // id -> absolute video path
-let posterIndex = {};    // id -> absolute poster path
-let subtitleIndex = {};  // subId -> { absPath, format }
+// The indexes are looked up with ids straight from request URLs. Built without a prototype, so a name
+// every plain object answers to ("constructor", "toString") is simply not found instead of returning a
+// function that later crashed or hung a route.
+let fileIndex = Object.create(null);      // id -> absolute video path
+let posterIndex = Object.create(null);    // id -> absolute poster path
+let subtitleIndex = Object.create(null);  // subId -> { absPath, format }
 
 // ── Codec probing (lib/probe.js) ────────────────────────────────────────
 const probe = require('./lib/probe')({ DATA_DIR, loadJSON, saveJSON });
@@ -393,9 +396,9 @@ function loadLibraryCache() {
       // Also recompute streamMode against the current probe caches so that
       // logic changes (e.g. 10-bit H.264 handling) take effect without a
       // full rescan.
-      fileIndex = {};
-      posterIndex = {};
-      subtitleIndex = {};
+      fileIndex = Object.create(null);
+      posterIndex = Object.create(null);
+      subtitleIndex = Object.create(null);
       for (const item of libraryCache) {
         const fullPath = item._filePath;
         if (!fullPath) continue;
@@ -480,9 +483,9 @@ async function doRescan(trigger) {
   const library = [];
   // Build into locals and swap at the end — requests arriving mid-scan keep
   // resolving against the complete old indexes, never a half-built state.
-  const newFileIndex = {};
-  const newPosterIndex = {};
-  const newSubtitleIndex = {};
+  const newFileIndex = Object.create(null);
+  const newPosterIndex = Object.create(null);
+  const newSubtitleIndex = Object.create(null);
   const previousIndexes = { files: fileIndex, posters: posterIndex, subtitles: subtitleIndex };
   const lookup = createDirectoryLookup();
 
@@ -1963,6 +1966,7 @@ const unitActive = unit => new Promise(resolve => execFile('systemctl', ['is-act
 const activity = require('./lib/activity').createActivity({
   profiles: () => config.profiles, presence: () => sse.present(), nowWatching: () => nowWatching,
   isAudio: id => { const fp = fileIndex[id]; return !!fp && isAudioFile(fp); },
+  known: id => typeof id === 'string' && Object.hasOwn(fileIndex, id),
   busy: {
     downloads: async () => downloadWatcher.downloading(),
     conversion: async () => conversionQueue.snapshot(),

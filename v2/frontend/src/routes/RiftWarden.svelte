@@ -47,8 +47,10 @@
       {/if}
       {#if info.launcher.sha256}
         <details>
-          <summary>Check the download</summary>
+          <summary>File fingerprint</summary>
           <p class="hash">SHA-256 <code>{info.launcher.sha256}</code></p>
+          <p class="hash">Your copy should match this. It comes from the same release folder as the file, so it confirms a
+            complete, undamaged download, not who made the file.</p>
         </details>
       {/if}
     </section>

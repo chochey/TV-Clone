@@ -8,7 +8,7 @@
   // them plus the admin-only surface (this page, profile/config management).
   const PERMISSIONS = [
     { key: 'canNotify', group: 'Everyday', label: 'Notifications', desc: 'Download & new-content alerts' },
-    { key: 'canActivity', group: 'Everyday', label: "Who's on", desc: 'The counter beside the bell: who is on the site, what they are watching or listening to, and what the server is busy with' },
+    { key: 'canActivity', group: 'Everyday', label: "Who's on", desc: 'The counter beside the bell: who is on the site and what everyone, admins included, is watching or listening to, plus what the server is busy with (the names of files being converted or imported, and which game servers are running)' },
     { key: 'canSaveMedia', group: 'Everyday', label: 'Save files', desc: 'Download the original film, episode or audiobook file' },
     { key: 'canDownload', group: 'Downloads', label: 'Downloads', desc: 'Downloads page — add & manage torrents' },
     { key: 'canEpisodes', group: 'Downloads', label: 'New episodes', desc: 'Episodes page and new-episode alerts: what has aired that the library does not have yet' },

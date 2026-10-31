@@ -63,7 +63,7 @@
         <p class="wsum">{online} on the site · {snap.counts.watching} watching · {snap.counts.listening} listening</p>
         {#if snap.people.length}
           <div class="wlist">
-            {#each snap.people as p (p.name)}
+            {#each snap.people as p, i (i)}   <!-- names can repeat (two profiles, a deleted one) -->
               <div class="wrow">
                 <span class="wav" aria-hidden="true">{(p.name || '?').slice(0, 1)}</span>
                 <span class="wtext">
