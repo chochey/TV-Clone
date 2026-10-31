@@ -30,6 +30,7 @@ function parse(path, search) {
   if (path === '/duplicates') return { name: 'duplicates' };
   if (path === '/conversion') return { name: 'conversion' };
   if (path === '/episodes') return { name: 'episodes' };
+  if (path === '/riftwarden') return { name: 'riftwarden' };
   return { name: 'home' };
 }
 

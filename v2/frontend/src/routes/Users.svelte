@@ -23,8 +23,11 @@
     { key: 'canFixImports', group: 'Server', label: 'Fix imports', desc: 'Fix & retry, title aliases and clearing leftovers on the Organizer page (needs Organizer)' },
     { key: 'canLogs', group: 'Server', label: 'Logs', desc: 'Activity logs & now watching' },
     { key: 'canRestart', group: 'Server', label: 'Restart server', desc: 'Restart the media server & organizer' },
+    { key: 'canRiftWarden', group: 'Games', label: 'Rift Warden', desc: 'The Rift Warden page next to Collections, with the game launcher to download' },
   ];
-  const GROUPS = ['Everyday', 'Downloads', 'Library', 'Server'];
+  const GROUPS = ['Everyday', 'Downloads', 'Library', 'Server', 'Games'];
+  // Trusted helper is for running the server: deleting stays a deliberate tick, and so does the game.
+  const NOT_IN_HELPER = ['canDelete', 'canRiftWarden'];
   const AVATARS = ['#00a4dc', '#e8734d', '#7ed491', '#c58af9', '#f5c518', '#6db3ff'];
 
   let profiles = $state(null);
@@ -123,8 +126,8 @@
         <div class="permwrap">
           <div class="permhead">
             <span class="meta">Permissions</span>
-            <!-- Everything a trusted helper needs; deleting stays a deliberate extra tick. -->
-            <button type="button" class="preset" onclick={() => { edit.permissions = PERMISSIONS.filter((p) => p.key !== 'canDelete').map((p) => p.key); }}>Trusted helper</button>
+            <!-- Everything a trusted helper needs; deleting and Rift Warden stay deliberate extra ticks. -->
+            <button type="button" class="preset" onclick={() => { edit.permissions = PERMISSIONS.filter((p) => !NOT_IN_HELPER.includes(p.key)).map((p) => p.key); }}>Trusted helper</button>
             <button type="button" class="preset" onclick={() => { edit.permissions = []; }}>None</button>
           </div>
           {#each GROUPS as group (group)}

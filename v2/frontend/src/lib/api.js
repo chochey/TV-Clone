@@ -107,6 +107,7 @@ export const api = {
   reliability: () => fetch('/api/reliability/status', opts('GET')).then(json),
   nowWatching: () => fetch('/api/now-watching', opts('GET')).then(json).catch(() => []),
   activity: () => fetch('/api/activity', opts('GET')).then(json),
+  riftwarden: () => fetch('/api/riftwarden', opts('GET')).then(json),
   adminLogs: (kind) => fetch(`/api/admin/${kind}`, opts('GET')).then(json), // logs|login-logs|scan-logs|stream-logs|error-logs
 
   // Organizer

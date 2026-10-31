@@ -936,6 +936,11 @@ const savedFiles = require('./lib/saved-files')({
   titleFor: id => (libraryCache || []).find(m => m.id === id)?.title || null,
   sizeOf: file => fs.statSync(file).size,
 });
+// Rift Warden: the launcher for Chochey's game, from the update server's release folder (lib/routes/riftwarden.js).
+require('./lib/routes/riftwarden')(app, {
+  requirePermission, dir: process.env.RIFTWARDEN_FILES_DIR || '/mnt/media/SharedFolder/riftwarden-server/files',
+  onSaved: entry => savedFiles.record(entry),
+});
 require('./lib/routes/media-files')(app, {
   requireAuth, ensureLibrary, requirePermission, fileFor: id => fileIndex[id], posterFor: id => posterIndex[id], playbackIssueForFile, isAudioFile,
   audiobookFile, audioLite, audioMetadata, backdrop, streamMediaFile, recordError, artworkStore: audioArtwork,

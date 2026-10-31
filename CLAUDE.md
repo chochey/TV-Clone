@@ -429,6 +429,17 @@ playing, unless the body says `force: true`; the account menu then shows it with
 Dashboard's Restart app names who is playing in its confirm and sends force. `scripts/smoke-boot.sh` checks
 `/api/activity` answers the signed-in admin.
 
+### Rift Warden page (October 2026)
+Rift Warden is the game Chochey is making. People with the **Rift Warden** permission (`canRiftWarden`,
+Users page group "Games"; not part of Trusted helper, admins have it) get a "Rift Warden" link right after
+Collections (desk-only, the launcher is a Windows .exe) to `/riftwarden` (`routes/RiftWarden.svelte`): version,
+date and notes from the update server's `latest.json`, a download button for the launcher with its size, and its
+SHA-256. `lib/routes/riftwarden.js`: `GET /api/riftwarden` (info, `{ok:false,error:'not-available'}` without the
+.exe) and `GET /api/riftwarden/launcher` (the file, logged in "Saved files" as "Rift Warden launcher"). The files
+are the update server's own folder, `RIFTWARDEN_FILES_DIR` (default `/mnt/media/SharedFolder/riftwarden-server/files`,
+readable by chocheytv through the /media/blue ACL), so a new release needs no deploy; the launcher name comes from
+`latest.json` only if it is a plain `*.exe` name. The launcher's own updates still use the nginx server on :8088.
+
 ### Look and feel (October 2026 redesign)
 Warm dark palette with one amber accent, set as tokens in `v2/frontend/src/styles/tokens.css`
 (`--bg #0e0c0b`, `--ink #f3ede4`, `--accent #e8b04a`, `--good/--warn/--bad`); Instrument Serif for

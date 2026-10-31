@@ -29,6 +29,7 @@
   import Users from './routes/Users.svelte';
   import Duplicates from './routes/Duplicates.svelte';
   import Episodes from './routes/Episodes.svelte';
+  import RiftWarden from './routes/RiftWarden.svelte';
   import Stats from './routes/Stats.svelte';
   import Player from './lib/components/Player.svelte';
   import AudioPlayer from './lib/components/AudioPlayer.svelte';
@@ -457,6 +458,7 @@
         <a class:active={$route.name === 'section' && $route.id === section.id} href={`/library/${encodeURIComponent(section.id)}`} title={section.available === false ? `${section.label} — location unavailable` : section.label} onclick={(e) => { e.preventDefault(); go(`/library/${encodeURIComponent(section.id)}`); }}>{#if section.mediaKind === 'audio'}<svg class="nicon-svg" aria-hidden="true" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg>{:else}<svg class="nicon-svg" aria-hidden="true" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>{/if}<span>{section.label}</span></a>
       {/each}
       {#if $collections.length}<a class="desk-only" class:active={$route.name === 'collections' || $route.name === 'collection'} href="/collections" onclick={(e) => { e.preventDefault(); go('/collections'); }}><span>Collections</span></a>{/if}
+      {#if can('canRiftWarden')}<a class="desk-only" class:active={$route.name === 'riftwarden'} href="/riftwarden" onclick={(e) => { e.preventDefault(); go('/riftwarden'); }}><span>Rift Warden</span></a>{/if}
       {#if sectionsError}<button class="nav-retry" title={sectionsError} onclick={refreshSections}>Retry libraries</button>
       {:else if !sectionsReady}<span class="nav-status" role="status">Loading libraries…</span>{/if}
       <button class="mobile-search" onclick={openMobileSearch}><svg class="nicon-svg" aria-hidden="true" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg><span>Search</span></button>
@@ -617,6 +619,8 @@
       <Downloads />
     {:else if $route.name === 'organizer' && can('canOrganizer')}
       <Organizer />
+    {:else if $route.name === 'riftwarden' && can('canRiftWarden')}
+      <RiftWarden />
     {:else if $route.name === 'logs' && can('canLogs')}
       <Logs />
     {:else if $route.name === 'users' && isAdmin}
