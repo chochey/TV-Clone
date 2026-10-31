@@ -7,21 +7,24 @@
   // Mirrors lib/auth.js VALID_PERMISSIONS. Admins implicitly hold all of
   // them plus the admin-only surface (this page, profile/config management).
   const PERMISSIONS = [
-    { key: 'canNotify', label: 'Notifications', desc: 'Download & new-content alerts' },
-    { key: 'canDownload', label: 'Downloads', desc: 'Downloads page — add & manage torrents' },
-    { key: 'canDashboard', label: 'Dashboard', desc: 'System stats, storage & health' },
-    { key: 'canOrganizer', label: 'Organizer', desc: 'Organizer logs, activity & status' },
-    { key: 'canLogs', label: 'Logs', desc: 'Activity logs & now watching' },
-    { key: 'canScan', label: 'Scan library', desc: 'Trigger library rescans' },
-    { key: 'canRestart', label: 'Restart server', desc: 'Restart the media server & organizer' },
-    { key: 'canSaveMedia', label: 'Save files', desc: 'Download the original film, episode or audiobook file' },
-    { key: 'canFixMatch', label: 'Fix film details', desc: 'Correct a film or series matched to the wrong title ("Wrong film?"), or edit its details by hand' },
-    { key: 'canSubtitles', label: 'Add subtitles', desc: 'Upload a subtitle file to a film or episode' },
-    { key: 'canFixImports', label: 'Fix imports', desc: 'Fix & retry, title aliases and clearing leftovers on the Organizer page (needs Organizer)' },
-    { key: 'canDelete', label: 'Delete files', desc: 'Remove a film, episode or duplicate copy from the library and the disk' },
-    { key: 'canConversion', label: 'Conversion', desc: 'Conversion page — queue, repairs and settings' },
-    { key: 'canLibraryHealth', label: 'Library health', desc: 'Duplicates page and corrupted-file checks' },
+    { key: 'canNotify', group: 'Everyday', label: 'Notifications', desc: 'Download & new-content alerts' },
+    { key: 'canActivity', group: 'Everyday', label: "Who's on", desc: 'The counter beside the bell: who is on the site, what they are watching or listening to, and what the server is busy with' },
+    { key: 'canSaveMedia', group: 'Everyday', label: 'Save files', desc: 'Download the original film, episode or audiobook file' },
+    { key: 'canDownload', group: 'Downloads', label: 'Downloads', desc: 'Downloads page — add & manage torrents' },
+    { key: 'canEpisodes', group: 'Downloads', label: 'New episodes', desc: 'Episodes page and new-episode alerts: what has aired that the library does not have yet' },
+    { key: 'canScan', group: 'Library', label: 'Scan library', desc: 'Trigger library rescans' },
+    { key: 'canFixMatch', group: 'Library', label: 'Fix film details', desc: 'Correct a film or series matched to the wrong title ("Wrong film?"), or edit its details by hand' },
+    { key: 'canSubtitles', group: 'Library', label: 'Add subtitles', desc: 'Upload a subtitle file to a film or episode' },
+    { key: 'canLibraryHealth', group: 'Library', label: 'Library health', desc: 'Duplicates page and corrupted-file checks' },
+    { key: 'canConversion', group: 'Library', label: 'Conversion', desc: 'Conversion page — queue, repairs and settings' },
+    { key: 'canDelete', group: 'Library', label: 'Delete files', desc: 'Remove a film, episode or duplicate copy from the library and the disk' },
+    { key: 'canDashboard', group: 'Server', label: 'Dashboard', desc: 'System stats, storage & health' },
+    { key: 'canOrganizer', group: 'Server', label: 'Organizer', desc: 'Organizer logs, activity & status' },
+    { key: 'canFixImports', group: 'Server', label: 'Fix imports', desc: 'Fix & retry, title aliases and clearing leftovers on the Organizer page (needs Organizer)' },
+    { key: 'canLogs', group: 'Server', label: 'Logs', desc: 'Activity logs & now watching' },
+    { key: 'canRestart', group: 'Server', label: 'Restart server', desc: 'Restart the media server & organizer' },
   ];
+  const GROUPS = ['Everyday', 'Downloads', 'Library', 'Server'];
   const AVATARS = ['#00a4dc', '#e8734d', '#7ed491', '#c58af9', '#f5c518', '#6db3ff'];
 
   let profiles = $state(null);
@@ -124,17 +127,22 @@
             <button type="button" class="preset" onclick={() => { edit.permissions = PERMISSIONS.filter((p) => p.key !== 'canDelete').map((p) => p.key); }}>Trusted helper</button>
             <button type="button" class="preset" onclick={() => { edit.permissions = []; }}>None</button>
           </div>
-          <div class="perms">
-            {#each PERMISSIONS as p (p.key)}
-              <label class="perm">
-                <input type="checkbox" checked={edit.permissions.includes(p.key)} onchange={() => togglePerm(p.key)} />
-                <span class="ptext">
-                  <span class="plabel">{p.label}</span>
-                  <span class="pdesc">{p.desc}</span>
-                </span>
-              </label>
-            {/each}
-          </div>
+          {#each GROUPS as group (group)}
+            <div class="permgroup">
+              <h4 class="meta">{group}</h4>
+              <div class="perms">
+                {#each PERMISSIONS.filter((p) => p.group === group) as p (p.key)}
+                  <label class="perm">
+                    <input type="checkbox" checked={edit.permissions.includes(p.key)} onchange={() => togglePerm(p.key)} />
+                    <span class="ptext">
+                      <span class="plabel">{p.label}</span>
+                      <span class="pdesc">{p.desc}</span>
+                    </span>
+                  </label>
+                {/each}
+              </div>
+            </div>
+          {/each}
           <p class="meta permnote">Browsing, watching, history and requests are open to every user. User &amp; config management is admin-only.</p>
         </div>
       {:else}
@@ -231,6 +239,8 @@
   .fields input { background: var(--bg); }
 
   .permwrap { display: flex; flex-direction: column; gap: var(--s3); }
+  .permgroup { display: flex; flex-direction: column; gap: var(--s2); }
+  .permgroup h4 { margin: var(--s2) 0 0; font-weight: 600; color: var(--ink-soft); }
   .perms {
     display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
     gap: var(--s2);

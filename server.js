@@ -199,6 +199,15 @@ for (const p of config.profiles) {
 }
 if (configDirty) saveJSONSync(CONFIG_FILE, config);
 
+// "New episodes" split from "Downloads" (lib/permission-migrations.js): existing holders keep it,
+// signed-in sessions included, once per install.
+{
+  const episodes = require('./lib/permission-migrations').grantEpisodesToDownloaders(config, sessions);
+  if (episodes.configChanged) saveJSONSync(CONFIG_FILE, config);
+  if (episodes.sessionsChanged) persistSessions();
+  if (episodes.granted.length) console.log(`[Permissions] "New episodes" granted to ${episodes.granted.length} Downloads holder(s)`);
+}
+
 // ── Server ready state tracking ──────────────────────────────────────────
 let serverReady = false;
 let serverReadyStatus = 'starting';
@@ -1936,6 +1945,28 @@ const { episodeTrackerTick } = require('./lib/routes/episodes')(app, {
   loadAlerts: () => loadJSON(EPISODE_ALERTS_FILE, {}), saveAlerts: seen => saveJSON(EPISODE_ALERTS_FILE, seen),
 });
 
+// "Who's on" (lib/activity.js): the header counter and panel, and the restart guard.
+const unitActive = unit => new Promise(resolve => execFile('systemctl', ['is-active', unit], (_err, out) => resolve(String(out).trim() === 'active')));
+const activity = require('./lib/activity').createActivity({
+  profiles: () => config.profiles, presence: () => sse.present(), nowWatching: () => nowWatching,
+  isAudio: id => { const fp = fileIndex[id]; return !!fp && isAudioFile(fp); },
+  busy: {
+    downloads: async () => downloadWatcher.downloading(),
+    conversion: async () => conversionQueue.snapshot(),
+    // A status file the organizer stopped writing says nothing about now.
+    organizer: async () => {
+      const status = require('./lib/organizer-status').readStatus(ORGANIZER_STATUS_FILE);
+      return status && Date.now() - status.updatedAt < 5 * 60_000 ? status : null;
+    },
+    scan: async () => libraryRefresh.status(),
+    backup: () => unitActive('tvclone-backup.service'),
+    parity: () => unitActive('snapraid-nightly.service'),
+    transcription: () => unitActive('tvclone-transcribe.service'),
+    games: () => require('./lib/activity').runningGameServers(),
+  },
+});
+require('./lib/routes/activity')(app, { requirePermission, activity });
+
 // System control — docker + systemctl wrappers (lib/system-control.js)
 const sys = require('./lib/system-control')({
   ORGANIZER_SERVICE,
@@ -1949,6 +1980,7 @@ const selfRestart = require('./lib/self-restart')({ dataDir: DATA_DIR, shutdown,
 selfRestart.start();
 require('./lib/routes/system-control')(app, {
   requireAdminSession, requirePermission, organizerScript: ORGANIZER_SCRIPT, organizerAliasFile: ORGANIZER_ALIAS_FILE, sys, selfRestart,
+  playingNow: () => activity.playing(),
 });
 
 // ── Organizer watchdog + periodic safety rescan ────────────────────────
@@ -2021,7 +2053,10 @@ app.post('/api/reliability/repair', requireAdminSession, async (req, res) => {
 });
 
 // ── Restart endpoint ────────────────────────────────────────────────────
-app.post('/api/restart', requirePermission('canRestart'), (_req, res) => {
+// Someone playing is not cut off unless the request says force (the menu asks first).
+app.post('/api/restart', requirePermission('canRestart'), (req, res) => {
+  const refusal = require('./lib/activity').restartRefusal({ force: req.body?.force === true, playing: activity.playing() });
+  if (refusal) return res.status(409).json(refusal);
   res.json({ ok: true });
   setTimeout(() => {
     Object.keys(transcodeSessions).forEach(id => cleanupSession(id));

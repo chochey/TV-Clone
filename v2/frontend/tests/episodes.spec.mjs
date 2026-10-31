@@ -9,7 +9,7 @@ const origin = 'http://tvclone.test';
 const report = { refreshing: false, shows: [{ show: 'Test show (2020)', complete: false, missingCount: 1, needsCheck: false,
   seasons: [{ season: 1, held: 1, total: 2, checkedAt: 1700000000000, missing: [{ episode: 2, title: 'Second', released: '2020-01-08' }] }] }], unmatched: [] };
 
-async function setup(page, { downloaderConfigured }) {
+async function setup(page, { downloaderConfigured, permissions = ['canDownload', 'canEpisodes'] }) {
   const calls = { torrents: 0 }, consoleErrors = [];
   page.on('console', message => { if (message.type() === 'error') consoleErrors.push(message.text()); });
   await page.route('**/*', route => route.abort());
@@ -26,7 +26,7 @@ async function setup(page, { downloaderConfigured }) {
     if (pathname === '/api/qbt/torrents') { calls.torrents++; return downloaderConfigured ? route.fulfill({ json: [] }) : route.fulfill({ status: 503, json: { error: 'qBittorrent not configured. Set QBT_USER and QBT_PASS env vars.' } }); }
     let body = {};
     if (pathname === '/api/health') body = { ready: true };
-    else if (pathname === '/api/me') body = { loggedIn: true, role: 'user', profileId: 'test', name: 'Test', permissions: ['canDownload'], downloaderConfigured };
+    else if (pathname === '/api/me') body = { loggedIn: true, role: 'user', profileId: 'test', name: 'Test', permissions, downloaderConfigured };
     else if (pathname === '/api/library') body = [];
     else if (pathname === '/api/library/sections') body = { ok: true, sections: [] };
     else if (pathname === '/api/episodes/report') body = report;
@@ -56,4 +56,24 @@ test('with a download client the page still checks for matching downloads', asyn
   await expect(page.getByText('1 show', { exact: true })).toBeVisible();
   await expect.poll(() => calls.torrents).toBeGreaterThan(0);
   await expect(page.getByText(/Download status is unavailable/)).toHaveCount(0);
+});
+
+test('"New episodes" without "Downloads": the page works, never asks for downloads and offers no searches', async ({ page }) => {
+  const { calls } = await setup(page, { downloaderConfigured: true, permissions: ['canEpisodes'] });
+  await page.goto(`${origin}/episodes`);
+  await expect(page.getByText('1 show', { exact: true })).toBeVisible();
+  await page.waitForTimeout(500);
+  expect(calls.torrents).toBe(0);
+  await expect(page.getByRole('button', { name: /^Search/ })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Account menu' }).click();
+  await expect(page.locator('#account-menu').getByRole('button', { name: 'Episodes' })).toBeVisible();
+  await expect(page.locator('#account-menu').getByRole('button', { name: 'Downloads' })).toHaveCount(0);
+});
+
+test('"Downloads" alone no longer opens the Episodes page', async ({ page }) => {
+  await setup(page, { downloaderConfigured: true, permissions: ['canDownload'] });
+  await page.goto(`${origin}/`);
+  await page.getByRole('button', { name: 'Account menu' }).click();
+  await expect(page.locator('#account-menu').getByRole('button', { name: 'Downloads' })).toBeVisible();
+  await expect(page.locator('#account-menu').getByRole('button', { name: 'Episodes' })).toHaveCount(0);
 });

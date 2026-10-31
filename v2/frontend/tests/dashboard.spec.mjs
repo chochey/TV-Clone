@@ -35,6 +35,7 @@ async function setup(page, { streaming = streamingFor } = {}) {
     else if (pathname === '/api/library/sections') body = { ok: true, sections: [] };
     else if (pathname === '/api/system/restart' || pathname === '/api/restart') {
       calls.restarts = (calls.restarts || 0) + 1;
+      (calls.restartBodies ||= []).push(route.request().postDataJSON() || {});
       if (calls.restartStatus !== 200) return route.fulfill({ status: calls.restartStatus, json: { error: 'Permission denied' } });
       setTimeout(() => { calls.uptime = 1; }, 1500);   // the "new process" shows up a moment later
       body = { ok: true };
@@ -115,7 +116,7 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 
   });
 }
 
-test('Restart app asks first, mentions the streams it would stop, and reloads once the app is back', async ({ page }) => {
+test('Restart app asks first, names who is playing, and reloads once the app is back', async ({ page }) => {
   const calls = await setup(page);
   await page.goto(`${origin}/system`);
   const button = page.getByRole('button', { name: 'Restart app' });
@@ -123,12 +124,13 @@ test('Restart app asks first, mentions the streams it would stop, and reloads on
   let asked = '';
   page.once('dialog', d => { asked = d.message(); d.dismiss(); });
   await button.click();
-  await expect.poll(() => asked).toMatch(/1 stream is playing right now and will stop/);
+  await expect.poll(() => asked).toMatch(/Playing right now: Ann \(Friends\)\. They will be cut off\./);
   expect(calls.restarts || 0).toBe(0);
   page.once('dialog', d => d.accept());
   await button.click();
   await expect(page.getByRole('status').filter({ hasText: 'Back in about 15 seconds' })).toBeVisible();
   await expect.poll(() => calls.restarts).toBe(1);
+  expect(calls.restartBodies).toEqual([{ force: true }]);   // the admin was asked, so the server is told to go ahead
   await page.waitForLoadState('load');
   await expect(page.getByRole('button', { name: 'Restart app' })).toBeVisible({ timeout: 15000 });
 });

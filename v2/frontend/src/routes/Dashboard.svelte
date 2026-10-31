@@ -102,13 +102,14 @@
   let restartState = $state('idle');
   let restartError = $state('');
   async function restartApp() {
-    const streams = sys?.activeTranscodes || 0;
-    const warning = streams ? `${streams} stream${streams > 1 ? 's are' : ' is'} playing right now and will stop. ` : '';
+    // Everyone playing, audiobooks and direct play included (a transcode count missed those).
+    const playing = watching.map(w => `${w.profileName} (${w.title})`).join(', ');
+    const warning = playing ? `Playing right now: ${playing}. They will be cut off. ` : '';
     if (!window.confirm(`${warning}Restart the app now? It is back in about 15 seconds.`)) return;
     restartError = '';
     restartState = 'restarting';
     const uptimeBefore = await currentUptime();
-    try { await api.systemRestart(); }
+    try { await api.systemRestart(true); }   // asked above, so the server need not refuse
     catch (e) { restartError = e.body?.error || 'Could not restart the app.'; restartState = 'idle'; return; }
     // Reload only once a health reading proves a new process; the old one answers at once.
     if (await waitForRestart({ uptimeBefore }) === 'restarted') { window.location.reload(); return; }

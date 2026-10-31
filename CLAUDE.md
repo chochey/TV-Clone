@@ -396,9 +396,31 @@ page's button; "Fix imports" (`canFixImports`) allows the Organizer page's revie
 aliases, retry, clear-leftovers; the page itself still needs "Organizer"); "Delete files" (`canDelete`) the
 media delete routes and the Delete buttons; "Conversion" (`canConversion`) the Conversion page and every
 `/api/conversion/*` route; "Library health" (`canLibraryHealth`) the Duplicates page and `/api/duplicates`,
-`/api/corrupted*`. Admins always have all of these. The Users page has a **Trusted helper** button that
-ticks every permission except Delete files, and **None**.
+`/api/corrupted*`; "New episodes" (`canEpisodes`) the Episodes page, `/api/episodes/*` and the new-episode
+alerts (audience `episodes`; older alerts saved as `download` with type `episode` count as `episodes`). It split
+from Downloads on 2026-10-30: `lib/permission-migrations.js` gave it once to every Downloads holder, their
+signed-in sessions included (`config.migrations.episodesPermission`); without Downloads the Episodes page skips
+the torrent lookup and hides its Search buttons. "Who's on" (`canActivity`) is below. Admins always have all of
+these. The Users page groups the checkboxes under Everyday, Downloads, Library and Server, and has a
+**Trusted helper** button that ticks every permission except Delete files, and **None**.
 No minimum password length, by the user's choice.
+
+### Who's on (October 2026)
+The counter left of the bell (`lib/components/WhosOn.svelte`, permission `canActivity`) shows how many people
+are on the site; its panel lists each one as Watching, Listening (with the title, which opens its page, and
+percent) or Browsing, then "Busy on the server": downloads still downloading, a conversion actually converting
+(not waiting), organizer activity, a library scan, the nightly backup, the parity sync, read-along transcription
+and the Satisfactory/Palworld/Valheim servers. `GET /api/activity` (`lib/activity.js`, route
+`lib/routes/activity.js`): on the site = an open `/api/events` stream (`lib/sse.js` `present()`, per profile)
+or a progress ping within 60 s (`nowWatching`, the same window as `/api/now-watching`); listening = the file is
+audio. The busy list is cached 15 s; each source fails on its own. The game servers are blue's user services,
+so they are found by process name in `/proc` (comm cut to 15 characters). The download count comes from the
+download watcher's last poll (`downloading()`, null when qBittorrent has not answered for a minute). The
+client polls every 20 s while visible and on opening. **Restart guard:** `POST /api/restart` and
+`POST /api/system/restart` answer 409 with a sentence ("Someone is listening right now.") when anyone is
+playing, unless the body says `force: true`; the account menu then shows it with **Restart anyway**, and the
+Dashboard's Restart app names who is playing in its confirm and sends force. `scripts/smoke-boot.sh` checks
+`/api/activity` answers the signed-in admin.
 
 ### Look and feel (October 2026 redesign)
 Warm dark palette with one amber accent, set as tokens in `v2/frontend/src/styles/tokens.css`

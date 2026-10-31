@@ -106,6 +106,7 @@ export const api = {
   systemStats: () => fetch('/api/system/stats', opts('GET')).then(json),
   reliability: () => fetch('/api/reliability/status', opts('GET')).then(json),
   nowWatching: () => fetch('/api/now-watching', opts('GET')).then(json).catch(() => []),
+  activity: () => fetch('/api/activity', opts('GET')).then(json),
   adminLogs: (kind) => fetch(`/api/admin/${kind}`, opts('GET')).then(json), // logs|login-logs|scan-logs|stream-logs|error-logs
 
   // Organizer
@@ -114,7 +115,8 @@ export const api = {
   organizerStatus: () => fetch('/api/organizer/status', opts('GET')).then(json),
   organizerRetry: id => fetch('/api/organizer/retry',opts('POST',{id})).then(json),
   organizerRestart: () => fetch('/api/organizer/restart', opts('POST')).then(json),
-  systemRestart: () => fetch('/api/system/restart', opts('POST')).then(json),
+  // force: go ahead even though someone is playing (the server answers 409 otherwise).
+  systemRestart: (force = false) => fetch('/api/system/restart', opts('POST', { force })).then(json),
   organizerFixQueue: () => fetch('/api/organizer/fix-queue', opts('GET')).then(json),
   organizerClearLeftovers: names => fetch('/api/organizer/clear-leftovers', opts('POST', { names })).then(json),
   organizerAliasSave: (body) => fetch('/api/organizer/aliases', opts('POST', body)).then(json),
@@ -183,7 +185,7 @@ export const api = {
 
   // System actions
   scan: () => fetch('/api/scan', opts('POST')).then(json),
-  restart: () => fetch('/api/restart', opts('POST')).then(json),
+  restart: (force = false) => fetch('/api/restart', opts('POST', { force })).then(json),
 
   // Library conversion settings, preview, and queue controls.
   conversionConfig: () => fetch('/api/conversion/config', opts('GET')).then(json),

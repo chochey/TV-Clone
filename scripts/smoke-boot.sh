@@ -31,7 +31,7 @@ for _ in $(seq 1 60); do
     kill -0 "$PID" 2>/dev/null || fail "the server exited right after starting"
     grep -q -E "uncaughtException|unhandledRejection|ReferenceError|TypeError" "$TMP/server.log" && fail "an error was logged during startup"
     # Routes registered early and near the end of startup must both be there.
-    for route in "GET /api/audio/preferences" "POST /api/restart" "GET /api/corrupted" "GET /api/now-watching" "GET /api/duplicates" "GET /api/episodes/report" "GET /api/browse" "GET /api/docker/status" "GET /api/organizer/status" "GET /api/sprites/progress" "POST /api/media/delete-batch" "GET /api/metadata-override" "POST /api/subtitles/x" "GET /api/collections" "GET /api/dashboard/jobs" "POST /api/playback/report"; do
+    for route in "GET /api/audio/preferences" "POST /api/restart" "GET /api/corrupted" "GET /api/now-watching" "GET /api/duplicates" "GET /api/episodes/report" "GET /api/browse" "GET /api/docker/status" "GET /api/organizer/status" "GET /api/sprites/progress" "POST /api/media/delete-batch" "GET /api/metadata-override" "POST /api/subtitles/x" "GET /api/collections" "GET /api/dashboard/jobs" "POST /api/playback/report" "GET /api/activity"; do
       code="$(curl -s -o /dev/null -w '%{http_code}' -X "${route%% *}" "http://127.0.0.1:$PORT${route#* }")"
       case "$code" in 401|403) ;; *) fail "$route answered $code instead of refusing an anonymous request";; esac
     done
@@ -53,6 +53,8 @@ for _ in $(seq 1 60); do
     [ -n "$etag" ] || fail "the library sent no ETag"
     code="$(curl -s -o /dev/null -w '%{http_code}' -b "$JAR" -H "If-None-Match: $etag" "$BASE/api/library")"
     [ "$code" = 304 ] || fail "an unchanged library answered $code instead of 304"
+    # "Who's on" answers the signed-in admin (registered late, and it reaches into several services).
+    curl -s -b "$JAR" "$BASE/api/activity" | grep -q '"counts":{"online":' || fail "/api/activity did not answer the signed-in admin"
     echo "smoke boot ok"; exit 0
   fi
   sleep 0.5

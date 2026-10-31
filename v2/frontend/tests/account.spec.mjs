@@ -76,13 +76,18 @@ test('the Users page needs a password to create someone', async ({ page }) => {
   await expect(page.getByText('Conversion', { exact: true })).toBeVisible();
   await expect(page.getByText('Library health', { exact: true })).toBeVisible();
   await expect(page.getByText('Download the original film, episode or audiobook file')).toBeVisible();
+  await expect(page.getByText("Who's on", { exact: true })).toBeVisible();
+  await expect(page.getByText('New episodes', { exact: true })).toBeVisible();
+  // The checkboxes are grouped under headings rather than one long list.
+  await expect(page.locator('.permgroup h4')).toHaveText(['Everyday', 'Downloads', 'Library', 'Server']);
+  await expect(page.locator('.permgroup', { hasText: 'Downloads' }).first().locator('.plabel')).toHaveText(['Downloads', 'New episodes']);
   // One click ticks everything a trusted helper needs, except deleting.
   await page.getByRole('button', { name: 'Trusted helper' }).click();
   const boxes = page.locator('.perm input[type=checkbox]');
-  await expect(boxes).toHaveCount(14);
+  await expect(boxes).toHaveCount(16);
   await expect(page.locator('.perm', { hasText: 'Delete files' }).locator('input')).not.toBeChecked();
   await expect(page.locator('.perm', { hasText: 'Add subtitles' }).locator('input')).toBeChecked();
-  await expect(page.locator('.perm input[type=checkbox]:checked')).toHaveCount(13);
+  await expect(page.locator('.perm input[type=checkbox]:checked')).toHaveCount(15);
   await page.getByLabel('Display name').fill('Friend');
   const save = page.getByRole('button', { name: /^(Create|Save)/ });
   await expect(save).toBeDisabled();

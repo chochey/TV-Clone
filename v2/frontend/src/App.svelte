@@ -6,6 +6,7 @@
   import { collections, loadCollections } from './lib/collections.js';
   import { waitForRestart, currentUptime } from './lib/restart.js';
   import ChangePassword from './lib/components/ChangePassword.svelte';
+  import WhosOn from './lib/components/WhosOn.svelte';
   import { autofocus } from './lib/autofocus.js';
   import { EMPTY_FILTERS } from './lib/search-filters.js';
   import { posterUrl } from './lib/api.js';
@@ -241,15 +242,17 @@
   let scanSnapshot = $state(null);
   let scanGeneration = 0, scanSubmitting = false;
   let confirmRestart = $state(false);
+  let restartWarning = $state('');   // the server's "someone is playing" answer, until Restart anyway
+  let whoson = $state(null);
   let searchExpanded = $state(false);
   let searchInput = $state(null), accountButton = $state(null);
   async function openMobileSearch() {
-    menuOpen = false; bellOpen = false; searchExpanded = true;
+    menuOpen = false; bellOpen = false; whoson?.close(); searchExpanded = true;
     await tick(); searchInput?.focus();
   }
   function dismissPanels(e) {
     if (e.key !== 'Escape') return;
-    if (menuOpen) { menuOpen = false; confirmRestart = false; accountButton?.focus(); }
+    if (menuOpen) { menuOpen = false; confirmRestart = false; restartWarning = ''; accountButton?.focus(); }
     bellOpen = false; searchExpanded = false;
   }
 
@@ -284,6 +287,7 @@
     }
   });
   function openBell() {
+    whoson?.close();
     bellOpen = !bellOpen;
     if (bellOpen) markAllRead();
   }
@@ -317,6 +321,7 @@
     searchExpanded = false;
     menuOpen = false;
     confirmRestart = false;
+    restartWarning = '';
     browseWhileListening();
     navigate(path);
   }
@@ -362,13 +367,19 @@
   });
   // "Server is back" is said only once a health reading proves a new process (lower uptime);
   // a refused or ignored request used to be reported as a successful restart.
-  async function restartServer() {
-    menuOpen = false;
+  // Someone playing makes the server answer 409 with who (in words); the menu shows that
+  // and offers Restart anyway, which sends force.
+  async function restartServer(force = false) {
     confirmRestart = false;
     const uptimeBefore = await currentUptime();
+    try { await api.restart(force); }
+    catch (e) {
+      if (e.status === 409 && !force) { restartWarning = e.body?.error || 'Someone is playing something right now.'; return; }
+      menuOpen = false; restartWarning = '';
+      showToast(`Could not restart the server: ${e.body?.error || e.message || 'request failed'}`); return;
+    }
+    menuOpen = false; restartWarning = '';
     showToast('Restarting the server…');
-    try { await api.restart(); }
-    catch (e) { showToast(`Could not restart the server: ${e.body?.error || e.message || 'request failed'}`); return; }
     const result = await waitForRestart({ uptimeBefore });
     if (result === 'restarted') { showToast('Server is back.'); await loadLibrary($session?.profileId); return; }
     showToast('The server did not restart — check the dashboard.');
@@ -396,7 +407,7 @@
 <!-- A click on a menu item that re-renders itself ("Restart Server" -> "Really restart?") reaches
      the window with a detached target, which no longer sits inside the dropdown; such a click is
      inside, not outside. -->
-<svelte:window bind:scrollY onkeydown={dismissPanels} onclick={(e) => { if (!e.target.isConnected || e.target.closest?.('[data-keep-open]')) return; menuOpen = false; confirmRestart = false; bellOpen = false; }} />
+<svelte:window bind:scrollY onkeydown={dismissPanels} onclick={(e) => { if (!e.target.isConnected || e.target.closest?.('[data-keep-open]')) return; menuOpen = false; confirmRestart = false; restartWarning = ''; bellOpen = false; }} />
 
 {#if phase === 'loading'}
   <div class="splash">
@@ -490,6 +501,9 @@
         </div>
       {/if}
     </div>
+    {#if can('canActivity')}
+      <WhosOn bind:this={whoson} onopen={() => { bellOpen = false; menuOpen = false; confirmRestart = false; restartWarning = ''; }} />
+    {/if}
     {#if canNotify}
     <div class="bell">
       <button class="bellbtn" aria-label="Notifications" aria-expanded={bellOpen}
@@ -525,7 +539,7 @@
     {/if}
     <div class="usermenu">
       <button class="avatar" aria-label="Account menu" aria-expanded={menuOpen} aria-controls="account-menu" bind:this={accountButton}
-              onclick={(e) => { e.stopPropagation(); menuOpen = !menuOpen; if (menuOpen) refreshPending(); }}>
+              onclick={(e) => { e.stopPropagation(); whoson?.close(); menuOpen = !menuOpen; if (menuOpen) refreshPending(); }}>
         {($session?.name || '?').slice(0, 1)}
         {#if pendingCount > 0}<span class="badge">{pendingCount}</span>{/if}
       </button>
@@ -537,7 +551,7 @@
           <button onclick={() => go('/requests')}>
             Requests {#if pendingCount > 0}<span class="badge inline">{pendingCount}</span>{/if}
           </button>
-          {#if isAdmin || can('canDownload') || can('canLogs') || can('canDashboard') || can('canOrganizer') || can('canConversion') || can('canLibraryHealth')}
+          {#if isAdmin || can('canDownload') || can('canEpisodes') || can('canLogs') || can('canDashboard') || can('canOrganizer') || can('canConversion') || can('canLibraryHealth')}
             <div class="divider"></div>
             <div class="who meta">Settings</div>
             {#if can('canDashboard')}<button onclick={() => go('/system')}>Dashboard</button>{/if}
@@ -545,7 +559,7 @@
             {#if isAdmin}<button onclick={() => go('/users')}>Users</button>{/if}
             {#if can('canLibraryHealth')}<button onclick={() => go('/duplicates')}>Duplicates</button>{/if}
             {#if can('canConversion')}<button onclick={() => go('/conversion')}>Conversion</button>{/if}
-            {#if can('canDownload')}<button onclick={() => go('/episodes')}>Episodes</button>{/if}
+            {#if can('canEpisodes')}<button onclick={() => go('/episodes')}>Episodes</button>{/if}
             {#if can('canDownload')}<button onclick={() => go('/downloads')}>Downloads</button>{/if}
             {#if can('canOrganizer')}<button onclick={() => go('/organizer')}>Organizer</button>{/if}
             {#if can('canLogs')}<button onclick={() => go('/logs')}>Logs</button>{/if}
@@ -556,8 +570,11 @@
               <button onclick={scanLibrary} disabled={scanBusy}>{scanBusy ? 'Scanning…' : 'Scan Library'}</button>
             {/if}
             {#if can('canRestart')}
-              {#if confirmRestart}
-                <button class="danger" onclick={restartServer}>Really restart?</button>
+              {#if restartWarning}
+                <p class="restart-warn" role="alert">{restartWarning} They would be cut off for about 15 seconds.</p>
+                <button class="danger" onclick={() => restartServer(true)}>Restart anyway</button>
+              {:else if confirmRestart}
+                <button class="danger" onclick={() => restartServer()}>Really restart?</button>
               {:else}
                 <button onclick={(e) => { e.stopPropagation(); confirmRestart = true; }}>Restart Server</button>
               {/if}
@@ -608,7 +625,7 @@
       <Duplicates />
     {:else if $route.name === 'conversion' && can('canConversion')}
       <Conversion />
-    {:else if $route.name === 'episodes' && can('canDownload')}
+    {:else if $route.name === 'episodes' && can('canEpisodes')}
       <Episodes />
     {:else}
       <Home onopen={openItem} onplay={playItem} />
@@ -884,6 +901,7 @@
   .dropdown > button:hover { background: rgba(243, 237, 228, 0.1); color: var(--ink); }
   .dropdown > button:disabled { opacity: 0.5; }
   .dropdown .danger { color: var(--bad); }
+  .restart-warn { max-width: 240px; padding: 6px 12px; font-size: 0.8rem; line-height: 1.4; color: var(--warn); }
   .divider { height: 1px; background: var(--line); margin: var(--s2) 0; }
   nav a {
     color: var(--ink-soft); font-size: 0.95rem; font-weight: 500;

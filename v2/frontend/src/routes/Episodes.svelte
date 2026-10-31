@@ -7,6 +7,8 @@
   let report=$state(null), error=$state(''), downloadError=$state(''), torrents=$state([]);
   let filter=$state('all'), query=$state(''), starting=$state(false);
   let pollTimer, destroyed=false, loading=false;
+  // "New episodes" opens this page; matching downloads and the Search buttons also need "Downloads".
+  const canDownload=$derived($session?.role==='admin' || ($session?.permissions || []).includes('canDownload'));
   const filters=[['all','All'],['new','New'],['missing','Missing'],['complete','Complete'],['check','Needs checking']];
   const shows=$derived(filterShows(report,filter,query));
   const complete=$derived((report?.shows || []).filter(s=>s.complete).length);
@@ -18,8 +20,8 @@
     loading=true;
     await Promise.all([
       api.episodesReport().then(r=>{if(!destroyed){report=r;error='';}}).catch(()=>{if(!destroyed)error='Could not load episode information. Retrying shortly.';}),
-      // No download client set up: nothing to match against, and nothing worth a warning.
-      $session?.downloaderConfigured === false ? Promise.resolve() :
+      // No download client set up (or no Downloads permission): nothing to match against, and nothing worth a warning.
+      !canDownload || $session?.downloaderConfigured === false ? Promise.resolve() :
       api.torrents().then(r=>{if(!Array.isArray(r))throw new Error();if(!destroyed){torrents=r;downloadError='';}}).catch(()=>{if(!destroyed){torrents=[];downloadError='Download status is unavailable. Check Downloads before adding another copy.';}}),
     ]);
     loading=false;schedule();
@@ -71,12 +73,12 @@
             <summary><strong>Season {season.season}</strong><span>{season.held} in library{season.total!=null?` · ${season.total} listed`:''}{season.needsCheck?' · Needs checking':''}</span></summary>
             <p class="muted">Last successful check: {date(season.checkedAt)}</p>
             {#if season.error}<p class="error">Couldn’t check this season: {season.error}. Earlier results are kept where available.</p>{/if}
-            {#if !season.held && season.missing.length}<button class="action" onclick={()=>searchFor(s.show,season.season,null)}>Search season</button>{/if}
+            {#if canDownload && !season.held && season.missing.length}<button class="action" onclick={()=>searchFor(s.show,season.season,null)}>Search season</button>{/if}
             {#each (filter==='new'?recentEpisodes({seasons:[season]}):season.missing) as e (e.episode)}
               {@const download=episodeDownload(torrents,s.show,season.season,e.episode)}
               <div class="episode"><div class="info"><strong>{epCode(season.season,e.episode)} · {e.title || 'Title unavailable'}</strong><span class="muted">Aired {e.released}</span>
                 {#if download}<a href="/downloads" onclick={(event)=>{event.preventDefault();navigate('/downloads');}}>Possible matching download · {downloadLabel(download)}</a>{/if}
-              </div><button class="action" onclick={()=>searchFor(s.show,season.season,e.episode)}>Search</button></div>
+              </div>{#if canDownload}<button class="action" onclick={()=>searchFor(s.show,season.season,e.episode)}>Search</button>{/if}</div>
             {/each}
             {#if !season.missing.length}<p class="muted">{season.needsCheck?'Episode information needs checking.':'All known aired episodes are in your library.'}</p>{/if}
             {#if season.future}<p class="muted">{season.future} episode{season.future===1?'':'s'} awaiting release or a confirmed air date.</p>{/if}
