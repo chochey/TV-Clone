@@ -305,7 +305,12 @@ replaced image is kept as `<repo>:chochey-previous`; only the one it replaces is
 The Logs page's Logins, Streams, Scans and Errors are ring buffers (`lib/log-ring.js`). They were memory
 only, so every restart emptied them ("Nothing logged yet" after a deploy day). With `{ file, loadJSON,
 saveJSON }` they load at start and save about a second after each burst of pushes: `data/event-log-{login,
-scan,stream,error}.json`. Watch history is separate (profile data) and always persisted.
+scan,stream,error}.json`. Watch history is separate (profile data) and always persisted. A fifth ring,
+**Saved files** (`event-log-saved.json`, 500 entries, `lib/saved-files.js`), records each use of the title
+page's Download button (`GET /api/download/:id`, "Save files"): who, title and file name, size, IP (`req.ip`;
+real client addresses arrive because `TRUST_PROXY=loopback` and cloudflared uses host networking), and
+Finished or Stopped (the response finished, or the connection closed first; once per request, `partial` for a
+Range request). Served at `/api/admin/saved-logs` (canLogs) as the Logs page's "Saved files" tab.
 
 ### Health alerts (October 2026)
 `lib/health-alerts.js` runs once an hour from server.js (first pass 3 min after boot) over the same

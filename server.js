@@ -715,6 +715,7 @@ const _loginLog  = logRing('login', 500);
 const _scanLog   = logRing('scan', 200);
 const _streamLog = logRing('stream', 500);
 const _errorLog  = logRing('error', 300);
+const _savedLog  = logRing('saved', 500);   // "Save files" downloads (lib/saved-files.js)
 const loginLog = _loginLog.entries, scanLog = _scanLog.entries;
 const streamLog = _streamLog.entries, errorLog = _errorLog.entries;
 
@@ -929,10 +930,17 @@ require('./lib/routes/library-folders')(app, {
 // Streams, posters, audiobook covers and backdrops (lib/routes/media-files.js).
 const { streamMediaFile } = require('./lib/direct-stream');
 const backdrop = require('./lib/backdrop')({ DATA_DIR, probeDurationAsync: probe.probeDurationAsync });
+// The Logs page's "Saved files": who took which original file, how big, from where, finished or not.
+const savedFiles = require('./lib/saved-files')({
+  ring: _savedLog, getSession, profiles: () => config.profiles,
+  titleFor: id => (libraryCache || []).find(m => m.id === id)?.title || null,
+  sizeOf: file => fs.statSync(file).size,
+});
 require('./lib/routes/media-files')(app, {
   requireAuth, ensureLibrary, requirePermission, fileFor: id => fileIndex[id], posterFor: id => posterIndex[id], playbackIssueForFile, isAudioFile,
   audiobookFile, audioLite, audioMetadata, backdrop, streamMediaFile, recordError, artworkStore: audioArtwork,
   onDirectPlay: () => { lastPlaybackAt = Date.now(); },
+  onSaved: entry => savedFiles.record(entry),
 });
 
 // ── Thumbnail preview for seek bar (lib/sprites.js) ────────────────────
@@ -951,7 +959,7 @@ require('./lib/routes/admin-status')(app, {
   spriteRequeueRequested: sprites.requeueRequested,
   nowWatching, transcodeSessions: () => transcodeSessions,
   getStreamMode, config, loadProfileData,
-  logs: { login: loginLog, scan: scanLog, stream: streamLog, error: errorLog },
+  logs: { login: loginLog, scan: scanLog, stream: streamLog, error: errorLog, saved: _savedLog.entries },
   systemStats: require('./lib/system-stats')(), storageHealth,
   libraryScanState: () => libraryScanState, publicScanState, scanLibrary, getMetadataForItem,
 });

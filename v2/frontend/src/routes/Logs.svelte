@@ -2,11 +2,13 @@
   import { onMount } from 'svelte';
   import { api } from '../lib/api.js';
   import { fmtTime } from '../lib/player-core.js';
+  import { fmtBytes } from '../lib/dashboard-format.js';
 
   const TABS = [
     { key: 'logs', label: 'Watch history' },
     { key: 'login-logs', label: 'Logins' },
     { key: 'stream-logs', label: 'Streams' },
+    { key: 'saved-logs', label: 'Saved files' },
     { key: 'scan-logs', label: 'Scans' },
     { key: 'error-logs', label: 'Errors' },
   ];
@@ -71,6 +73,18 @@
                 <td>{r.profileName || '—'}</td>
                 <td class="grow">{r.title}</td>
                 <td class="dim">{r.mode}{r.codec ? ` · ${r.codec}` : ''} · {r.quality}{r.seekTime ? ` · from ${fmtTime(r.seekTime)}` : ''}</td>
+              </tr>
+            {/each}
+          {:else if tab === 'saved-logs'}
+            <!-- "Save files" downloads of the original file (the title page's Download button). -->
+            {#each rows as r}
+              <tr>
+                <td class="dim">{when(r.timestamp)}</td>
+                <td>{r.profileName || '—'}</td>
+                <td class="grow">{r.title}{#if r.file && r.file !== r.title}<span class="dim file"> · {r.file}</span>{/if}</td>
+                <td class="dim">{r.bytes != null ? fmtBytes(r.bytes) : '—'}</td>
+                <td class={r.completed ? 'good' : 'bad'}>{r.completed ? 'Finished' : 'Stopped'}{r.partial ? ' (part)' : ''}</td>
+                <td class="dim">{r.ip || '—'}</td>
               </tr>
             {/each}
           {:else if tab === 'scan-logs'}
