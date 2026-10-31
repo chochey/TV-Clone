@@ -270,7 +270,9 @@ once a passphrase file exists) with the passphrase in `/etc/tvclone/backup-passp
 sudo since sudo is dead in Claude's shells, `/srv/chocheytv/backup-passphrase` (refused if group/world readable), verified against the manifest
 before it is kept; `scripts/restore-encrypted-backup.js` restores one into a new folder. The receipt
 carries `copy`, and the Backups card warns unless something verified is off the system disk
-(`offDisk`). See BACKUP_RECOVERY.md.
+(`offDisk`). See BACKUP_RECOVERY.md. The unit's `TimeoutStartSec` is 1800 (installer, plus a
+`timeout.conf` drop-in on the live box): 300 killed the 2026-10-28 run while the first SnapRAID sync
+saturated the pool, and a killed run writes no receipt, so only the 36 h stale check noticed.
 
 ### Container updates (October 2026)
 The Docker containers (gluetun VPN, qBittorrent, cloudflared; compose project in

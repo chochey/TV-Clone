@@ -143,7 +143,9 @@ User=$RUN_USER
 EnvironmentFile=-/etc/tvclone/tvclone.env
 WorkingDirectory=$REPO_DIR
 ExecStart=/usr/bin/node $REPO_DIR/scripts/tvclone-reliability.js backup --repo $REPO_DIR
-TimeoutStartSec=300
+# A backup takes about a minute; 5 minutes killed one on 2026-10-28 while the first SnapRAID
+# sync kept the drives busy. 30 minutes still stops one that is truly stuck.
+TimeoutStartSec=1800
 EOF
 
 cat >/etc/systemd/system/tvclone-backup.timer <<EOF
