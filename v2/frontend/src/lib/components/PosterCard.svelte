@@ -56,10 +56,11 @@
     if (!p?.duration || !p?.currentTime) return 0;
     return Math.max(0, Math.round((p.duration - p.currentTime) / 60));
   });
-  // "Series · S3 · E7 · 24 min left": in a row that mixes kinds, the line says which this is.
+  // "Series · S3 · E7 · 24 min left" (or "· Up next" for the episode after one just finished):
+  // in a row that mixes kinds, the line says which this is.
   const kindWord = $derived(isAudioItem(item) ? 'Audiobook' : isSeriesItem(item) ? 'Series' : 'Film');
   const resumeLine = $derived(
-    [kindWord, isSeriesItem(item) && item.epInfo ? episodeCode(item) : '', minsLeft ? `${minsLeft} min left` : '']
+    [kindWord, isSeriesItem(item) && item.epInfo ? episodeCode(item) : '', minsLeft ? `${minsLeft} min left` : item.upNext ? 'Up next' : '']
       .filter(Boolean).join(' · '),
   );
 

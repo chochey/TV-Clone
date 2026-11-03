@@ -45,6 +45,7 @@ test('time left and when it was paused read like a person would say them', () =>
   assert.equal(pausedWhen(at('2026-10-15T21:12:00'), now), 'Paused Thursday at 9:12 PM');
   assert.equal(pausedWhen(at('2026-09-01T21:12:00'), now), 'Paused Sep 1');
   assert.equal(pausedWhen(0, now), '');
+  assert.equal(pausedWhen(at('2026-10-17T17:36:00'), now, 'Finished S3 · E7'), 'Finished S3 · E7 today at 5:36 PM');
 });
 
 const lib = [

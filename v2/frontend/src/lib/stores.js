@@ -10,6 +10,7 @@ import { EMPTY_FILTERS } from './search-filters.js';
 import { resetCollections } from './collections.js';
 import { resetHomeData, rememberChapters } from './home-data.js';
 import { savedId } from './watch-later.js';
+import { continueWatchingList } from './continue-watching.js';
 
 export const session = writable(null);     // { loggedIn, profileId, name, role }
 const liveLibrary = writable([]);
@@ -89,13 +90,14 @@ export async function toggleWatchLater(item) {
 // Hiding is optimistic — the row should disappear on click, not on round-trip.
 // A show's card stands for the whole show, so dismiss every in-progress episode
 // of it; dismissing only the one on screen would just promote the next episode
-// into the slot, which reads as "the button didn't work".
+// into the slot, which reads as "the button didn't work". An "up next" episode
+// has no progress yet, so it is hidden by its own id as well.
 export function dismissFromContinue(item) {
   const key = seriesKey(item);
   const ids = key
-    ? get(library)
+    ? [...new Set([item.id, ...get(library)
       .filter((m) => seriesKey(m) === key && m.progress?.percent > 0 && m.progress?.percent < FINISHED_PERCENT)
-      .map((m) => m.id)
+      .map((m) => m.id)])]
     : [item.id];
   dismissed.update((d) => {
     const cw = { ...d.continueWatching };
@@ -114,20 +116,10 @@ import { AUTO_WATCHED_PERCENT } from './series-playback.js';
 export { AUTO_WATCHED_PERCENT };
 const FINISHED_PERCENT = AUTO_WATCHED_PERCENT;
 
-// Continue Watching: in-progress items, most-recent first, de-duped per show.
-export const continueWatching = derived([watchState, mediaById, dismissed], ([$state, $byId, $dismissed]) => {
-  const hidden = $dismissed.continueWatching || {};
-  const inProgress = Object.entries($state)
-    .filter(([id, s]) => !hidden[id] && $byId.has(id) && s.progress?.percent > 0 && s.progress.percent < FINISHED_PERCENT)
-    .map(([id, state]) => ({ ...$byId.get(id), ...state }))
-    .sort((a, b) => (b.progress?.updatedAt || 0) - (a.progress?.updatedAt || 0));
-  const seen = new Set();
-  return inProgress.filter(item => {
-    const key = seriesKey(item) || item.id;
-    if (seen.has(key)) return false;
-    seen.add(key); return true;
-  });
-});
+// Continue Watching: in-progress items and the next episode of a show just finished,
+// most-recent first, one per show (lib/continue-watching.js).
+export const continueWatching = derived([watchState, mediaById, dismissed, seriesIndex], ([$state, $byId, $dismissed, $index]) =>
+  continueWatchingList({ state: $state, byId: $byId, hidden: $dismissed.continueWatching || {}, seriesIndex: $index }));
 
 // Collapse a list so a show's episodes become one representative card
 // (the newest episode that has artwork), keeping standalone movies as-is.

@@ -468,6 +468,13 @@ by `lib/tonight-pick-memory.js`; before this the top-ranked film showed for week
 (titles untouched for 90 days, `STALE_AFTER_MS`, are `split.older`: not featured, not in the row or the View all
 count; View all lists them under "Older" with "Clear these N", which is `POST /api/dismissed/continue-watching/older-than`
 `{before}`, one request that hides every unfinished title last touched before the date)
+(the list is `lib/continue-watching.js`, one entry per show decided by its newest activity: an episode stopped
+partway resumes; a FINISHED episode offers the next one not yet watched as "Up next", dated by when it was finished,
+so the show stays in front instead of dropping behind an older paused film (2026-11-02: the user finished The Strain
+S3E7 and Tonight led with Jumanji from the day before). Up next skips extras with no episode number, honours Not
+tonight by the episode's own id, and only counts episodes finished within `STALE_AFTER_MS`, since Clear these hides
+only unfinished titles and could never remove an old one; the lead card then reads "Up next", "Finished S3 · E7
+today at 5:36 PM" and Play)
 (`lib/components/KindBadge.svelte` puts an amber "Audiobook" pill on book covers in poster-shaped cards, every
 resume line starts with the kind, "Film · 108 min left", and the two featured cards say Film / Series / Audiobook
 in a `.card-kind` label at their top edge, where the user asked for it, not on the cover) (films, series

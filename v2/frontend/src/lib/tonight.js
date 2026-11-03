@@ -46,13 +46,14 @@ export function timeLeft(progress) {
   return h ? `${h}\u00a0h ${m}\u00a0min left` : `${m}\u00a0min left`;
 }
 
-export function pausedWhen(ts, now = Date.now()) {
+// `word` leads the line: "Paused", or "Finished S3 · E7" on an up-next episode.
+export function pausedWhen(ts, now = Date.now(), word = 'Paused') {
   if (!ts) return '';
   const days = Math.round((startOfDay(now) - startOfDay(ts)) / DAY);
-  if (days <= 0) return `Paused today at ${clock(ts)}`;
-  if (days === 1) return `Paused yesterday at ${clock(ts)}`;
-  if (days < 7) return `Paused ${weekday(ts)} at ${clock(ts)}`;
-  return `Paused ${new Date(ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
+  if (days <= 0) return `${word} today at ${clock(ts)}`;
+  if (days === 1) return `${word} yesterday at ${clock(ts)}`;
+  if (days < 7) return `${word} ${weekday(ts)} at ${clock(ts)}`;
+  return `${word} ${new Date(ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
 }
 
 // ── Tonight's pick ────────────────────────────────────────────────────

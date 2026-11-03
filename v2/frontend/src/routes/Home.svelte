@@ -38,7 +38,10 @@
   const leadSub = $derived(watching && isSeriesItem(watching) && watching.epInfo ? `${episodeCode(watching)} — ${episodeTitle(watching)}` : '');
   const leadPoster = $derived(watching ? posterUrl(watching) : '');
   const leadPct = $derived(watching?.progress?.percent || 0);
-  const leadPaused = $derived(watching ? pausedWhen(watching.progress?.updatedAt, now) : '');
+  // An "up next" episode (the show's last episode was finished) says when that one was finished.
+  const leadPaused = $derived(!watching ? ''
+    : watching.upNext ? pausedWhen(watching.progress?.updatedAt, now, `Finished ${episodeCode(watching.previousEpisode || {}) || 'the last episode'}`)
+    : pausedWhen(watching.progress?.updatedAt, now));
   const leadLeft = $derived(watching ? timeLeft(watching.progress) : '');
   let leadArtFailed = $state(false);
   $effect(() => { leadPoster; leadArtFailed = false; });
@@ -120,7 +123,7 @@
 
     <div class="lead-row">
       {#if watching}
-        <article class="lead" aria-label="Pick up where you left off">
+        <article class="lead" aria-label={watching.upNext ? 'Up next' : 'Pick up where you left off'}>
           {#if leadPoster && !leadArtFailed}<img class="lead-bg" src={leadPoster} alt="" aria-hidden="true" />{/if}
           <span class="card-kind">{isSeriesItem(watching) ? 'Series' : 'Film'}</span>
           <div class="lead-body">
@@ -129,14 +132,15 @@
               {:else}<span class="art-fallback">{leadTitle}</span>{/if}
             </button>
             <div class="lead-text">
-              <span class="kicker">Pick up<span class="wide-inline">{' where you left off'}</span></span>
+              {#if watching.upNext}<span class="kicker">Up next</span>
+              {:else}<span class="kicker">Pick up<span class="wide-inline">{' where you left off'}</span></span>{/if}
               <h2 class="display lead-title">{leadTitle}</h2>
               {#if leadSub}<p class="lead-sub">{leadSub}</p>{/if}
               <p class="lead-meta">{#if leadPaused}<span class="paused">{leadPaused}{#if leadLeft}<span aria-hidden="true">{' · '}</span>{/if}</span>{/if}{leadLeft}</p>
               {#if leadPct > 0}<div class="bar" aria-hidden="true"><span style={`width:${Math.min(100, leadPct)}%`}></span></div>{/if}
               <div class="lead-actions">
                 <button class="btn primary" onclick={() => onplay?.(watching)}>
-                  <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M7 4v16l13-8z"/></svg><span class="lbl">Resume</span>
+                  <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M7 4v16l13-8z"/></svg><span class="lbl">{leadPct > 0 ? 'Resume' : 'Play'}</span>
                 </button>
                 <button class="btn wide-only" onclick={() => onopen?.(watching)}>Details</button>
                 <button class="textbtn" onclick={() => dismissFromContinue(watching)}>Not tonight</button>
