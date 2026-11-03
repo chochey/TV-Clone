@@ -196,6 +196,18 @@ every library FILE and must not be used for that. The page shows the feed by day
 All / Imports / Problems / Organizer (the old `moves`/`errors`/`scans` names still work), search, and
 the raw log behind a toggle, scrolled to the newest end.
 
+### Same-named series settled by the episode (November 2026)
+"Nocturne.S01E01.Lazarus.Come.Forth" (Apple TV, 2026) sat in review: OMDb has three series called exactly
+"Nocturne" (2019 Twitch show, 2026, 1949), the release has no year, and a yearless series search accepts
+only a single exact candidate. Now `_series_by_episode` (movie_renamer.py) reads each candidate's season
+list (`_episode_listing`, which keeps "Episode #1.1" placeholders as None, unlike `_season_episode_titles`):
+exactly one show whose title for that episode agrees (ratio >= 0.85) wins; failing that, exactly one show
+that began this year or last and lists the episode only as a placeholder wins (OMDb lags new shows).
+Needs an episode title in the release name; at most 5 candidates; otherwise review as before. The no-match
+cache key includes the episode title, so a titleless episode cannot hide a later one that settles it. Once
+one episode is filed, `existing_series` carries the rest. Tests: media-organizer/test_series_by_episode.py
+(organizer tests run with `python3 -m unittest discover -p 'test_*.py'` in media-organizer/).
+
 ### Fix & retry with an IMDb number (October 2026)
 Some films are in OMDb under a stale placeholder: The Weight (2026) is only tt10794054, Year 2020, no cast,
 so every title search missed it or rejected it as six years off (the year rule allows +-1). Fix & retry

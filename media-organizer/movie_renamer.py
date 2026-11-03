@@ -960,7 +960,64 @@ def is_good_series_match(parsed_title: str, parsed_year: str | None, result: dic
     return True
 
 
-def _query_omdb_series_single(title: str, year: str | None = None) -> dict | None:
+def _current_year() -> int:
+    return time.localtime().tm_year
+
+
+_MAX_SAME_NAME_SERIES = 5  # episode lists fetched to tell same-named shows apart, at most
+
+
+def _episode_listing(imdb_id: str, season: int) -> dict:
+    """{episode number: title, or None for OMDb's "Episode #1.1" placeholder} for one season.
+    _season_episode_titles drops the placeholders; here they count, as "OMDb lists this episode"."""
+    data = _omdb_get({"apikey": config.OMDB_API_KEY, "i": imdb_id, "Season": season})
+    rows = data.get("Episodes") if isinstance(data, dict) and data.get("Response") == "True" else None
+    listing = {}
+    for item in rows if isinstance(rows, list) else []:
+        number = str(item.get("Episode", "")).strip() if isinstance(item, dict) else ""
+        if not number.isdigit():
+            continue
+        title = item.get("Title")
+        real = isinstance(title, str) and title.strip() and title != "N/A" \
+            and not omdb_support.PLACEHOLDER_TITLE.match(title.strip())
+        listing[int(number)] = title.strip() if real else None
+    return listing
+
+
+def _series_by_episode(candidates: list[dict], hint: dict | None) -> dict | None:
+    """Several series share the release's name and it has no year: the episode decides.
+
+    The release's episode title (Nocturne.S01E01.Lazarus.Come.Forth) is checked against each
+    show's OMDb episode list. Exactly one show whose title for that episode agrees wins. Failing
+    that, exactly one show that began this year or last and lists the episode only as a
+    placeholder ("Episode #1.1": OMDb has not caught up with a new show) wins, since every other
+    show either has a different title for that episode or no such episode. Anything else stays
+    in review. Real case 2026-11-03: Nocturne (2026) beside Nocturne (2019) and (1949)."""
+    hint = hint or {}
+    wanted, season, episode = hint.get("episode_title"), hint.get("season"), hint.get("episode")
+    if not (isinstance(wanted, str) and wanted.strip() and isinstance(season, int) and isinstance(episode, int)):
+        return None
+    if len(candidates) > _MAX_SAME_NAME_SERIES:
+        return None
+    agree, new_shows = [], []
+    for candidate in candidates:
+        listed = _episode_listing(candidate["imdbID"], season)
+        if episode not in listed:
+            continue
+        if listed[episode] is None:
+            start = str(candidate.get("year") or "")[:4]
+            if start.isdigit() and int(start) >= _current_year() - 1:
+                new_shows.append(candidate)
+        elif title_match_ratio(wanted, listed[episode]) >= 0.85:
+            agree.append(candidate)
+    chosen = agree[0] if len(agree) == 1 else new_shows[0] if not agree and len(new_shows) == 1 else None
+    if chosen:
+        log.info(f"  Series chosen by episode: S{season:02d}E{episode:02d} '{wanted}' fits "
+                 f"{chosen['title']} ({chosen['year']}) only")
+    return chosen
+
+
+def _query_omdb_series_single(title: str, year: str | None = None, episode_hint: dict | None = None) -> dict | None:
     """Query OMDb API for a single TV series title (no variations).
 
     Raises OMDbRateLimitError if too many consecutive 401 errors are detected.
@@ -1020,7 +1077,9 @@ def _query_omdb_series_single(title: str, year: str | None = None) -> dict | Non
                                "type": row.get("Type"), "imdbID": row.get("imdbID")}
                               for row in rows]
                 candidates = [row for row in candidates if is_good_series_match(title, None, row)]
-                return candidates[0] if len(candidates) == 1 else None
+                if len(candidates) == 1:
+                    return candidates[0]
+                return _series_by_episode(candidates, episode_hint) if candidates else None
             return {
                 "title": data.get("Title"),
                 "year": data.get("Year", "").split("–")[0],  # Get start year from "2008–2013"
@@ -1056,8 +1115,11 @@ def _with_omdb_id(local: dict) -> dict:
     return {**local, "imdbID": _local_series_ids[key]}
 
 
-def query_omdb_series(title: str, year: str | None = None) -> dict | None:
+def query_omdb_series(title: str, year: str | None = None, episode_hint: dict | None = None) -> dict | None:
     """Query OMDb API for a TV series, trying title variations.
+
+    episode_hint ({season, episode, episode_title} of the release) settles a name several series
+    share when the release has no year (_series_by_episode).
 
     Raises OMDbRateLimitError if too many consecutive 401 errors are detected.
     Results are cached to avoid re-querying the same titles in watch mode.
@@ -1068,7 +1130,9 @@ def query_omdb_series(title: str, year: str | None = None) -> dict | None:
     pinned = _pinned_match(title, year, "series")
     if pinned:
         return pinned
-    cache_key = (f"series:{title.lower().strip()}", year)
+    # A no-match is remembered per episode title too: another episode's title may settle the name.
+    told = (episode_hint or {}).get("episode_title") if not year else None
+    cache_key = (f"series:{title.lower().strip()}" + (f"|{str(told).lower().strip()}" if told else ""), year)
     cached_time = _omdb_no_match_cache.get(cache_key)
     if cached_time and (time.time() - cached_time) < _OMDB_CACHE_TTL:
         log.debug(f"  No OMDb match for series (cached): {title}")
@@ -1077,7 +1141,7 @@ def query_omdb_series(title: str, year: str | None = None) -> dict | None:
     variations = get_series_title_variations(title)
 
     for variant in variations:
-        result = _query_omdb_series_single(variant, year)
+        result = _query_omdb_series_single(variant, year, episode_hint)
         if result and is_good_series_match(title, year, result):
             if variant != variations[0]:
                 log.info(f"  Series matched via variation: '{variant}'")
@@ -2212,9 +2276,11 @@ def process_tv_shows_list(tv_shows: list[dict], dry_run: bool = False) -> tuple[
         if isinstance(episode, list):
             episode = episode[0]
 
-        # Query OMDb for series
+        # Query OMDb for series; the episode settles a name several series share.
+        hint = {"season": season if tv_info.get("season") is not None else None, "episode": episode,
+                "episode_title": tv_info.get("episode_title")}
         try:
-            series_info = query_omdb_series(title, tv_info.get("year"))
+            series_info = query_omdb_series(title, tv_info.get("year"), episode_hint=hint)
         except OMDbUnavailableError as error:
             _wait_for_omdb(parse_name, error)
             skipped += 1

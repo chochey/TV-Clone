@@ -137,7 +137,7 @@ class ImportSafety(OrganizerTestCase):
   src=self.folder('dated',{'Example.2022.S01E01.mkv':b'episode'})
   item=self.item(src,'Example.2022.S01');item['parse_name']='unique-dated-release'
   with patch.object(m,'query_omdb_series',return_value=self.info) as lookup, patch.object(m,'move_tv_show',return_value=True):
-   m.process_tv_shows_list([item]);lookup.assert_called_once_with('Example','2022')
+   m.process_tv_shows_list([item]);lookup.assert_called_once();self.assertEqual(lookup.call_args.args,('Example','2022'))
  def test_same_name_remakes_without_year_are_not_auto_selected(self):
   response=Mock();response.status_code=200;response.json.return_value={'Response':'True','Search':[
    {'Title':'Example','Year':'1990','Type':'series','imdbID':'tt1'},
