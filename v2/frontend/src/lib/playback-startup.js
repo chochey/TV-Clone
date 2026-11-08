@@ -38,7 +38,9 @@ export function startPlayback(video, { isCurrent, onTimeout, onBlocked, onSlow, 
 }
 
 // Long first segments already provide a startup reserve. Requiring a second
-// forces a live-playlist refresh that may take an entire target duration.
+// forces a live-playlist refresh that may take an entire target duration, so
+// the server's first playlist answer waits for the same count (server.js, the
+// master.m3u8 route); keep the 6 s rule the same on both sides.
 export function startupFragmentCount(playlist) {
   const seconds = Number(playlist.match(/#EXTINF:([\d.]+)/)?.[1]);
   return seconds >= 6 ? 1 : 2;

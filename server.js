@@ -1599,11 +1599,15 @@ app.get('/hls/:id/:playbackId/master.m3u8', requireAuth, ensureLibrary, async (r
         assertCurrent();
         let content = '';
         try { content = await fs.promises.readFile(playlist, 'utf8'); } catch {}
-        const count = (content.match(/#EXTINF:/g) || []).length;
-        // FFmpeg publishes complete segments atomically (temp_file). Let the
-        // player buffer the first one instead of delaying it for a second
-        // encode; the EVENT playlist continues growing during playback.
-        if (count >= 1) return;
+        // FFmpeg publishes complete segments atomically (temp_file). Answer once the playlist
+        // holds what the player needs to start (v2 playback-startup.js startupFragmentCount): two
+        // segments when the first is under 6 s, else one. With fewer, hls.js waited for its next
+        // live-playlist refresh, about 10 s idle on every encoded start (2026-11-08). A stream that
+        // ended (ENDLIST, or ffmpeg exited) answers with what it has.
+        const durations = [...content.matchAll(/#EXTINF:([\d.]+)/g)].map(m => Number(m[1]));
+        const needed = durations[0] >= 6 ? 1 : 2;
+        const ended = content.includes('#EXT-X-ENDLIST') || session.process?.exitCode != null;
+        if (durations.length >= needed || (durations.length && ended)) return;
         if (session.process?.exitCode != null) throw new Error('Transcode stopped before producing video');
         await new Promise(resolve => setTimeout(resolve, 100));
       }

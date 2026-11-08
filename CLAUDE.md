@@ -517,6 +517,21 @@ whose playlist was served but that never got a segment request is released after
 `UNUSED_SESSION_MS` (20 s) instead of holding a slot for the 2-minute idle timeout: two such
 sessions once refused every other stream with "all transcode slots are busy".
 
+### Encoded streams start with what the player needs (November 2026)
+The player tells hls.js to start a live (EVENT) playlist only once it lists two segments when the first is
+under 6 s (`startupFragmentCount`, `initialLiveManifestSize`), but the server answered the first
+`master.m3u8` after ONE segment, so hls.js logged "Not enough fragments to start playback (have: 1, need: 2)"
+and idled until its next playlist refresh: about 10 s on every encoded start, seek past the encoded range
+and stream reopen. Playback reports (2026-10-19 to 11-08) showed typical starts of 12.1 s for re-encodes and
+8.7 s for passthrough while the server had two segments in 3.1 s and 0.6 s. The route now waits for the same
+count (or for ENDLIST / ffmpeg exiting). Measured on a throwaway server with the real files: Snowfall S05E01
+(10-bit HEVC re-encode) 12.5 s -> 3.6 s, MobLand (remux) ~1 s, no stalls in the next 45 s. Keep the 6 s rule
+identical in server.js and playback-startup.js. Also measured: FFMPEG_TRANSCODE_THREADS 2/4/6 gives 2.75x/
+3.5x/4.0x on that episode. The installed `intel-media-va-driver` is Ubuntu's FREE build: no VPP
+(scale_vaapi fails "the requested VAProfile is not supported"), only the low-power constant-QP encoder;
+`intel-media-va-driver-non-free` (same 24.1.0, multiverse) is the candidate for GPU scaling/10-bit
+conversion and real bitrate control, untested here.
+
 ### A pause keeps the stream (November 2026)
 A paused player asks for nothing (it calls `hls.stopLoad()` on pause: Firefox/Linux flashed on appends), and
 the server ends an encoded stream after `TRANSCODE_TIMEOUT_MS` (2 min) without a request, so since e70d976 the
