@@ -79,13 +79,24 @@ before hwupload** — this box's Intel UHD 630 VAAPI driver has **no scale_vaapi
 That's why capping lives on the software-decode branch (10-bit + non-VAAPI-decodable,
 which is where ~all 4K lands since 4K is near-always 10-bit HEVC/AV1); the 8-bit
 fast GPU path stays uncapped (zero regression, and >1080p 8-bit there is rare).
-Do not "optimize" this to scale_vaapi or bump back to High profile.
+Do not bump back to High profile. **The missing VPP was Ubuntu's FREE driver build, not the chip:**
+since 2026-11-08 the box has `intel-media-va-driver-non-free`, and server.js `vaapiFull()` (a 0.1 s probe:
+a p010 frame converted and resized by `scale_vaapi`, then a VBR encode) turns on the GPU-only path in
+lib/ffmpeg-args.js (`-hwaccel vaapi -hwaccel_output_format vaapi`, `scale_vaapi=w=-2:h='min(H,ih)':format=nv12`)
+for 10-bit and oversized sources. Measured: 10-bit 1080p 2.9x -> 6.2x real time at 0.65 -> 0.10 CPU-s per
+second, 4K -> 1080p 1.4x -> 3.7x, SSIM equal at 24% fewer bits. The software-decode branch stays as the
+fallback: without the full driver, for codecs VAAPI cannot decode, and per file (`fullGpuRefused`: a
+session whose GPU-only ffmpeg exits before its first segments retries once on software decode, and the
+file skips the GPU-only path until a restart).
 
 **Data Saver is a real bitrate cap (October 2026).** The `low` preset has `capBitrate`: it always
-re-encodes (never copies or passes through) and always on the CPU (libx264 ultrafast, crf 28,
-maxrate 2M, bufsize 4M, 720p, 2 encoder threads). This GPU cannot cap bitrate: the iHD driver only
-exposes the low-power H.264 encoder with constant QP, which ignores -maxrate (a grainy source came
-out at 28.8 Mbps), and the i965 driver's encoder crashes on this chip. Measured: 2.17 Mbps on that
+re-encodes (never copies or passes through). With the FREE iHD driver it runs on the CPU (libx264
+ultrafast, crf 28, maxrate 2M, bufsize 4M, 720p, 2 encoder threads): that build only exposes the
+low-power H.264 encoder with constant QP, which ignores -maxrate (a grainy source came out at 28.8 Mbps),
+and the i965 driver's encoder crashes on this chip. With the full driver (`vaapiFull`, November 2026) it
+runs on the GPU: `scale_vaapi` to 720p and `-rc_mode VBR -b:v 1500k -maxrate 2M -bufsize 4M` (grainy
+Friends: 1.46 Mbps, SSIM 0.916, 7.4x, against libx264's 2.05 Mbps, 0.895, 3.4x); burned-in subtitles
+keep the CPU path. Measured: 2.17 Mbps on that
 source, about 4x real time while the box was busy. The player offers Data Saver on every video,
 including direct-play files, which then stream through HLS. Auto and Full quality are unchanged.
 **Auto is QP 25 (October 2026).** The same constant-QP limit means QP, not -maxrate, sets Auto's

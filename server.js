@@ -123,6 +123,33 @@ function vaapiAvailable() {
   return _vaapiAvailable;
 }
 
+// Intel's full iHD driver (intel-media-va-driver-non-free, installed 2026-11-08) also resizes and
+// converts 10-bit on the GPU (scale_vaapi) and honours a bitrate (VBR); Ubuntu's free build does
+// neither. Probed once, lazily, like vaapiAvailable: a 10-bit frame converted and resized on the
+// GPU, then a VBR encode (0.1 s). lib/ffmpeg-args.js uses it as `vaapiFull`.
+let _vaapiFullChecked = false;
+let _vaapiFull = false;
+function vaapiFull() {
+  if (_vaapiFullChecked) return _vaapiFull;
+  _vaapiFullChecked = true;
+  if (!vaapiAvailable()) return false;
+  try {
+    execFileSync('ffmpeg', [
+      '-hide_banner', '-loglevel', 'error',
+      '-init_hw_device', 'vaapi=va:/dev/dri/renderD128', '-filter_hw_device', 'va',
+      '-f', 'lavfi', '-i', 'testsrc2=s=256x144:d=0.2',
+      '-vf', 'format=p010,hwupload,scale_vaapi=w=128:h=72:format=nv12',
+      '-c:v', 'h264_vaapi', '-rc_mode', 'VBR', '-b:v', '200k', '-maxrate', '300k', '-bufsize', '600k',
+      '-f', 'null', '-',
+    ], { timeout: 5000 });
+    _vaapiFull = true;
+    console.log('[VAAPI] Full driver: 10-bit, resizing and Data Saver run on the GPU');
+  } catch {
+    console.log('[VAAPI] Free driver: 10-bit and resized video decode on the CPU');
+  }
+  return _vaapiFull;
+}
+
 app.use(express.json({ limit: '64kb' }));
 
 const { gzipJson, securityHeaders, hlsRequestLog } = require('./lib/middleware');
@@ -1362,6 +1389,9 @@ const UNUSED_SESSION_MS = Math.max(1, parseInt(process.env.UNUSED_SESSION_MS, 10
 const transcodeSessions = Object.create(null); // random playback ID -> session (including pending starts)
 const MAX_TRANSCODE_SESSIONS = Math.max(1, Math.min(5, parseInt(process.env.MAX_TRANSCODE_SESSIONS, 10) || 2));
 const HLS_SEG_DURATION = 4;
+// Files the GPU-only path (vaapiFull) failed on: they go straight to the software-decode path until a
+// restart. A session retries a first failure itself (session.ready below).
+const fullGpuRefused = new Set();
 // A paused player asks for nothing, so the idle timeout used to end its stream two minutes into a
 // pause and resuming started over without the buffered video (63 restarts in twelve days,
 // 2026-11-08). The player now holds its stream while paused (POST /api/hls/:playbackId/hold), for
@@ -1429,7 +1459,7 @@ function startFfmpeg(id, filePath, sessionDir, seekTime, startSegNum, audioStrea
   // The branching lives in lib/ffmpeg-args.js so it can be unit-tested without
   // spawning ffmpeg or booting the server. Everything it needs is resolved
   // from the probe caches here and passed in as plain values.
-  const { args: ffmpegArgs, hevcCopy, delivery } = buildFfmpegArgs({
+  const { args: ffmpegArgs, hevcCopy, delivery, fullGpu } = buildFfmpegArgs({
     filePath, sessionDir, seekTime, startSegNum, audioStreamIndex: selectedAudioIndex, subtitleStreamIndex,
     mode, preset,
     srcHeight: heightCache[filePath] || 0,
@@ -1439,6 +1469,7 @@ function startFfmpeg(id, filePath, sessionDir, seekTime, startSegNum, audioStrea
     videoCodec: (probeCache[filePath] || '').toLowerCase(),
     hevcPassthrough,
     vaapiAvailable: vaapiAvailable(),
+    vaapiFull: vaapiFull() && !fullGpuRefused.has(filePath),
     vaapiCanDecode: canVaapiDecode(filePath),
     threads: FFMPEG_TRANSCODE_THREADS,
     segDuration: HLS_SEG_DURATION,
@@ -1459,6 +1490,7 @@ function startFfmpeg(id, filePath, sessionDir, seekTime, startSegNum, audioStrea
   });
   proc.on('close', code => {
     if (code !== 0 && code !== 255 && code !== null) {
+      if (fullGpu) fullGpuRefused.add(filePath);   // a later restart of this file uses software decode
       console.error(`[transcode ${id.slice(0,8)}] exited ${code}`);
       recordError(`transcode:${id.slice(0,8)}`, _ffmpegStderr || `FFmpeg exited ${code}`);
     }
@@ -1472,6 +1504,7 @@ function startFfmpeg(id, filePath, sessionDir, seekTime, startSegNum, audioStrea
     lastRestartAt: Date.now(),
     startedAt: Date.now(),
     delivery,
+    fullGpu,
   });
   playbackHistory.noteSession(id, { delivery, quality }); // for the player's end-of-viewing report
 }
@@ -1608,7 +1641,18 @@ app.get('/hls/:id/:playbackId/master.m3u8', requireAuth, ensureLibrary, async (r
         const needed = durations[0] >= 6 ? 1 : 2;
         const ended = content.includes('#EXT-X-ENDLIST') || session.process?.exitCode != null;
         if (durations.length >= needed || (durations.length && ended)) return;
-        if (session.process?.exitCode != null) throw new Error('Transcode stopped before producing video');
+        if (session.process?.exitCode != null) {
+          // The GPU-only path can refuse a file the software decoder handles (an unusual stream):
+          // retry once on the software-decode path and remember the file.
+          if (session.fullGpu && !session.fullGpuRetried) {
+            session.fullGpuRetried = true;
+            fullGpuRefused.add(filePath);
+            console.log(`[transcode ${id.slice(0, 8)}] the GPU-only path failed; retrying with software decode`);
+            startFfmpeg(id, filePath, session.dir, startTime, 0, session.audioTrack, quality, hevcPassthrough, subtitleTrack);
+            continue;
+          }
+          throw new Error('Transcode stopped before producing video');
+        }
         await new Promise(resolve => setTimeout(resolve, 100));
       }
       throw new Error('Transcode startup timeout');
