@@ -125,6 +125,12 @@ Clients get `library-updated` only when content actually changed (id/addedAt com
 same-size swaps. A self-heal rescan fires 10s after every boot because a restart
 mid-scan otherwise leaves a stale cache forever (the "Backrooms invisible for 40min"
 bug). The hourly safety rescan no longer dodges active streams — it doesn't need to.
+**Replaced in place (November 2026):** a file swapped under the same name keeps its path and so its id
+(progress, history), but the probe caches are keyed by path and only missing paths were probed, so the old
+codec/height/tracks stuck (Interstellar, 4K AV1 replaced by a 1080p H.264 copy, would have stayed "AV1").
+The scan compares each file's size and mtime with the previous catalog entry and forgets its probe results
+(`lib/replaced-in-place.js`, `PROBE_CACHES` in server.js, also used by delete and conversion repair); the
+post-scan `backgroundProbe` reads it again.
 
 ## Architecture Notes
 

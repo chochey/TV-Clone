@@ -300,6 +300,9 @@ const {
   saveMediaInfo, scheduleSaveMediaInfo, markDirty, markFileCorrupted, persistCorrupted,
   TEXT_SUB_CODECS, BROWSER_AUDIO_CODECS,
 } = probe;
+// Every path-keyed probe result, for code that must forget a file (delete, repair, replaced in place).
+const PROBE_CACHES = [probeCache, pixFmtCache, audioProbeCache, audioTracksCache, subProbeCache, heightCache, levelCache];
+const { replacedInPlace, forgetProbeResults } = require('./lib/replaced-in-place');
 
 // ── Library conversion (MEDIA_CONVERSION_PLAN.md) — phase 1: read-only
 // planner + config only. Nothing here mutates a media file; that is phase 2+.
@@ -532,6 +535,7 @@ async function doRescan(trigger) {
   mediaIdentity.begin(inventory.flatMap(entry => entry.paths), {
     allowMoves:identityMovesAllowed, roots:config.folders.map(folder=>folder.path).filter(Boolean).map(root=>path.resolve(root)),
   });
+  const previousByPath = new Map((libraryCache || []).map(item => [item._filePath, item]));
   for (const {folder, paths:videoPaths} of inventory) {
     const dirPath = folder.path;
     for (const fullPath of videoPaths) {
@@ -548,6 +552,11 @@ async function doRescan(trigger) {
         id = await mediaIdentity.resolve(fullPath, st);
       }
       catch (err) { lookup.recordFailure(fullPath, err); continue; }
+      // Replaced under the same name (lib/replaced-in-place.js): read it again after the scan.
+      if (replacedInPlace(previousByPath.get(fullPath), fileSize, addedAt) && forgetProbeResults(PROBE_CACHES, fullPath)) {
+        markDirty();
+        console.log(`  [scan] ${file} was replaced in place; reading it again`);
+      }
 
       newFileIndex[id] = fullPath;
 
@@ -853,7 +862,7 @@ require('./lib/routes/media-delete')(app, {
   requirePermission, fileIndex: () => fileIndex, posterIndex: () => posterIndex,
   findItem: id => (libraryCache || []).find(i => i.id === id),
   removeFromLibrary: id => { if (libraryCache) libraryCache = libraryCache.filter(i => i.id !== id); },
-  probeCaches: [probeCache, pixFmtCache, audioProbeCache, audioTracksCache, subProbeCache, heightCache], markDirty,
+  probeCaches: PROBE_CACHES, markDirty,
   corruptedFiles, persistCorrupted, skipSegments, saveSkipSegments: () => saveJSON(SKIP_SEGMENTS_FILE, skipSegments),
   clearSprites: (id, filePath) => clearSpriteArtifacts(id, filePath), subtitleCacheDir: SUBTITLE_CACHE_DIR,
   getConfig: () => config, audioExtensions: AUDIO_EXTENSIONS, profileDataCache, loadProfileData, saveProfileData,
@@ -1175,7 +1184,7 @@ function repairPlaybackActive(file) {
     || Date.now() - lastPlaybackAt < 60_000;
 }
 function repairFilesChanged(oldPath, newPath, output) {
-  for (const cache of [probeCache,pixFmtCache,audioProbeCache,audioTracksCache,subProbeCache,heightCache,levelCache]) {
+  for (const cache of PROBE_CACHES) {
     delete cache[oldPath]; delete cache[newPath];
   }
   if (output) {
