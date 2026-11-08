@@ -1362,6 +1362,30 @@ const UNUSED_SESSION_MS = Math.max(1, parseInt(process.env.UNUSED_SESSION_MS, 10
 const transcodeSessions = Object.create(null); // random playback ID -> session (including pending starts)
 const MAX_TRANSCODE_SESSIONS = Math.max(1, Math.min(5, parseInt(process.env.MAX_TRANSCODE_SESSIONS, 10) || 2));
 const HLS_SEG_DURATION = 4;
+// A paused player asks for nothing, so the idle timeout used to end its stream two minutes into a
+// pause and resuming started over without the buffered video (63 restarts in twelve days,
+// 2026-11-08). The player now holds its stream while paused (POST /api/hls/:playbackId/hold), for
+// up to this long without a segment request; when every slot is taken, a stream already quiet for
+// the idle timeout gives way to a new viewer (yieldPausedSlot), as it would have expired before.
+const PAUSE_HOLD_MS = Math.max(1, parseInt(process.env.PAUSE_HOLD_MS, 10) || 60 * 60 * 1000);
+
+function renewLease(id, session) {
+  clearTimeout(session.timeout);
+  session.timeout = setTimeout(() => cleanupSession(id), TRANSCODE_TIMEOUT_MS);
+}
+
+// Only a stream that has been played from and then asked for nothing for the idle timeout, i.e. one
+// kept by holds alone; the longest-quiet goes first. Its player reopens it on resume.
+function yieldPausedSlot() {
+  const now = Date.now();
+  const [quiet] = Object.entries(transcodeSessions)
+    .filter(([, s]) => s.servedSegments && now - s.lastSegmentAt >= TRANSCODE_TIMEOUT_MS)
+    .sort(([, a], [, b]) => a.lastSegmentAt - b.lastSegmentAt);
+  if (!quiet) return false;
+  console.log(`[transcode ${quiet[0].slice(0, 8)}] paused; giving its slot to a new viewer`);
+  cleanupSession(quiet[0]);
+  return true;
+}
 
 function cleanupSession(id, keepFiles) {
   const session = transcodeSessions[id];
@@ -1479,6 +1503,15 @@ app.get('/api/hls/:playbackId/alive', requireAuth, (req, res) => {
   const session = ownedPlayback(req, res);
   if (session) res.json({ alive: true });
 });
+// The paused player's "keep my stream": renews the idle timeout of a stream it has played from,
+// until PAUSE_HOLD_MS after its last segment request. held: false means it will end as before.
+app.post('/api/hls/:playbackId/hold', requireAuth, (req, res) => {
+  const session = ownedPlayback(req, res);
+  if (!session) return;
+  const held = !!session.servedSegments && Date.now() - session.lastSegmentAt <= PAUSE_HOLD_MS;
+  if (held) renewLease(req.params.playbackId, session);
+  res.json({ alive: true, held });
+});
 
 // Old clients get a separate session as well. Relative segment URLs then
 // resolve beneath the new playback ID. New clients use the canonical route.
@@ -1520,7 +1553,7 @@ app.get('/hls/:id/:playbackId/master.m3u8', requireAuth, ensureLibrary, async (r
   } else {
     // Reserve synchronously before any probing yields. Pending starts count
     // toward capacity, and a duplicate request waits on the same promise.
-    if (Object.keys(transcodeSessions).length >= MAX_TRANSCODE_SESSIONS) {
+    if (Object.keys(transcodeSessions).length >= MAX_TRANSCODE_SESSIONS && !yieldPausedSlot()) {
       return res.status(503).send('Too many active transcode sessions');
     }
     session = transcodeSessions[id] = {
@@ -1650,9 +1683,9 @@ app.get('/hls/:id/:playbackId/:segment', requireAuth, (req, res) => {
   if (transcodeSessions[id]) {
     const session = transcodeSessions[id];
     session.servedSegments = (session.servedSegments || 0) + 1;
+    session.lastSegmentAt = Date.now();
     clearTimeout(session.unusedTimer); session.unusedTimer = null;
-    clearTimeout(session.timeout);
-    session.timeout = setTimeout(() => cleanupSession(id), TRANSCODE_TIMEOUT_MS);
+    renewLease(id, session);
   }
   lastPlaybackAt = Date.now(); // pause sprite gen during HLS playback
 

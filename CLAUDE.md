@@ -517,6 +517,24 @@ whose playlist was served but that never got a segment request is released after
 `UNUSED_SESSION_MS` (20 s) instead of holding a slot for the 2-minute idle timeout: two such
 sessions once refused every other stream with "all transcode slots are busy".
 
+### A pause keeps the stream (November 2026)
+A paused player asks for nothing (it calls `hls.stopLoad()` on pause: Firefox/Linux flashed on appends), and
+the server ends an encoded stream after `TRANSCODE_TIMEOUT_MS` (2 min) without a request, so since e70d976 the
+player reopened every stream paused for a minute or more (`resumePausedPlayback`) and re-buffered from scratch
+with up to two minutes of video already buffered: 63 such restarts in twelve days (stream log, 2026-11-08).
+Now, while paused, the player calls `POST /api/hls/:playbackId/hold` at once and every 45 s
+(`createStreamHold` in `v2/frontend/src/lib/pause-resume.js`); the server renews the lease of a stream that has
+served segments, until `PAUSE_HOLD_MS` (1 h, env) after its last segment request (`lastSegmentAt`), and answers
+`{alive, held}`. Resume keeps the buffer (`resumePlan`) after a short pause, for a direct file (no server state
+to lose; it used to be reloaded too), or when the latest hold answer is a yes under 90 s old (hidden tabs may
+slow timers to once a minute); otherwise, or after a fatal hls.js error during the pause (`failedWhilePaused`),
+it reopens at the paused spot as before. A stream kept only by holds (quiet for the idle timeout) gives its
+slot to a new viewer when all `MAX_TRANSCODE_SESSIONS` are taken (`yieldPausedSlot`), so a paused tab never
+locks anyone out longer than before; its next hold gets 404 and the player reopens on resume. Tests:
+`lib/hls-isolation.test.js` (hold, limit, yield), `pause-resume.test.mjs`, and three player screen tests with a
+real H.264 HLS fixture made by ffmpeg (the fixture must serve `/hls.min.js` from the repo root, or hls.js never
+loads in the test page).
+
 ### Picture behind the sound after a tab switch (October 2026)
 Firefox stops decoding a hidden tab's video after 10 s and keeps the audio; on Windows with 10-bit
 HEVC passthrough the picture then stayed behind the sound until a refresh (reported 2026-10-23,

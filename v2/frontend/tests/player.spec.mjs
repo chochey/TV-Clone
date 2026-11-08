@@ -4,7 +4,7 @@
 import { test, expect } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -364,4 +364,109 @@ test('after returning to the tab, a picture behind the sound is jumped in place,
   const settled = await probe();
   await page.waitForTimeout(5000);
   expect(await probe()).toEqual(settled);
+});
+
+// ── Long pauses ──────────────────────────────────────────────────────
+// A paused player asks the server for nothing, and the server ended an encoded stream two minutes
+// into a pause, so the player reopened every stream paused for over a minute and re-buffered from
+// scratch with a full buffer in hand (63 restarts in twelve days, 2026-11-08). Now the player asks
+// the server to hold the stream while paused and resumes from its buffer while it is held.
+let hlsDir;
+test.beforeAll(() => {
+  hlsDir = mkdtempSync(path.join(os.tmpdir(), 'tvclone-player-test-hls-'));
+  execFileSync('ffmpeg', ['-nostdin', '-hide_banner', '-loglevel', 'error', '-y',
+    '-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=24', '-f', 'lavfi', '-i', 'sine=frequency=440',
+    '-t', String(DURATION), '-c:v', 'libx264', '-preset', 'ultrafast', '-g', '48', '-c:a', 'aac', '-b:a', '64k',
+    '-f', 'hls', '-hls_time', '4', '-hls_playlist_type', 'vod',
+    '-hls_segment_filename', path.join(hlsDir, 'seg_%05d.ts'), path.join(hlsDir, 'stream.m3u8')]);
+});
+test.afterAll(() => { if (hlsDir) rmSync(hlsDir, { recursive: true, force: true }); });
+
+const encoded = { id: 'enc', title: 'Encoded film', year: 2002, type: 'movie', streamMode: 'remux', codec: 'h264', addedAt: 1, subtitles: [], progress: {} };
+
+// An encoded stream from the fixture; `held` is the server's answer to the paused player's hold.
+async function serveEncoded(page, calls, { held = () => true } = {}) {
+  calls.masters = []; calls.holds = [];
+  const playlist = await fs.readFile(path.join(hlsDir, 'stream.m3u8'), 'utf8');
+  // The server sends hls.js from the repository root (server.js /hls.min.js).
+  const engine = await fs.readFile(fileURLToPath(new URL('../../../hls.min.js', import.meta.url)));
+  await page.route('**/hls.min.js', route => route.fulfill({ body: engine, contentType: 'text/javascript' }));
+  await page.route('**/hls/**', async route => {
+    const url = new URL(route.request().url());
+    const [, , , playbackId, file] = url.pathname.split('/');
+    if (file === 'master.m3u8') {
+      calls.masters.push({ playbackId, start: Number(url.searchParams.get('start')) });
+      return route.fulfill({ body: playlist, headers: { 'Content-Type': 'application/vnd.apple.mpegurl',
+        'X-Total-Duration': String(DURATION), 'X-Seek-Offset': url.searchParams.get('start') || '0' } });
+    }
+    return route.fulfill({ body: await fs.readFile(path.join(hlsDir, path.basename(file))), contentType: 'video/mp2t' });
+  });
+  await page.route('**/api/hls/**', route => {   // registered last, so it answers before **/hls/**
+    const [, , , playbackId, action] = new URL(route.request().url()).pathname.split('/');
+    if (action === 'hold') { calls.holds.push(playbackId); return route.fulfill({ json: { alive: true, held: held() } }); }
+    return route.fulfill({ json: action === 'alive' ? { alive: true } : { ok: true } });
+  });
+}
+const sessions = calls => new Set(calls.masters.map(m => m.playbackId)).size;
+const countLoads = page => page.evaluate(() => {
+  window.__loads = 0;
+  document.querySelector('.player video').addEventListener('loadstart', () => { window.__loads++; });
+});
+
+// The pause handler saves progress, so a new save means it has run before the clock jumps.
+async function pauseFor(page, calls, ms) {
+  const saves = calls.progress.length;
+  await player(page).getByRole('button', { name: 'Pause' }).click();
+  await expect.poll(() => calls.progress.length).toBeGreaterThan(saves);
+  const at = await videoTime(page);
+  await page.clock.fastForward(ms);
+  return at;
+}
+async function resume(page) {
+  await player(page).getByRole('button', { name: 'Play', exact: true }).click();
+}
+
+test('a direct file paused for minutes carries on from what is buffered, without reloading', async ({ page }) => {
+  await page.clock.install();
+  const calls = await openFilm(page);
+  await countLoads(page);
+  const at = await pauseFor(page, calls, 5 * 60_000);
+  await resume(page);
+  await expect.poll(() => videoTime(page), { timeout: 10000 }).toBeGreaterThan(at + 1);
+  expect(await page.evaluate(() => window.__loads), 'the file was not opened again').toBe(0);
+});
+
+test('an encoded stream paused for minutes is held by the server and resumes from what is buffered', async ({ page }) => {
+  await page.clock.install();
+  const calls = await setup(page, { items: [encoded] });
+  await serveEncoded(page, calls);
+  await page.goto(`${origin}/title/enc`);
+  await page.locator('.actions').getByRole('button', { name: /^(Play|Resume)/ }).first().click();
+  await expect.poll(() => videoTime(page), { timeout: 15000 }).toBeGreaterThan(1);
+  expect(sessions(calls)).toBe(1);
+  await countLoads(page);
+  const at = await pauseFor(page, calls, 5 * 60_000);
+  await expect.poll(() => calls.holds.length, { message: 'asked to hold at once, and again while paused' }).toBeGreaterThan(1);
+  expect(new Set(calls.holds)).toEqual(new Set(calls.masters.map(m => m.playbackId)));
+  await resume(page);
+  await expect.poll(() => videoTime(page), { timeout: 10000 }).toBeGreaterThan(at + 1);
+  expect(sessions(calls), 'the same stream, not a new one').toBe(1);
+  expect(await page.evaluate(() => window.__loads)).toBe(0);
+  const holds = calls.holds.length;
+  await page.clock.fastForward(2 * 60_000);
+  expect(calls.holds.length, 'no holds while playing').toBe(holds);
+});
+
+test('an encoded stream the server no longer holds is reopened at the paused spot', async ({ page }) => {
+  await page.clock.install();
+  const calls = await setup(page, { items: [encoded] });
+  await serveEncoded(page, calls, { held: () => false });
+  await page.goto(`${origin}/title/enc`);
+  await page.locator('.actions').getByRole('button', { name: /^(Play|Resume)/ }).first().click();
+  await expect.poll(() => videoTime(page), { timeout: 15000 }).toBeGreaterThan(1);
+  const at = await pauseFor(page, calls, 5 * 60_000);
+  await expect.poll(() => calls.holds.length).toBeGreaterThan(0);
+  await resume(page);
+  await expect.poll(() => sessions(calls), { timeout: 10000 }).toBe(2);
+  expect(calls.masters.at(-1).start).toBeCloseTo(at, 0);
 });

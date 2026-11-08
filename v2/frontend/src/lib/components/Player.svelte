@@ -7,7 +7,7 @@
   import { startDirectPlayback, directPlaybackError } from '../direct-playback.js';
   import { createSpriteLoader } from '../sprite-loader.js';
   import { loadHls, parseVtt, cueAt } from '../player-core.js';
-  import { createPauseBookmark } from '../pause-resume.js';
+  import { createPauseBookmark, createStreamHold, resumePlan } from '../pause-resume.js';
   import { forcedEnglishSubtitle } from '../subtitle-selection.js';
   import { episodeCode, episodeTitle } from '../format.js';
   import { isSeriesItem } from '../series-playback.js';
@@ -135,6 +135,17 @@
   let cancelStartup = () => {};
   let hlsRetries = 0;
   const pauseBookmark = createPauseBookmark();
+  // While paused, ask the server to keep this encoded stream (it ends one after two minutes
+  // without a request), so pressing play uses what is buffered. See resumePausedPlayback.
+  const streamHold = createStreamHold({
+    ask: async id => {
+      const r = await fetch(`/api/hls/${id}/hold`, { method: 'POST', credentials: 'same-origin' });
+      if (r.status === 404 || r.status === 410) return false;
+      if (!r.ok) throw new Error(`hold ${r.status}`);   // e.g. restarting: no answer either way
+      return !!(await r.json()).held;
+    },
+  });
+  let failedWhilePaused = false; // hls.js gave up during the pause: the buffer cannot be trusted
   let timelineReady = true; // ignore old-source events until the replacement is attached
   let recoverAttempts = 0; // consecutive dead-session restarts without playback progress
   let recoverFromT = -1;   // position of the last auto-restart
@@ -190,6 +201,8 @@
   let retryTimer = null;
   async function loadHlsSession(start) {
     const seq = ++loadSeq;
+    streamHold.stop();
+    failedWhilePaused = false;
     cancelStartup();
     startupPending = true;
     timelineReady = false;
@@ -287,7 +300,7 @@
     hls.on(H.Events.ERROR, async (_e, data) => {
       if (seq !== loadSeq || destroyed || !data.fatal) return;
       // Paused streams may expire; reopen them only when the viewer resumes.
-      if (paused && !startupPending) return;
+      if (paused && !startupPending) { failedWhilePaused = true; return; }
       // A passthrough session that dies on a media error is a capability
       // misjudgement, not a transient fault — hls.recoverMediaError() would
       // just fail the same way. Give up the claim and rebuild as a transcode.
@@ -469,9 +482,15 @@
   }
   function resumePausedPlayback() {
     const saved = pauseBookmark.take(cur);
-    if (!saved.expired && !error) return false;
+    const held = streamHold.held();
+    streamHold.stop();
+    // A long pause keeps what is buffered when the server still holds the stream (or there is
+    // none to lose, a direct file). Before holds, every pause over a minute re-buffered here.
+    const failed = !!error || failedWhilePaused || !!(isDirect && video?.error);
+    if (resumePlan({ expired: saved.expired, direct: isDirect, held, failed }) === 'buffer') return false;
+    failedWhilePaused = false;
     // Reopen before calling play(): dead media can reject play without ever
-    // firing onplay, and a long pause has already outlived the server lease.
+    // firing onplay, and the server no longer holds this stream.
     error = '';
     recoverAttempts = 0;
     recoverFromT = saved.position;
@@ -600,6 +619,7 @@
   // Leave an HLS session for direct play of the file (subtitle or quality change).
   function switchToDirect(t) {
     ++loadSeq;
+    streamHold.stop();
     cancelStartup();
     clearTimeout(retryTimer);
     startupPending = false;
@@ -768,6 +788,7 @@
 
   onDestroy(() => {
     destroyed = true;
+    streamHold.stop();
     cancelStartup();
     clearInterval(progressTimer);
     clearInterval(stallTimer);
@@ -844,6 +865,7 @@
       paused = true;
       cur = seekOffset + video.currentTime;
       pauseBookmark.capture(cur);
+      if (!isDirect && playbackId) streamHold.start(playbackId);
       saveProgress(); poke();
       // Stop MSE appends while paused — Firefox/Linux was flashing on each
       // fragment even with the clock frozen and hardware decode off.
