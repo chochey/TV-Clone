@@ -54,3 +54,15 @@ an unsourced "Keyes" turned the poet Keats into "Keyes". About 3x real time on t
 ## Tests
 
     python3 -m unittest discover -s tools/readalong/tests -p "test_*.py"
+
+### Redoing a book from its audio (`run_queue.py --match ... --replace`)
+
+The Dungeon Crawler Carl books (2026-11-09) had read-along from their ebooks, matched to a full-cast performance that
+changes lines, adds announcements and skips text, so words drifted and some chapters had no highlighting. To redo
+books from the audio: `run_queue.py --match "<title words>" --replace --names-from-existing [--first <id>,<id>]
+[--dry-run]`. `--match` builds the queue from the library (audiobooks only, by book number), `--replace` swaps an
+ebook-made document for the transcript only once the transcript passes the server's parser (the old file is kept in
+`<work>/replaced/<id>.<time>.json`; a transcript is never replaced), and `--names-from-existing` takes the spelling
+hints from the current document's own text (`queue_tools.names_from_document`: capitals met mid-sentence, the 40 most
+frequent). Run it as chocheytv like the queue (systemd-run, CPUQuota 150%, Nice 19, IO idle); it resumes from cached
+chapters. Tests: `tests/test_run_queue.py` (end to end with a fake transcriber), `tests/test_queue_tools.py`.
