@@ -990,7 +990,7 @@ require('./lib/routes/media-files')(app, {
 // ── Thumbnail preview for seek bar (lib/sprites.js) ────────────────────
 const sprites = require('./lib/sprites')({
   dataDir: DATA_DIR, getConfig: () => config, transcodeSessions: () => transcodeSessions, lastPlaybackAt: () => lastPlaybackAt,
-  waitForBackgroundHeadroom, probeDurationWithReason, probeDurationAsync, markFileCorrupted, corruptedFiles, isAudioFile,
+  waitForBackgroundHeadroom, probeDurationWithReason, probeDurationAsync, markFileCorrupted, corruptedFiles, persistCorrupted, isAudioFile,
   scanLibrary, fileIndex: () => fileIndex, recordError,
 });
 const { THUMB_DIR, spriteJobs, getThumbId, clearSpriteArtifacts, requestSpriteQueue, queueAllSpriteGen, waitForTranscodeIdle } = sprites;
@@ -1426,10 +1426,16 @@ function yieldPausedSlot() {
   return true;
 }
 
+// After SIGTERM ffmpeg finishes the segment it is writing; removing its folder first made every stop log
+// "failed to rename ... No such file or directory" (64 times in a week, 2026-11-09). The folder waits for
+// ffmpeg to exit, at most this long, then ffmpeg is killed. The slot is free at once either way.
+const FFMPEG_EXIT_GRACE_MS = Math.max(1, parseInt(process.env.FFMPEG_EXIT_GRACE_MS, 10) || 3000);
+
 function cleanupSession(id, keepFiles) {
   const session = transcodeSessions[id];
   if (!session) return;
-  try { session.process?.kill('SIGTERM'); } catch {}
+  const proc = session.process;
+  try { proc?.kill('SIGTERM'); } catch {}
   clearTimeout(session.timeout);
   clearTimeout(session.unusedTimer);
   delete transcodeSessions[id];
@@ -1440,9 +1446,16 @@ function cleanupSession(id, keepFiles) {
   // the directory fresh without racing our async delete. fs.rm handles the
   // recursive walk with its own retry policy — no hand-rolled 5s timeout.
   if (!session.dir) return;
-  const deadDir = session.dir + '_dead_' + Date.now();
-  try { fs.renameSync(session.dir, deadDir); } catch { return; }
-  fs.rm(deadDir, { recursive: true, force: true, maxRetries: 3 }, () => {});
+  const removeDir = () => {
+    const deadDir = session.dir + '_dead_' + Date.now();
+    try { fs.renameSync(session.dir, deadDir); } catch { return; }
+    fs.rm(deadDir, { recursive: true, force: true, maxRetries: 3 }, () => {});
+  };
+  if (!proc || proc.exitCode != null || proc.signalCode != null) return removeDir();
+  let removed = false;
+  const finish = () => { if (removed) return; removed = true; clearTimeout(force); removeDir(); };
+  const force = setTimeout(() => { try { proc.kill('SIGKILL'); } catch {} finish(); }, FFMPEG_EXIT_GRACE_MS);
+  proc.once('close', finish);
 }
 
 // QUALITY_PRESETS (low/auto/high) live in lib/ffmpeg-args.js with the code that uses them.

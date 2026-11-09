@@ -544,10 +544,8 @@ and stream reopen. Playback reports (2026-10-19 to 11-08) showed typical starts 
 count (or for ENDLIST / ffmpeg exiting). Measured on a throwaway server with the real files: Snowfall S05E01
 (10-bit HEVC re-encode) 12.5 s -> 3.6 s, MobLand (remux) ~1 s, no stalls in the next 45 s. Keep the 6 s rule
 identical in server.js and playback-startup.js. Also measured: FFMPEG_TRANSCODE_THREADS 2/4/6 gives 2.75x/
-3.5x/4.0x on that episode. The installed `intel-media-va-driver` is Ubuntu's FREE build: no VPP
-(scale_vaapi fails "the requested VAProfile is not supported"), only the low-power constant-QP encoder;
-`intel-media-va-driver-non-free` (same 24.1.0, multiverse) is the candidate for GPU scaling/10-bit
-conversion and real bitrate control, untested here.
+3.5x/4.0x on that episode. Ubuntu's FREE `intel-media-va-driver` (no VPP, only the low-power constant-QP
+encoder) was replaced by `intel-media-va-driver-non-free` on 2026-11-08: see `vaapiFull` under the transcode caps.
 
 ### A pause keeps the stream (November 2026)
 A paused player asks for nothing (it calls `hls.stopLoad()` on pause: Firefox/Linux flashed on appends), and
@@ -586,8 +584,20 @@ the post-return catch-up the same 8 s grace as a new session, so it can never de
 
 ### VAAPI transcode pipeline
 - 8-bit source: `-hwaccel vaapi -hwaccel_output_format vaapi` (full GPU pipeline)
-- 10-bit source: software decode + `-vf format=nv12,hwupload` (hybrid CPU+GPU)
+- 10-bit or oversized source with the full Intel driver (`vaapiFull`): GPU decode + `scale_vaapi=...:format=nv12`
+- Same without it, or a codec VAAPI cannot decode (AV1 on this chip, mpeg4): software decode + `format=nv12,hwupload`
 - No VAAPI: libx264 ultrafast software encode
+
+### Stopping a stream, and the corrupted list (November 2026)
+`cleanupSession` frees the slot at once but removes the session folder only after ffmpeg exits
+(`FFMPEG_EXIT_GRACE_MS`, 3 s, then SIGKILL): ffmpeg finishes its segment after SIGTERM, and removing the folder
+first logged "failed to rename ... No such file or directory" on every stop (64 a week). The corrupted registry
+(`corrupted_files.json`, which only stops sprite generation) used to grow forever: 25 entries, 19 for titles no
+longer in the library, and the 6 left all probed and decoded fine. `probeDurationWithReason` now says
+`couldNotRun` when ffprobe never answered (launch failure, timeout, busy, cancelled; two entries were "ffprobe
+spawn error"), and sprites do not mark such a file. Each sprite run (`lib/corrupted-registry.js`) forgets entries
+for titles gone from the library (never when the library is empty) and retries entries 14 days old; a file that
+is really broken is marked again.
 
 ### Remux audio optimization
 When remuxing h264 content, audio is copied (`-c:a copy`) if it's already a
