@@ -43,6 +43,17 @@ server's own qbt watcher (which also schedules a post-download rescan),
 organizer failures from organizer-watch. Clients only keep read/cleared
 cursors locally.
 
+**Pages load on demand (November 2026):** App.svelte's `pages` (Stats, Requests, Dashboard, Libraries, Downloads,
+Organizer, Rift Warden, Logs, Users, Duplicates, Conversion, Episodes) are dynamic imports rendered through
+`lib/components/LazyPage.svelte`, so a first visit downloads 306 KB of code instead of 490 KB (105 KB gzip instead
+of 162) and 104 KB of CSS instead of 158. Pages with an `allowed` rule are fetched in the background 3 s after the
+app is ready for people who may open them, so they still open at once. A page that will not load (a tab older than
+the last deploy, whose chunk the new build replaced) reloads the app once a minute at most (`lib/lazy-page.js`,
+sessionStorage `v2LazyPageReloadAt`; no storage, no reload), then shows "This page could not load." with Reload.
+`loadedAppVersion` counts only `index-*` assets, as `/api/version` does, because lazy pages add their own tags.
+Keep everyday pages (Home, Detail, Browse, Search, Collections, Collection, History) and the players static.
+Tests: `tests/lazy-pages.spec.mjs`.
+
 **Deploying frontend changes:** commit, then `scripts/deploy-live.sh` (it
 builds `v2/frontend` in the live install; the shell is no-cache, assets hashed).
 **Frontend dev loop:** `npm run dev` in `v2/frontend` (launch.json `ui-dev`)

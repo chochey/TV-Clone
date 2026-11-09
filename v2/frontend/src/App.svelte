@@ -19,18 +19,7 @@
   import Collections from './routes/Collections.svelte';
   import Collection from './routes/Collection.svelte';
   import History from './routes/History.svelte';
-  import Requests from './routes/Requests.svelte';
-  import Dashboard from './routes/Dashboard.svelte';
-  import Libraries from './routes/Libraries.svelte';
-  import Downloads from './routes/Downloads.svelte';
-  import Organizer from './routes/Organizer.svelte';
-  import Conversion from './routes/Conversion.svelte';
-  import Logs from './routes/Logs.svelte';
-  import Users from './routes/Users.svelte';
-  import Duplicates from './routes/Duplicates.svelte';
-  import Episodes from './routes/Episodes.svelte';
-  import RiftWarden from './routes/RiftWarden.svelte';
-  import Stats from './routes/Stats.svelte';
+  import LazyPage from './lib/components/LazyPage.svelte';
   import Player from './lib/components/Player.svelte';
   import AudioPlayer from './lib/components/AudioPlayer.svelte';
   import { isAudioItem, isSeriesItem } from './lib/series-playback.js';
@@ -259,6 +248,31 @@
 
   const isAdmin = $derived($session?.role === 'admin');
   const can = (p) => $session?.role === 'admin' || ($session?.permissions || []).includes(p);
+
+  // Admin and occasional pages load on their first visit (LazyPage.svelte): everyday visitors never
+  // download them. `allowed` pages are fetched in the background once the app has settled, so for the
+  // people who use them they still open at once.
+  const pages = {
+    stats: { load: () => import('./routes/Stats.svelte') },
+    requests: { load: () => import('./routes/Requests.svelte') },
+    system: { load: () => import('./routes/Dashboard.svelte'), allowed: () => can('canDashboard') },
+    libraries: { load: () => import('./routes/Libraries.svelte'), allowed: () => isAdmin },
+    downloads: { load: () => import('./routes/Downloads.svelte'), allowed: () => can('canDownload') },
+    organizer: { load: () => import('./routes/Organizer.svelte'), allowed: () => can('canOrganizer') },
+    riftwarden: { load: () => import('./routes/RiftWarden.svelte'), allowed: () => can('canRiftWarden') },
+    logs: { load: () => import('./routes/Logs.svelte'), allowed: () => can('canLogs') },
+    users: { load: () => import('./routes/Users.svelte'), allowed: () => isAdmin },
+    duplicates: { load: () => import('./routes/Duplicates.svelte'), allowed: () => can('canLibraryHealth') },
+    conversion: { load: () => import('./routes/Conversion.svelte'), allowed: () => can('canConversion') },
+    episodes: { load: () => import('./routes/Episodes.svelte'), allowed: () => can('canEpisodes') },
+  };
+  $effect(() => {
+    if (phase !== 'ready') return;
+    const timer = setTimeout(() => {
+      for (const page of Object.values(pages)) if (page.allowed?.()) page.load().catch(() => {});
+    }, 3000);
+    return () => clearTimeout(timer);
+  });
 
   // ── Notifications ────────────────────────────────────────────────────
   let bellOpen = $state(false);
@@ -608,29 +622,29 @@
     {:else if $route.name === 'history'}
       <History />
     {:else if $route.name === 'stats'}
-      <Stats />
+      <LazyPage load={pages.stats.load} />
     {:else if $route.name === 'requests'}
-      <Requests />
+      <LazyPage load={pages.requests.load} />
     {:else if $route.name === 'system' && can('canDashboard')}
-      <Dashboard />
+      <LazyPage load={pages.system.load} />
     {:else if $route.name === 'libraries' && isAdmin}
-      <Libraries onchange={locationsChanged} />
+      <LazyPage load={pages.libraries.load} props={{ onchange: locationsChanged }} />
     {:else if $route.name === 'downloads' && can('canDownload')}
-      <Downloads />
+      <LazyPage load={pages.downloads.load} />
     {:else if $route.name === 'organizer' && can('canOrganizer')}
-      <Organizer />
+      <LazyPage load={pages.organizer.load} />
     {:else if $route.name === 'riftwarden' && can('canRiftWarden')}
-      <RiftWarden />
+      <LazyPage load={pages.riftwarden.load} />
     {:else if $route.name === 'logs' && can('canLogs')}
-      <Logs />
+      <LazyPage load={pages.logs.load} />
     {:else if $route.name === 'users' && isAdmin}
-      <Users />
+      <LazyPage load={pages.users.load} />
     {:else if $route.name === 'duplicates' && can('canLibraryHealth')}
-      <Duplicates />
+      <LazyPage load={pages.duplicates.load} />
     {:else if $route.name === 'conversion' && can('canConversion')}
-      <Conversion />
+      <LazyPage load={pages.conversion.load} />
     {:else if $route.name === 'episodes' && can('canEpisodes')}
-      <Episodes />
+      <LazyPage load={pages.episodes.load} />
     {:else}
       <Home onopen={openItem} onplay={playItem} />
     {/if}

@@ -27,3 +27,13 @@ test('polling shares pending work, ignores invalid replies, and never delivers a
   const second = monitor.check(); monitor.stop(); release({ version: 'new' }); await second;
   assert.deepEqual(updates, []);
 });
+
+// Admin and occasional pages load on first visit (LazyPage.svelte) and add their own script and stylesheet
+// tags; the server's version counts only the entry files (index-*), so the loaded version must too, or opening
+// such a page before the first check would announce an update that is not there.
+test('pages loaded later, with their own scripts and stylesheets, do not enter the build version', () => {
+  const version = loadedAppVersion({ baseURI: 'https://tv.test/', querySelectorAll: () => [
+    { src: '/assets/index-a1.js' }, { href: '/assets/index-b2.css' }, { href: '/assets/Dashboard-c3.css' }, { src: '/assets/Dashboard-d4.js' },
+  ] });
+  assert.equal(version, 'index-a1.js|index-b2.css'.split('|').sort().join('|'));
+});

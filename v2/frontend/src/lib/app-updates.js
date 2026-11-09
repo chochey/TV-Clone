@@ -3,7 +3,8 @@ export function loadedAppVersion(document) {
   for (const element of document?.querySelectorAll?.('script[type="module"][src],link[rel="stylesheet"][href]') || []) {
     try {
       const pathname = new URL(element.src || element.href, document.baseURI).pathname;
-      const match = pathname.match(/\/assets\/([^/]+\.(?:js|css))$/);
+      // Only the entry files, as the server's /api/version counts them: pages loaded later add their own.
+      const match = pathname.match(/\/assets\/(index-[^/]+\.(?:js|css))$/);
       if (match) assets.add(match[1]);
     } catch {}
   }
