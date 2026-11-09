@@ -45,7 +45,7 @@ async function setup(page, { streaming = streamingFor } = {}) {
     else if (pathname === '/api/stats') body = { totalFiles: 9412, movies: 1180, shows: 210, episodes: 8100, totalSize: 10.9e12 };
     else if (pathname === '/api/organizer/status') body = { ok: true, active: true };
     else if (pathname === '/api/reliability/status') body = { ok: true, checks: { app: { ok: true } } };
-    else if (pathname === '/api/storage') body = { ok: true, pool: { pct: 86, avail: 1.8e12, size: 13e12, projection: { daysLeft: 400 } }, drives: [] };
+    else if (pathname === '/api/storage') body = { ok: true, pool: { pct: 86, avail: 1.8e12, size: 13e12, projection: { daysLeft: 200, perDay: 9e9 } }, drives: [] };
     else if (pathname === '/api/dashboard/jobs') body = {
       transcription: { active: true, booksTotal: 46, booksDone: 13, current: { title: 'The Consuming Fire', chaptersDone: 12, chaptersTotal: 30 }, next: ['Book A', 'Book B'] },
       collections: { films: 600, inCollections: 229, lastAskedAt: Date.now() - 3 * 3600000 },
@@ -91,7 +91,9 @@ test('the dashboard shows background jobs, streaming and library growth', async 
   await expect(page.getByRole('img', { name: /Minutes watched per day over the last 30 days/ })).toBeVisible();
   await expect(page.getByRole('img', { name: /Titles added per week/ })).toBeVisible();
   await expect(page.getByRole('img', { name: /Media pool space used/ })).toBeVisible();
-  await expect(job('Storage')).toContainText('full in about 13 months');
+  // The month it fills and how fast (fillForecast), from the server's daily usage history.
+  const fullBy = new Date(Date.now() + 200 * 86400000).toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  await expect(job('Storage')).toContainText(`1.80 TB free of 13.00 TB · full around ${fullBy} at the current rate, about 270 GB a month`);
   expect(calls.streamingDays).toEqual([30]);
   await page.getByRole('group', { name: 'Period' }).getByRole('button', { name: '7 days' }).click();
   await expect(page.locator('.tiles')).toContainText('4viewings');

@@ -41,3 +41,16 @@ export function deliveryMix(byDelivery = {}) {
   return Object.entries(byDelivery).filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1])
     .map(([key, count]) => ({ key, label: DELIVERY_LABELS[key] || key, count, pct: percent(count, total) }));
 }
+
+// The media pool's fill forecast (lib/storage-health.js projectDaysLeft: daysLeft, perDay from the daily
+// usage history), as the month it fills and the monthly rate; under two months, as days.
+export function fillForecast(projection, now = Date.now()) {
+  if (!projection?.daysLeft || !(projection.perDay > 0)) return '';
+  const monthly = projection.perDay * 30;
+  const rate = monthly < 1e12 ? `${Math.round(monthly / 1e9)} GB` : `${(monthly / 1e12).toFixed(1).replace(/\.0$/, '')} TB`;
+  const days = Math.max(1, Math.round(projection.daysLeft));
+  const when = days < 60
+    ? `in about ${days} day${days === 1 ? '' : 's'}`
+    : `around ${new Date(now + days * 86400000).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}`;
+  return `full ${when} at the current rate, about ${rate} a month`;
+}

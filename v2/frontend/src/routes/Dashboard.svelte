@@ -4,7 +4,7 @@
   import { waitForRestart, currentUptime } from '../lib/restart.js';
   import { createRefreshLoop } from '../lib/refresh-loop.js';
   import { physicalDriveWarnings } from '../lib/storage-warnings.js';
-  import { fmtBytes, fmtDuration, fmtAgo, percent, deliveryMix } from '../lib/dashboard-format.js';
+  import { fmtBytes, fmtDuration, fmtAgo, percent, deliveryMix, fillForecast } from '../lib/dashboard-format.js';
   import BarChart from '../lib/components/charts/BarChart.svelte';
   import AreaChart from '../lib/components/charts/AreaChart.svelte';
 
@@ -73,6 +73,7 @@
   const weekRows = $derived((growth?.weeks || []).map(w => ({ label: w.week.slice(5), values: w })));
   const weekTotal = $derived((growth?.weeks || []).reduce((n, w) => n + w.films + w.episodes + w.audiobooks, 0));
   const dayRows = $derived((streaming?.daily || []).map(d => ({ label: d.day.slice(5), values: { minutes: d.watchedMin } })));
+  const poolForecast = $derived(fillForecast(storage?.pool?.projection));
   const storagePoints = $derived((growth?.storage || []).map(p => p.used));
   const storageMax = $derived(growth?.storage?.length ? growth.storage.at(-1).size : 1);
   // Start the scale just below the lowest point so a slow fill is visible, not a flat block.
@@ -419,7 +420,7 @@
       {#if storage?.pool}
         <div class="kv disk"><span>Media pool</span>
           <strong>{storage.pool.pct}%</strong>
-          <em>{fmtBytes(storage.pool.avail)} free of {fmtBytes(storage.pool.size)}{storage.pool.projection ? ` · full in about ${Math.round(storage.pool.projection.daysLeft / 30)} months at the current rate` : ''}</em>
+          <em>{fmtBytes(storage.pool.avail)} free of {fmtBytes(storage.pool.size)}{poolForecast ? ` · ${poolForecast}` : ''}</em>
         </div>
         <div class="gauge" class:hot={storage.pool.pct >= 90}><span style={`width:${storage.pool.pct}%`}></span></div>
         {#if storagePoints.length > 1}

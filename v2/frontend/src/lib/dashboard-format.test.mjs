@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { fmtBytes, fmtDuration, fmtAgo, niceMax, percent, deliveryMix } from './dashboard-format.js';
+import { fmtBytes, fmtDuration, fmtAgo, niceMax, percent, deliveryMix, fillForecast } from './dashboard-format.js';
 
 test('bytes, durations and ages read naturally', () => {
   assert.equal(fmtBytes(null), '—');
@@ -37,4 +37,15 @@ test('percentages and the delivery mix', () => {
     { key: 'transcode-gpu', label: 'Encoded (GPU)', count: 3, pct: 30 },
     { key: 'remux', label: 'Repackaged', count: 1, pct: 10 },
   ]);
+});
+
+// The media pool's line on the Dashboard: when it fills and how fast, from the server's daily usage history
+// (lib/storage-health.js projectDaysLeft). "Full in about 7 months" said neither, and would have read
+// "about 0 months" near the end (2026-11-09: 9.4 GB a day, 1.88 TB free).
+test('the fill forecast names the month and the monthly rate, and counts days when it is close', () => {
+  const now = new Date('2026-11-09T12:00:00').getTime();
+  assert.equal(fillForecast({ daysLeft: 200, perDay: 9.4e9 }, now), 'full around May 2027 at the current rate, about 282 GB a month');
+  assert.equal(fillForecast({ daysLeft: 40, perDay: 47e9 }, now), 'full in about 40 days at the current rate, about 1.4 TB a month');
+  assert.equal(fillForecast({ daysLeft: 1, perDay: 3e12 }, now), 'full in about 1 day at the current rate, about 90 TB a month');
+  assert.equal(fillForecast(null, now), '');
 });
