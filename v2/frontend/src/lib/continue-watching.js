@@ -8,8 +8,14 @@ import { AUTO_WATCHED_PERCENT, isSeriesItem, seriesKey } from './series-playback
 import { nextEpisodeOf } from './format.js';
 import { STALE_AFTER_MS } from './tonight.js';
 
-const partway = s => s?.progress?.percent > 0 && s.progress.percent < AUTO_WATCHED_PERCENT;
-const finished = s => (s?.progress?.percent || 0) >= AUTO_WATCHED_PERCENT;
+// Stopped in the credits counts as finished here: Gamer (90%, 9 min left), Doom (87%, 15) and Jumanji: The
+// Next Level (87%, 16) sat in the row for weeks, below the 92% that marks a title watched. Across the user's
+// history (2026-11-10) titles left at the end cluster at 87-91%; the minutes cap keeps a long film or an
+// audiobook with real time left. Only this list changes: the saved position and the watched mark do not.
+const CREDITS_PERCENT = 87, CREDITS_SECONDS = 16 * 60;
+const inCredits = p => p?.percent >= CREDITS_PERCENT && p.duration > 0 && p.duration - (p.currentTime || 0) <= CREDITS_SECONDS;
+const finished = s => (s?.progress?.percent || 0) >= AUTO_WATCHED_PERCENT || inCredits(s?.progress);
+const partway = s => s?.progress?.percent > 0 && !finished(s);
 
 export function continueWatchingList({ state = {}, byId = new Map(), hidden = {}, seriesIndex = new Map(), now = Date.now() }) {
   const activity = [];

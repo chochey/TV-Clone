@@ -18,7 +18,7 @@ const library = [
   episode(7, 'Collaborators', { watched: true, progress: { percent: 94, currentTime: 2480, duration: 2620, updatedAt: new Date('2026-11-02T17:36:00').getTime() } }),
   episode(8, 'White Light'),
   { id: 'jumanji', title: 'Jumanji The Next Level', year: 2019, type: 'movie', mediaKind: 'movie', streamMode: 'direct', addedAt: 1, subtitles: [],
-    progress: { percent: 87, currentTime: 6450, duration: 7400, updatedAt: new Date('2026-11-01T11:08:00').getTime() } },
+    progress: { percent: 60, currentTime: 4440, duration: 7400, updatedAt: new Date('2026-11-01T11:08:00').getTime() } },
 ];
 
 async function setup(page, dismissedIds) {

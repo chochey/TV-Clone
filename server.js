@@ -302,7 +302,7 @@ const {
 } = probe;
 // Every path-keyed probe result, for code that must forget a file (delete, repair, replaced in place).
 const PROBE_CACHES = [probeCache, pixFmtCache, audioProbeCache, audioTracksCache, subProbeCache, heightCache, levelCache];
-const { replacedInPlace, forgetProbeResults } = require('./lib/replaced-in-place');
+const { replacedInPlace, forgetProbeResults, shelfDate, fileMtime: fileMtimeOf } = require('./lib/replaced-in-place');
 
 // ── Library conversion (MEDIA_CONVERSION_PLAN.md) — phase 1: read-only
 // planner + config only. Nothing here mutates a media file; that is phase 2+.
@@ -466,7 +466,7 @@ function loadLibraryCache() {
 // in the background. Open clients refresh once new covers are saved.
 function warmAudioArtwork() {
   const books = (libraryCache || []).filter(item => item.mediaKind === 'audio' && !item.playbackIssue && item._filePath)
-    .map(item => ({ filePath: item._filePath, size: item.fileSize, mtimeMs: item.addedAt }));
+    .map(item => ({ filePath: item._filePath, size: item.fileSize, mtimeMs: fileMtimeOf(item) }));
   if (!libraryScanState.degraded) audioArtwork.prune(books.map(book => book.filePath)).catch(() => {});
   const before = audioArtwork.revision;
   audioArtwork.warm(books, filePath => audioMetadata.get(filePath))
@@ -536,6 +536,7 @@ async function doRescan(trigger) {
     allowMoves:identityMovesAllowed, roots:config.folders.map(folder=>folder.path).filter(Boolean).map(root=>path.resolve(root)),
   });
   const previousByPath = new Map((libraryCache || []).map(item => [item._filePath, item]));
+  const previousById = new Map((libraryCache || []).map(item => [item.id, item]));
   for (const {folder, paths:videoPaths} of inventory) {
     const dirPath = folder.path;
     for (const fullPath of videoPaths) {
@@ -546,14 +547,17 @@ async function doRescan(trigger) {
       const mediaKind = classifyMediaKind(fullPath, folder);
       const playbackIssue = playbackIssueForFile(fullPath);
       const type = folder.type && folder.type !== 'auto' ? folder.type : mediaKind;
-      let fileSize, addedAt, id;
+      let fileSize, fileMtime, id;
       try {
-        const st = await fs.promises.stat(fullPath); fileSize = st.size; addedAt = st.mtimeMs;
+        const st = await fs.promises.stat(fullPath); fileSize = st.size; fileMtime = st.mtimeMs;
         id = await mediaIdentity.resolve(fullPath, st);
       }
       catch (err) { lookup.recordFailure(fullPath, err); continue; }
       // Replaced under the same name (lib/replaced-in-place.js): read it again after the scan.
-      if (replacedInPlace(previousByPath.get(fullPath), fileSize, addedAt) && forgetProbeResults(PROBE_CACHES, fullPath)) {
+      // The date it joined the shelf survives a replacement, and a rename (found by id).
+      const previous = previousByPath.get(fullPath);
+      const addedAt = shelfDate(previous || previousById.get(id), fileMtime);
+      if (replacedInPlace(previous, fileSize, fileMtime) && forgetProbeResults(PROBE_CACHES, fullPath)) {
         markDirty();
         console.log(`  [scan] ${file} was replaced in place; reading it again`);
       }
@@ -567,9 +571,9 @@ async function doRescan(trigger) {
       let itemTitle = title, itemArtist = null;
       if (mediaKind === 'audio' && !playbackIssue) {
         let meta = audioMetaCache[fullPath];
-        if (!audioMetaValid(meta, { size: fileSize, mtimeMs: addedAt })) {
+        if (!audioMetaValid(meta, { size: fileSize, mtimeMs: fileMtime })) {
           const fields = await probeAudioText(fullPath, { run: (...a) => audioTextRunner.run(...a) });
-          meta = fields ? audioMetaEntry({ size: fileSize, mtimeMs: addedAt }, fields) : null;
+          meta = fields ? audioMetaEntry({ size: fileSize, mtimeMs: fileMtime }, fields) : null;
           // markDirty alone only flags the cache; the background probe pool is
           // what normally flushes it and it skips audio entirely, so without
           // scheduling a write these results would die with the process and
@@ -632,7 +636,7 @@ async function doRescan(trigger) {
           ...embeddedSubs,
         ],
         audioTracks,
-        showName, epInfo, fileSize, addedAt, genres,
+        showName, epInfo, fileSize, addedAt, fileMtime, genres,
         streamMode, playbackIssue, codec,
       });
     }

@@ -142,6 +142,11 @@ codec/height/tracks stuck (Interstellar, 4K AV1 replaced by a 1080p H.264 copy, 
 The scan compares each file's size and mtime with the previous catalog entry and forgets its probe results
 (`lib/replaced-in-place.js`, `PROBE_CACHES` in server.js, also used by delete and conversion repair); the
 post-scan `backgroundProbe` reads it again.
+**Added date vs file time (November 2026):** `addedAt` is the date a title joined the shelf; `fileMtime` is the
+file's modification time (fingerprints use `fileMtime ?? addedAt`). A replaced or renamed file keeps the earlier
+`addedAt` (`shelfDate`), so a converted copy is not "Added today". Tonight also treats a title stopped in the
+credits (87%+ with 16 min or less left, `lib/continue-watching.js`) as finished for its rows only, and "Fresh on
+your shelf" leaves out titles already shown above it (`freshShelf` in `lib/tonight.js`).
 
 ## Architecture Notes
 

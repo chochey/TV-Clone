@@ -20,7 +20,7 @@ function list(items, state, hidden = {}, now = 1000) {
 
 test('finishing an episode offers the next one, ahead of a film paused earlier', () => {
   const items = [ep(3, 6), ep(3, 7), ep(3, 8), ep(3, 9), film('jumanji')];
-  const out = list(items, { s3e6: done(100), s3e7: done(200), jumanji: partway(87, 50) });
+  const out = list(items, { s3e6: done(100), s3e7: done(200), jumanji: partway(60, 50) });
   assert.deepEqual(out.map(i => i.id), ['s3e8', 'jumanji']);
   assert.equal(out[0].upNext, true);
   assert.equal(out[0].progress.updatedAt, 200, 'sorted by when the last episode was finished');
@@ -77,4 +77,27 @@ test('an episode finished more than three months ago offers nothing (Tonight cou
   const day = 86400000, now = 200 * day;
   assert.deepEqual(list(items, { s1e1: done(now - 91 * day) }, {}, now), []);
   assert.deepEqual(list(items, { s1e1: done(now - 89 * day) }, {}, now).map(i => i.id), ['s1e2']);
+});
+
+// Gamer (9 min left), Doom (15) and Jumanji: The Next Level (16) sat in "Also in progress" for weeks: all
+// stopped in the credits, below the 92% that marks a title watched (the user's Tonight page, 2026-11-10).
+const stopped = (minutesIn, minutesLong, at) => ({ watched: false,
+  progress: { percent: Math.round(minutesIn / minutesLong * 100), currentTime: minutesIn * 60, duration: minutesLong * 60, updatedAt: at } });
+
+test('a film stopped in the credits is not in progress', () => {
+  const items = [film('gamer'), film('doom'), film('jumanji'), film('nice-guys'), film('hobbit')];
+  const out = list(items, { gamer: stopped(85.3, 94.8, 5), doom: stopped(98.1, 112.7, 4), jumanji: stopped(107.4, 123.2, 3),
+    'nice-guys': stopped(97.7, 116, 2), hobbit: stopped(150, 182.5, 1) });
+  assert.deepEqual(out.map(i => i.id), ['nice-guys', 'hobbit'], '18 minutes left at 84%, and 32 minutes left, are still to watch');
+});
+
+test('an episode stopped in the credits offers the next one', () => {
+  const items = [ep(3, 8), ep(3, 9)];
+  const out = list(items, { s3e8: stopped(41.1, 46.3, 900) });
+  assert.deepEqual(out.map(i => [i.id, i.upNext]), [['s3e9', true]]);
+});
+
+test('an audiobook with hours left is in progress however far through it is', () => {
+  const book = { id: 'book', mediaKind: 'audio', title: 'Book', filename: 'book.m4b' };
+  assert.deepEqual(list([book], { book: stopped(900, 1014.8, 9) }).map(i => i.id), ['book']);
 });

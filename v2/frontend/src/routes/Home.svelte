@@ -18,7 +18,7 @@
   import { episodeCode, episodeTitle } from '../lib/format.js';
   import { collections, loadCollections, collectionCards } from '../lib/collections.js';
   import { credits, readAlongIds, bookChapters, loadHomeData } from '../lib/home-data.js';
-  import { greeting, summaryLine, timeLeft, pausedWhen, splitInProgress, rankPicks, pickReason, choosePick, dayKey, STALE_AFTER_MS } from '../lib/tonight.js';
+  import { greeting, summaryLine, timeLeft, pausedWhen, splitInProgress, rankPicks, pickReason, choosePick, dayKey, STALE_AFTER_MS, freshShelf } from '../lib/tonight.js';
   import { loadPickMemory, savePickMemory, rememberShown, rememberSkipped } from '../lib/tonight-pick-memory.js';
   let { onopen, onplay } = $props();
 
@@ -63,6 +63,7 @@
   // Everything in progress besides the two featured above; titles untouched for three months are
   // kept apart (split.older) and only appear in View all, with one button to clear them.
   const continued = $derived(continuePreview(split.others));
+  const fresh = $derived(freshShelf($recentlyAdded, [watching, listening, ...continued.row]));
   let allContinue = $state(false), continueKind = $state('all');
   const allInProgress = $derived(continuePreview([split.watching, split.listening, ...split.others].filter(Boolean)).recent);
   const continueItems = $derived(filterContinue(allInProgress, continueKind));
@@ -239,7 +240,7 @@
 
   <Row title="Saved for later" items={saved} {onopen} {onplay} onremove={toggleWatchLater}
        subtitle={saved.length ? 'Titles you set aside from their pages' : ''} />
-  <Row title="Fresh on your shelf" items={$recentlyAdded} {onopen} {onplay} added onmore={() => navigate('/movies')} moreLabel="All films" />
+  <Row title="Fresh on your shelf" items={fresh} {onopen} {onplay} added onmore={() => navigate('/movies')} moreLabel="All films" />
   <Row title="Collections" items={collectionRow} card={collectionCell} onmore={() => navigate('/collections')}
        subtitle={collectionRow.length ? `${collectionRow.length} series and franchises, found for you` : ''} />
 

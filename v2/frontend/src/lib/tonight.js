@@ -1,6 +1,6 @@
 // The Tonight page: what you're in the middle of, and one good pick with a
 // reason in plain words. Pure functions so the page stays a layout.
-import { isAudioItem, isSeriesItem } from './series-playback.js';
+import { isAudioItem, isSeriesItem, seriesKey } from './series-playback.js';
 
 const DAY = 86400000;
 const startOfDay = ms => { const d = new Date(ms); d.setHours(0, 0, 0, 0); return d.getTime(); };
@@ -129,4 +129,12 @@ export function choosePick(ranked, { day = dayKey(), skipped = {}, shown = [], n
   ];
   const candidates = tiers.find(t => t.length);
   return candidates[hashDay(day) % candidates.length];
+}
+
+// "Fresh on your shelf" without the titles the page already shows above it (the lead, the audiobook, the
+// "Also in progress" row): seven sat in both rows on the user's page (2026-11-10). A series counts once.
+export function freshShelf(shelf = [], above = []) {
+  const key = item => seriesKey(item) || item.id;
+  const shown = new Set(above.filter(Boolean).map(key));
+  return shelf.filter(item => !shown.has(key(item)));
 }

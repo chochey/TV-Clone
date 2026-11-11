@@ -131,3 +131,15 @@ test('in-progress titles older than ninety days are set aside as older, not feat
   assert.equal(summaryLine({ ...split }), 'An episode in progress'.replace('An episode', '2 videos') === '2 videos in progress' ? summaryLine({ ...split }) : '');
   assert.match(summaryLine({ ...split }), /^2 videos and an audiobook in progress$/);
 });
+
+// MobLand, The Strain, Next and four more sat in both "Also in progress" and "Fresh on your shelf", and
+// Interstellar led the page and the shelf (the user's Tonight page, 2026-11-10).
+test('the shelf leaves out what the page already shows above it', async () => {
+  const { freshShelf } = await import('./tonight.js');
+  const show = (id, showName, extra = {}) => ({ id, type: 'show', showName, epInfo: { season: 1, episode: 1 }, filename: `${id}.mkv`, ...extra });
+  const film = id => ({ id, type: 'movie', title: id, filename: `${id}.mp4` });
+  const shelf = [film('jurassic'), film('interstellar'), show('mob-card', 'MobLand (2025)', { seriesCard: true }), film('next'), film('carrie')];
+  const above = [film('interstellar'), show('mob-s1e4', 'MobLand (2025)', { epInfo: { season: 1, episode: 4 } }), film('next'), null];
+  assert.deepEqual(freshShelf(shelf, above).map(i => i.id), ['jurassic', 'carrie']);
+  assert.deepEqual(freshShelf(shelf, []).map(i => i.id), shelf.map(i => i.id));
+});
