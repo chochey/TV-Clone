@@ -363,4 +363,21 @@
     .episode-nav .nextbtn {min-width:110px;justify-content:center;}
     .vol {margin-left:4px;}
   }
+  /* A phone held sideways has width to spare and no height: one row, play in the middle of the screen,
+     Prev/Next as icons beside the menus. Two rows covered the lower third of the picture and put play at
+     the right edge (the user's phone, 2026-11-12). */
+  @media (max-height: 520px) and (orientation: landscape) {
+    .buttons {grid-template-columns:minmax(min-content,1fr) auto minmax(min-content,1fr);gap:4px;}
+    .zleft {grid-column:1;grid-row:1;justify-self:start;}
+    .zcenter {grid-column:2;grid-row:1;justify-self:center;gap:6px;}
+    .zright {grid-column:3;grid-row:1;justify-self:end;justify-content:flex-end;flex-wrap:nowrap;gap:2px;}
+    .episode-nav {flex-basis:auto;margin:0;gap:2px;}
+    .nextbtn, .episode-nav .nextbtn {width:44px;min-width:0;min-height:44px;padding:0;gap:0;justify-content:center;font-size:0;background:none;}
+    .nextbtn svg {width:24px;height:24px;}
+    .vol {margin-left:0;}
+    .scrub {padding:10px 0 6px;}
+    .controls {padding-bottom:max(6px,env(safe-area-inset-bottom));}
+  }
+  /* With room for it, a gap as wide as the mute button on the other side puts play itself in the middle. */
+  @media (max-height: 520px) and (orientation: landscape) and (min-width: 800px) { .zcenter {padding-left:50px;} }
 </style>

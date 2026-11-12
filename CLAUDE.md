@@ -556,6 +556,12 @@ are visible at 0.7 opacity (they only render when there is more that way), a car
 ellipsis (`.facts`), and the mood buttons follow their heading. Browse/Search/Collections grids are not scaled yet.
 Tests: `tests/wide-screen.spec.mjs` (set `WIDE_SHOTS=<dir>` to save screenshots).
 
+### Player controls on a phone held sideways (November 2026)
+`PlayerControls.svelte` has a last media query, `(max-height: 520px) and (orientation: landscape)`: one row, time on
+the left, back 10 / play / forward 10 / mute in the middle (from 800px wide a 50px gap balances the mute button so
+play is at the screen's centre), then Prev/Next as 44px icons, subtitles, audio, speed, quality, fullscreen. The
+<=1400px two-row layout covered the lower third of the picture there. Test: "on a phone held sideways" in player.spec.mjs.
+
 ### Fresh files and stray transcode sessions (October 2026)
 A file that arrived minutes ago is listed with `streamMode: 'unknown'` until probed. `/api/item/:id`
 probes on demand and answers the real mode; the player must build its direct URL from that answer,

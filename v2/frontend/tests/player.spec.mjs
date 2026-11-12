@@ -262,6 +262,38 @@ for (const viewport of [{ width: 1280, height: 800 }, { width: 390, height: 844 
   });
 }
 
+// A phone held sideways (the user's screenshot, Seinfeld S1E2, 2026-11-12): the controls were two rows that
+// covered the lower third of the picture, with play pushed to the right and Prev/Next alone on a second row.
+test('on a phone held sideways the controls are one row with play in the middle', async ({ page }) => {
+  await page.setViewportSize({ width: 915, height: 412 });
+  await setup(page, { items: [film, episode(1), episode(2), episode(3)], detail: { ep2: { subtitles: [{ url: '/subtitle/s1', label: 'English' }] } } });
+  await page.goto(`${origin}/title/ep1`);
+  await page.locator('.actions').getByRole('button', { name: /Play|Resume/ }).first().click();
+  await expect.poll(() => videoTime(page), { timeout: 10000 }).toBeGreaterThan(0.5);
+  await player(page).getByRole('button', { name: /Next episode S1 · E2/ }).click();   // the middle episode has Prev and Next
+  await expect(player(page).getByRole('button', { name: /Previous episode S1 · E1/ })).toBeVisible();
+  await expect.poll(() => videoTime(page), { timeout: 10000 }).toBeGreaterThan(0.5);
+  await player(page).getByRole('button', { name: 'Pause' }).click();
+  const centres = [];
+  for (const element of await player(page).locator('.controls .buttons button, .controls .time').all()) {
+    if (!(await element.isVisible())) continue;
+    const box = await element.boundingBox();
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(916);
+    centres.push(box.y + box.height / 2);
+  }
+  expect(Math.max(...centres) - Math.min(...centres), 'every control on one line').toBeLessThan(6);
+  const play = await player(page).getByRole('button', { name: 'Play', exact: true }).boundingBox();
+  expect(Math.abs(play.x + play.width / 2 - 915 / 2), 'play is in the middle of the screen').toBeLessThan(8);
+  for (const name of [/Previous episode S1 · E1/, /Next episode S1 · E3/, 'Subtitles', 'Playback speed', 'Quality', 'Fullscreen', 'Mute']) {
+    const box = await player(page).getByRole('button', { name }).boundingBox();
+    expect(Math.min(box.width, box.height), `${name} is big enough to tap`).toBeGreaterThanOrEqual(40);
+  }
+  const controls = await player(page).locator('.controls').boundingBox();
+  expect(controls.height, 'the bar leaves the picture alone').toBeLessThan(100);
+  await page.screenshot({ path: test.info().outputPath('player-sideways.png') });
+});
+
 test.describe('on a touch screen', () => {
   test.use({ hasTouch: true, viewport: { width: 844, height: 390 } });
   test('one tap pauses, and a double tap on the right or left half seeks ten seconds', async ({ page }) => {
