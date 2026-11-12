@@ -50,6 +50,10 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 html { font-size: 16px; -webkit-text-size-adjust: 100%; }
+/* Very wide viewports (a 2K monitor at 67% browser zoom is 3840 CSS pixels wide, the user's main screen,
+   2026-11-10): text grew no bigger than on a laptop and read as tiny. Type scales with the width from
+   about 2670px up; a 2560px viewport at normal zoom and everything smaller are unchanged. */
+@media (min-width: 2000px) { html { font-size: clamp(16px, 0.6vw, 23px); } }
 
 body {
   font-family: var(--font-sans);

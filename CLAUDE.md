@@ -547,6 +547,15 @@ Watch later / Listen later / Saved. `--maxw` is 2400px so 2K screens fill edge t
 disabled primary buttons go neutral (cream 10%, faint ink), never dimmed amber. `posterUrl()` falls
 back to an audiobook's catalog `coverUrl`, so History, Stats and anything else using it show covers.
 
+### Very wide viewports (November 2026)
+The user's main monitor is 2K at about 67% browser zoom: 3840 CSS pixels wide, where 18 to 20 fixed 164px posters
+fit a row and 16px type read as tiny. From 2000px up: `html` font-size is `clamp(16px, 0.6vw, 23px)` (tokens.css;
+unchanged at 2560 and below), Row cells are `clamp(176px, 8.4vw, 330px)` (about ten a row), Tonight's top cards
+size in rem and share the row more evenly, and "Not tonight" sits beside the buttons. At every width: row arrows
+are visible at 0.7 opacity (they only render when there is more that way), a card's facts are one line with an
+ellipsis (`.facts`), and the mood buttons follow their heading. Browse/Search/Collections grids are not scaled yet.
+Tests: `tests/wide-screen.spec.mjs` (set `WIDE_SHOTS=<dir>` to save screenshots).
+
 ### Fresh files and stray transcode sessions (October 2026)
 A file that arrived minutes ago is listed with `streamMode: 'unknown'` until probed. `/api/item/:id`
 probes on demand and answers the real mode; the player must build its direct URL from that answer,

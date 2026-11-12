@@ -92,6 +92,13 @@
   .track.lg .cell { flex-basis: clamp(140px, 13vw, 184px); }
 
   .track.wide .cell { flex-basis:clamp(260px,31vw,470px); }
+  /* Wide screens: posters grow with the screen, about ten to a row, where a fixed 164px put 18 to 20
+     small ones across the user's main monitor (2026-11-10). 1080p screens and below are unchanged. */
+  @media (min-width: 2000px) {
+    .track { gap: clamp(18px, 0.9vw, 34px); }
+    .cell { flex-basis: clamp(176px, 8.4vw, 330px); }
+    .track.lg .cell { flex-basis: clamp(190px, 9.4vw, 360px); }
+  }
 
   /* Full-height grab targets at the row edges, revealed on hover like the
      cards themselves. Hidden on touch, where swiping is the natural gesture. */
@@ -102,7 +109,8 @@
     display: grid; place-items: center;
     color: var(--ink);
     cursor: pointer;
-    opacity: 0; transition: opacity var(--t-fast);
+    /* Always faintly there: a row cut off at the edge with no sign of more looked like the end of it. */
+    opacity: 0.7; transition: opacity var(--t-fast);
   }
   .page.left { left: 0; background: linear-gradient(90deg, var(--bg) 35%, transparent); }
   .page.right { right: 0; background: linear-gradient(270deg, var(--bg) 35%, transparent); }

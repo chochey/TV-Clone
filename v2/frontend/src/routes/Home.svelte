@@ -355,6 +355,23 @@
     .listen-actions { justify-content: flex-start; align-self: end; }
   }
 
+  /* Wide screens: the three top cards share the row evenly (the resume card was twice the others and half
+     empty), and their fixed sizes follow the type (rem), which grows with the screen in tokens.css. */
+  @media (min-width: 2000px) {
+    .lead { flex: 1.25 1 560px; min-height: 20rem; }
+    .pick, .listen { flex: 1 1 320px; }
+    .lead-body { padding: 1.9rem; gap: 1.75rem; }
+    .lead-actions .textbtn { margin-left: 4px; } /* beside the buttons, not alone at the far edge */
+    .lead-poster, .pick.big .pick-poster { width: 9.4rem; }
+    .pick { padding: 1.4rem; gap: 1.25rem; }
+    .pick-poster { width: 7.4rem; }
+    .listen-cover { width: 7.4rem; height: 7.4rem; }
+    .listen { grid-template-columns: 7.4rem minmax(0, 1fr); padding: 1.4rem; }
+    .bar { max-width: 29rem; height: 0.25rem; }
+    .btn { min-height: 2.75rem; padding: 0 1.25rem; }
+    .continue-grid { grid-template-columns: repeat(auto-fill, minmax(clamp(160px, 8.4vw, 330px), 1fr)); }
+  }
+
   .continue-controls { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 40px var(--gutter) 0; color: var(--ink-soft); font-size: 0.88rem; }
   .continue-controls button { color: var(--ink-soft); min-height: 44px; font-weight: 600; text-decoration: underline; text-underline-offset: 4px; white-space: nowrap; }
   .continue-controls button:hover { color: var(--ink); }
@@ -374,7 +391,8 @@
   .moods { margin: var(--s5) 0; }
   .moods-head { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; padding: 0 var(--gutter); margin-bottom: var(--s2); }
   .moods-head h2 { font-size: clamp(1.5rem, 2.4vw, 1.9rem); line-height: 1; }
-  .mood-pills { display: flex; gap: 8px; flex-wrap: wrap; margin-left: auto; }
+  /* Beside the question they answer; pushed to the far edge they sat a screen-width away from it. */
+  .mood-pills { display: flex; gap: 8px; flex-wrap: wrap; margin-left: 10px; }
   .mood-pills button { min-height: 36px; padding: 0 14px; border-radius: var(--r-pill); box-shadow: inset 0 0 0 1px var(--line-strong); color: var(--ink-soft); font-size: 0.85rem; font-weight: 600; transition: background var(--t-fast), color var(--t-fast); }
   .mood-pills button:hover { color: var(--ink); }
   .mood-pills button[aria-pressed='true'] { background: var(--accent); color: var(--accent-ink); box-shadow: none; }

@@ -148,7 +148,7 @@
       {#if resume && resumeLine}
         {resumeLine}
       {:else}
-        {metaLine}
+        <span class="facts" title={metaLine}>{metaLine}</span>
         {#if playbackIssue}<span class="compatibility-label">Compatible copy needed</span>{/if}
         {#if summary && summary.watched}<span class="series-progress">{summary.watched} of {summary.total} watched</span>{/if}
       {/if}
@@ -253,6 +253,8 @@
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   .y { display: block; font-size: 0.8rem; color: var(--ink-faint); line-height: 1.35; }
+  /* One line of facts: wrapped onto two or three, they made a row of cards ragged. */
+  .facts { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .series-progress { display: block; margin-top: 2px; }
   .compatibility-label { display: block; margin-top: 2px; color: var(--accent); }
 
