@@ -775,8 +775,44 @@ def query_omdb(title: str, year: str | None = None) -> dict | None:
             log.info(f"  Strategy: search (no year), query: '{variations[0]}'")
             return result
 
+    # Strategy 5: a sequel filed under its number, found by the franchise name and the year
+    result = _sequel_by_franchise(title, year)
+    if result:
+        log.info(f"  Strategy: sequel by franchise name + year, found '{result['title']}'")
+        return result
+
     _omdb_no_match_cache[cache_key] = time.time()
     return None
+
+
+_SEQUEL_NUMBER = re.compile(r"^(.+?)\s+([2-9])$")
+
+
+def _sequel_by_franchise(title: str, year: str | None) -> dict | None:
+    """'Die Hard 3' (1995) is in OMDb only as 'Die Hard with a Vengeance' (2026-11-11).
+
+    Search the name without its number in that exact year. Accept only when exactly one title starts
+    with the name, is not itself named after the nickname ('Die Hard 3: Bruce Willis Interview' is a
+    featurette about the film) and is feature length; anything else stays in review.
+    """
+    numbered = _SEQUEL_NUMBER.match(title.strip())
+    if not numbered or not year:
+        return None
+    base, nickname = normalize_for_match(numbered.group(1)), normalize_for_match(title)
+    data = _omdb_get({"apikey": config.OMDB_API_KEY, "s": numbered.group(1), "type": "movie", "y": year})
+    if data.get("Response") != "True":
+        return None
+    rows = []
+    for row in data.get("Search") or []:
+        name = normalize_for_match(row.get("Title") or "")
+        if (str(row.get("Year")) == str(year) and str(row.get("Type", "")).lower() == "movie"
+                and name.startswith(base + " ") and not name.startswith(nickname)):
+            rows.append(row)
+    if len(rows) != 1:
+        return None
+    found = query_omdb_by_id(rows[0]["imdbID"], "movie")
+    minutes = re.match(r"(\d+) min", str((found or {}).get("runtime") or ""))
+    return found if minutes and int(minutes.group(1)) >= 60 else None
 
 
 def check_if_actually_series(title: str, year: str | None) -> dict | None:

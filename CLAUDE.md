@@ -241,6 +241,13 @@ cache key includes the episode title, so a titleless episode cannot hide a later
 one episode is filed, `existing_series` carries the rest. Tests: media-organizer/test_series_by_episode.py
 (organizer tests run with `python3 -m unittest discover -p 'test_*.py'` in media-organizer/).
 
+### Sequels filed under their number (November 2026)
+"Die Hard 3 (1995)" sat in review: OMDb has the film only as "Die Hard with a Vengeance", and "Die Hard 3" finds
+three featurettes. After the four title strategies fail, `_sequel_by_franchise` (movie_renamer.py) searches the name
+without its trailing number (2-9) in that exact year and accepts exactly one title that starts with the name, is not
+itself named after the nickname, and runs 60 minutes or more (one `s=` and one `i=` request). Two candidates
+("Rocky 5", 1990) stay in review. Tests: media-organizer/test_numbered_sequel.py.
+
 ### Fix & retry with an IMDb number (October 2026)
 Some films are in OMDb under a stale placeholder: The Weight (2026) is only tt10794054, Year 2020, no cast,
 so every title search missed it or rejected it as six years off (the year rule allows +-1). Fix & retry
