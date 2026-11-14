@@ -650,3 +650,11 @@ polling if fs.watch fails (e.g. network filesystems).
 - H.264: 3003 files
 - Direct playable: ~787 files
 - Full transcode needed: ~5190 files
+
+## Video-copy streams wait for a 20 s reserve before the first playlist answer
+
+A remux or passthrough stream cuts segments at the source's keyframes, so the first segment can be
+just over 6 s while the player's next playlist refresh is 12 s away (Abigail, 2026-11-14: a 6 s
+freeze after every start and seek). `server.js` (master.m3u8 route) holds the first answer for a
+copy stream until the playlist has 20 s of video, at most 3 s past the two-short-or-one-long rule.
+Encoded streams keep the old rule; waiting there costs real start time.

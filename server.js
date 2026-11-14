@@ -1574,6 +1574,7 @@ app.post('/api/hls/:playbackId/hold', requireAuth, (req, res) => {
 
 // Old clients get a separate session as well. Relative segment URLs then
 // resolve beneath the new playback ID. New clients use the canonical route.
+const COPY_START_RESERVE_S = 20, COPY_START_WAIT_MS = 3000;
 app.get('/hls/:id/master.m3u8', requireAuth, (req, res) => {
   const query = new URLSearchParams(req.query).toString();
   res.redirect(307, `/hls/${encodeURIComponent(req.params.id)}/${crypto.randomBytes(16).toString('hex')}/master.m3u8${query ? '?' + query : ''}`);
@@ -1664,9 +1665,17 @@ app.get('/hls/:id/:playbackId/master.m3u8', requireAuth, ensureLibrary, async (r
         // live-playlist refresh, about 10 s idle on every encoded start (2026-11-08). A stream that
         // ended (ENDLIST, or ffmpeg exited) answers with what it has.
         const durations = [...content.matchAll(/#EXTINF:([\d.]+)/g)].map(m => Number(m[1]));
+        // A stream that copies the video cuts at the source's own keyframes: a first segment just
+        // over 6 s came with a 12 s refresh, so the player ran dry after every start and seek
+        // (Abigail, 2026-11-14). Copying is many times faster than real time, so it waits for 20 s
+        // of video, but no longer than 3 s past the count rule (a damaged file can copy slowly).
         const needed = durations[0] >= 6 ? 1 : 2;
         const ended = content.includes('#EXT-X-ENDLIST') || session.process?.exitCode != null;
-        if (durations.length >= needed || (durations.length && ended)) return;
+        const copying = session.delivery === 'remux' || session.delivery === 'passthrough';
+        const held = durations.reduce((sum, d) => sum + d, 0);
+        if (durations.length >= needed && !session.startable) session.startable = Date.now();
+        const reserve = !copying || held >= COPY_START_RESERVE_S || Date.now() - session.startable > COPY_START_WAIT_MS;
+        if ((durations.length >= needed && reserve) || (durations.length && ended)) return;
         if (session.process?.exitCode != null) {
           // The GPU-only path can refuse a file the software decoder handles (an unusual stream):
           // retry once on the software-decode path and remember the file.
