@@ -248,6 +248,13 @@ without its trailing number (2-9) in that exact year and accepts exactly one tit
 itself named after the nickname, and runs 60 minutes or more (one `s=` and one `i=` request). Two candidates
 ("Rocky 5", 1990) stay in review. Tests: media-organizer/test_numbered_sequel.py.
 
+### Edition words at the end of a film's name (November 2026)
+"Underworld EXTENDED (2003)" sat in review: OMDb has "Underworld". `query_omdb` first looks the film up without
+trailing edition words (`strip_edition` in titles.py: Extended, Unrated, Uncut, Theatrical, Remastered, Director's /
+Final Cut, Special Edition...), then under the full name as before. Words go only from the end and only when more
+than an article is left, so "The Final Cut" and "Uncut Gems" stay titles. The folder gets OMDb's plain title; the
+edition is not kept in the name. Tests: media-organizer/test_edition_words.py.
+
 ### Fix & retry with an IMDb number (October 2026)
 Some films are in OMDb under a stale placeholder: The Weight (2026) is only tt10794054, Year 2020, no cast,
 so every title search missed it or rejected it as six years off (the year rule allows +-1). Fix & retry

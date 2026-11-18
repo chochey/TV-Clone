@@ -29,7 +29,7 @@ from omdb_support import OMDbUnavailableError
 from organizer_readiness import ready_for_import, existing_series
 from subtitle_variants import disambiguate_subtitles
 from titles import (
-    clean_title,
+    clean_title, strip_edition,
     create_clean_filename,
     create_tv_filename,
     extract_language_suffix,
@@ -722,6 +722,17 @@ def query_omdb_search(title: str, year: str | None = None) -> dict | None:
 
 
 def query_omdb(title: str, year: str | None = None) -> dict | None:
+    """Look a film up, first without a trailing edition word ("Underworld EXTENDED" is "Underworld")."""
+    base = strip_edition(title)
+    if base != title:
+        result = _query_omdb_title(base, year)
+        if result:
+            log.info(f"  Edition words dropped: '{title}' looked up as '{base}'")
+            return result
+    return _query_omdb_title(title, year)
+
+
+def _query_omdb_title(title: str, year: str | None = None) -> dict | None:
     """Query OMDb API, trying multiple strategies to find a match.
 
     Strategies are ordered from most reliable to least reliable.

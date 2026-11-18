@@ -59,6 +59,23 @@ def clean_title(title: str) -> str:
     return title
 
 
+_EDITION = (r"(?:the\s+)?(?:(?:extended|unrated|uncut|theatrical|remastered|final|special|collector'?s|ultimate|"
+            r"director'?s|anniversary)\s+)*(?:extended|unrated|uncut|theatrical|remastered|"
+            r"(?:director'?s|final|extended|unrated|theatrical|ultimate)\s+cut|"
+            r"(?:special|extended|unrated|collector'?s|ultimate|anniversary|theatrical|remastered)\s+edition)")
+_EDITION_TAIL = re.compile(rf"^(.*?\w)[\s\-:,(\[]+{_EDITION}[\s)\]]*$", re.IGNORECASE)
+
+
+def strip_edition(title: str) -> str:
+    """'Underworld EXTENDED' -> 'Underworld'. Only words at the end go, and only when a name is left
+    that is more than an article ('The Final Cut' and 'Uncut Gems' are titles, not editions)."""
+    match = _EDITION_TAIL.match(title.strip())
+    if not match:
+        return title
+    base = match.group(1).strip()
+    return title if base.lower() in ("the", "a", "an") else base
+
+
 def normalize_for_match(title: str) -> str:
     """Normalize a title for similarity comparison: case, punctuation, '&'.
 
